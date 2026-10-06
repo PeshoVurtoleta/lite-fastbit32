@@ -1,13 +1,16 @@
 /**
- * FastBit32 — Zero-GC, Monomorphic 32-bit Flag Manager
+ * FastBit32 -- Zero-GC, Monomorphic 32-bit Flag Manager
  * Engineered for 60fps hot-path execution, ECS masking, and object pooling.
- * * ⚠️ ENGINE PRIMITIVE CAVEATS:
+ * * WARNING: ENGINE PRIMITIVE CAVEATS:
  * - SILENT WRAPAROUND: JS bitwise shifts implicitly apply modulo 32.
  * Calling `add(32)` evaluates as `add(0)`. `add(40)` evaluates as `add(8)`.
  * - TRUNCATION: Floats and negative numbers are silently truncated and
  * converted to unsigned 32-bit integers (e.g., `-1 >>> 0` becomes `4294967295`).
  * Sanitize your inputs upstream if your domain logic requires strict bounds!
  */
+
+export const VERSION = '1.2.0';
+
 export class FastBit32 {
     constructor(initial = 0) {
         this.value = initial >>> 0;
@@ -64,7 +67,7 @@ export class FastBit32 {
         return this;
     }
 
-    // ── Advanced AAA Engine Helpers ──────────────────────────
+    // -- Advanced AAA Engine Helpers --
 
     /**
      * O(1) loop-free popcount (Hamming Weight).
@@ -117,7 +120,7 @@ export class FastBit32 {
         return new FastBit32(this.value);
     }
 
-    // ── Serialization (For ECS Save States) ──────────────────
+    // -- Serialization (For ECS Save States) --
 
     /**
      * Exports the raw 32-bit integer for ultra-lightweight JSON/binary storage.
@@ -147,7 +150,7 @@ export class FastBit32 {
         return this;
     }
 
-    // ── v1.2.0 AAA Engine Primitives ─────────────────────────
+    // -- v1.2.0 AAA Engine Primitives --
 
     /**
      * O(1) loop-free bit-scan forward for the lowest INACTIVE (0) bit.
@@ -190,13 +193,13 @@ export class FastBit32 {
         return this.countMasked(mask);
     }
 
-    // ── Debug & Init Helpers (allocate — NOT hot-path safe) ──
+    // -- Debug & Init Helpers (allocate -- NOT hot-path safe) --
 
     /**
      * Returns the 32-bit binary string representation (LSB on the right).
      * Forces unsigned via `>>> 0` so the sign bit prints as a leading `1`
      * instead of triggering `toString(2)`'s minus-sign formatting.
-     * ⚠️ Allocates a String. Debug use only.
+     * WARNING: Allocates a String. Debug use only.
      */
     toBinaryString(padded = true) {
         const str = (this.value >>> 0).toString(2);
@@ -205,8 +208,8 @@ export class FastBit32 {
 
     /**
      * Returns an array of active bit indexes in ascending order.
-     * Inlined O(k) scan — no closure allocation vs. delegating to forEach.
-     * ⚠️ Allocates an Array. Do not use in hot loop!
+     * Inlined O(k) scan -- no closure allocation vs. delegating to forEach.
+     * WARNING: Allocates an Array. Do not use in hot loop!
      */
     toArray() {
         const result = [];
@@ -220,9 +223,9 @@ export class FastBit32 {
 
     /**
      * Replaces the mask from an array of bit indexes. Note: this OVERWRITES
-     * the current value — it does not OR into it. Accumulates in a local and
+     * the current value -- it does not OR into it. Accumulates in a local and
      * writes `this.value` once for monomorphic-friendly init.
-     * ⚠️ Intended for initialization / deserialization, not hot paths.
+     * WARNING: Intended for initialization / deserialization, not hot paths.
      */
     fromArray(bits) {
         let v = 0;
@@ -275,7 +278,7 @@ export class BitMapper {
     }
 }
 
-// ── O(k) Iteration Helpers ─────────────────────────────────
+// -- O(k) Iteration Helpers --
 
 export function forEachArray(mask, array, callback) {
     let v = mask.value;

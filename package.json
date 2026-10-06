@@ -5,11 +5,13 @@
   "description": "Zero-GC, monomorphic 32-bit flag manager and ECS masking primitive for high-performance game loops.",
   "type": "module",
   "sideEffects": false,
-  "main": "FastBit32.js",
-  "types": "FastBit32.d.ts",
+  "main": "./FastBit32.js",
+  "module": "./FastBit32.js",
+  "types": "./FastBit32.d.ts",
   "exports": {
     ".": {
       "types": "./FastBit32.d.ts",
+      "node": "./FastBit32.js",
       "import": "./FastBit32.js",
       "default": "./FastBit32.js"
     }
@@ -18,7 +20,9 @@
     "FastBit32.js",
     "FastBit32.d.ts",
     "llms.txt",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "homepage": "https://github.com/PeshoVurtoleta/lite-fastbit32#readme",
@@ -29,6 +33,13 @@
   "bugs": {
     "url": "https://github.com/PeshoVurtoleta/lite-fastbit32/issues",
     "email": "shinikchiev@yahoo.com"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "keywords": [
     "bitflags",
@@ -54,11 +65,21 @@
     "fastbit32"
   ],
   "devDependencies": {
-    "vitest": "^3.0.0"
+    "@zakkster/lite-gc-profiler": "^1.16.0",
+    "@zakkster/lite-leak": "^1.10.0",
+    "@zakkster/lite-perf-gate": "^1.4.3",
+    "@zakkster/lite-signal": "^1.5.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   },
   "scripts": {
-    "test": "vitest run",
-    "bundle-check": "npx esbuild FastBit32.js --bundle --format=esm --outfile=test-bundle.js",
-    "prepublishOnly": "npm run test && npm run bundle-check"
+    "test": "node --test test/*.test.mjs",
+    "test:types": "tsc -p test/types/tsconfig.json",
+    "torture": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs",
+    "torture:controls": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs",
+    "test:perf": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 --test test/perf/PerfGate.test.mjs",
+    "bundle-check": "esbuild FastBit32.js --bundle --format=esm --outfile=.bundle-check/test-bundle.js",
+    "verify": "npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf",
+    "prepublishOnly": "npm run verify && npm run bundle-check"
   }
 }

@@ -1,12 +1,12 @@
 /**
- * FastBit32 — Zero-GC, Monomorphic 32-bit Flag Manager.
+ * FastBit32 -- Zero-GC, Monomorphic 32-bit Flag Manager.
  *
  * Engineered for 60fps hot-path execution, ECS masking, and object pooling.
  * All operations are branchless bitwise ops on a single unsigned 32-bit integer.
  *
  * **Caveats:**
- * - JS bitwise shifts apply modulo 32 silently: `add(32)` ≡ `add(0)`.
- * - Floats and negatives are truncated to unsigned 32-bit: `-1 >>> 0` → `4294967295`.
+ * - JS bitwise shifts apply modulo 32 silently: `add(32)` == `add(0)`.
+ * - Floats and negatives are truncated to unsigned 32-bit: `-1 >>> 0` -> `4294967295`.
  *
  * @example
  * ```js
@@ -20,6 +20,12 @@
  * flags.lowest();  // 1
  * ```
  */
+
+/**
+ * The package version string. Mirrors `package.json` and the llms.txt stamp.
+ */
+export const VERSION: string;
+
 export class FastBit32 {
     /**
      * Creates a new FastBit32 instance.
@@ -30,8 +36,8 @@ export class FastBit32 {
      * @example
      * ```js
      * new FastBit32();          // 0x00000000
-     * new FastBit32(0xFF);      // bits 0–7 active
-     * new FastBit32(-1);        // 0xFFFFFFFF — all 32 bits active
+     * new FastBit32(0xFF);      // bits 0-7 active
+     * new FastBit32(-1);        // 0xFFFFFFFF -- all 32 bits active
      * ```
      */
     constructor(initial?: number);
@@ -42,13 +48,13 @@ export class FastBit32 {
      */
     value: number;
 
-    // ── Single Bit Ops (Zero-Branching) ─────────────────
+    // -- Single Bit Ops (Zero-Branching) --
 
     /**
      * Sets bit at the given position.
      * Bit index is applied modulo 32 by the JS engine.
      *
-     * @param bit - Bit position (0–31).
+     * @param bit - Bit position (0-31).
      * @returns `this` for chaining.
      */
     add(bit: number): this;
@@ -56,7 +62,7 @@ export class FastBit32 {
     /**
      * Clears bit at the given position.
      *
-     * @param bit - Bit position (0–31).
+     * @param bit - Bit position (0-31).
      * @returns `this` for chaining.
      */
     remove(bit: number): this;
@@ -64,7 +70,7 @@ export class FastBit32 {
     /**
      * Flips bit at the given position.
      *
-     * @param bit - Bit position (0–31).
+     * @param bit - Bit position (0-31).
      * @returns `this` for chaining.
      */
     toggle(bit: number): this;
@@ -72,12 +78,12 @@ export class FastBit32 {
     /**
      * Tests whether bit at the given position is active.
      *
-     * @param bit - Bit position (0–31).
+     * @param bit - Bit position (0-31).
      * @returns `true` if the bit is set.
      */
     has(bit: number): boolean;
 
-    // ── Bulk Mask Ops ───────────────────────────────────
+    // -- Bulk Mask Ops --
 
     /**
      * Tests whether **all** bits in the mask are active.
@@ -103,7 +109,7 @@ export class FastBit32 {
      */
     hasNone(mask: number): boolean;
 
-    // ── In-Place Mutations (Zero-GC Set Math) ───────────
+    // -- In-Place Mutations (Zero-GC Set Math) --
 
     /**
      * Resets all 32 bits to zero.
@@ -136,13 +142,13 @@ export class FastBit32 {
      */
     intersect(mask: number): this;
 
-    // ── Advanced Engine Helpers ──────────────────────────
+    // -- Advanced Engine Helpers --
 
     /**
      * Returns the number of active bits (Hamming weight / popcount).
-     * Uses the Hacker's Delight O(1) parallel bit-count algorithm — no loops.
+     * Uses the Hacker's Delight O(1) parallel bit-count algorithm -- no loops.
      *
-     * @returns Active bit count (0–32).
+     * @returns Active bit count (0-32).
      */
     count(): number;
 
@@ -151,25 +157,25 @@ export class FastBit32 {
      * Equivalent to `(new FastBit32(value & mask)).count()` without allocation.
      *
      * @param mask - Region to count within.
-     * @returns Active bit count within the masked region (0–32).
+     * @returns Active bit count within the masked region (0-32).
      */
     countMasked(mask: number): number;
 
     /**
      * Returns the index of the lowest (least significant) active bit.
-     * Uses `Math.clz32` for O(1) bit-scan forward — no loops.
+     * Uses `Math.clz32` for O(1) bit-scan forward -- no loops.
      * Ideal for object pools: instantly finds the first available slot.
      *
-     * @returns Bit index (0–31), or `-1` if empty.
+     * @returns Bit index (0-31), or `-1` if empty.
      */
     lowest(): number;
 
     /**
      * Returns the index of the highest (most significant) active bit.
-     * Uses `Math.clz32` for O(1) bit-scan reverse — no loops.
+     * Uses `Math.clz32` for O(1) bit-scan reverse -- no loops.
      * Useful for determining active bounds of spatial grids.
      *
-     * @returns Bit index (0–31), or `-1` if empty.
+     * @returns Bit index (0-31), or `-1` if empty.
      */
     highest(): number;
 
@@ -182,13 +188,13 @@ export class FastBit32 {
 
     /**
      * Creates an independent copy of this instance.
-     * The clone has its own `value` — mutations do not propagate.
+     * The clone has its own `value` -- mutations do not propagate.
      *
      * @returns A new `FastBit32` with the same value.
      */
     clone(): FastBit32;
 
-    // ── Iteration ───────────────────────────────────────
+    // -- Iteration --
 
     /**
      * O(k) iteration over active bits, where k is the number of set bits.
@@ -199,15 +205,15 @@ export class FastBit32 {
      */
     forEach(callback: (bit: number) => void): this;
 
-    // ── v1.2.0 AAA Engine Primitives ─────────────────────
+    // -- v1.2.0 AAA Engine Primitives --
 
     /**
      * Returns the index of the lowest INACTIVE (0) bit.
-     * O(1) via `Math.clz32` on the inverted mask — no loops, no scratch
+     * O(1) via `Math.clz32` on the inverted mask -- no loops, no scratch
      * `FastBit32` allocation. Ideal for object pools: instantly finds the
      * first free slot.
      *
-     * @returns Bit index (0–31), or `-1` if all 32 bits are active.
+     * @returns Bit index (0-31), or `-1` if all 32 bits are active.
      */
     nextClearBit(): number;
 
@@ -215,7 +221,7 @@ export class FastBit32 {
      * Returns the index of the highest INACTIVE (0) bit.
      * O(1) via `Math.clz32` on the inverted mask.
      *
-     * @returns Bit index (0–31), or `-1` if all 32 bits are active.
+     * @returns Bit index (0-31), or `-1` if all 32 bits are active.
      */
     highestClearBit(): number;
 
@@ -232,17 +238,17 @@ export class FastBit32 {
      *
      * @param start - Lowest bit of the range (inclusive).
      * @param end - Highest bit of the range (inclusive).
-     * @returns Active bit count within the range (0–32).
+     * @returns Active bit count within the range (0-32).
      */
     countRange(start: number, end: number): number;
 
-    // ── Debug & Init Helpers (allocate — NOT hot-path safe) ──
+    // -- Debug & Init Helpers (allocate -- NOT hot-path safe) --
 
     /**
      * Returns a 32-character binary string of the raw value, LSB on the right.
      * Forces unsigned representation so bit 31 prints as `1`, not a minus sign.
      *
-     * ⚠️ Allocates a String. Debug use only.
+     * WARNING: Allocates a String. Debug use only.
      *
      * @param padded - Pad to 32 chars with leading zeros. Defaults to `true`.
      */
@@ -251,23 +257,23 @@ export class FastBit32 {
     /**
      * Returns an array of active bit indexes in ascending order.
      *
-     * ⚠️ Allocates an Array. Not safe for hot loops.
+     * WARNING: Allocates an Array. Not safe for hot loops.
      *
-     * @returns Array of bit indexes (0–31).
+     * @returns Array of bit indexes (0-31).
      */
     toArray(): number[];
 
     /**
      * Replaces the current value with a bitmask built from an array of bit
-     * indexes. Overwrites — does NOT OR into the existing value. Intended
+     * indexes. Overwrites -- does NOT OR into the existing value. Intended
      * for initialization and deserialization, not hot paths.
      *
-     * @param bits - Array of bit indexes (0–31).
+     * @param bits - Array of bit indexes (0-31).
      * @returns `this` for chaining.
      */
     fromArray(bits: number[]): this;
 
-    // ── Serialization ───────────────────────────────────
+    // -- Serialization --
 
     /**
      * Exports the raw unsigned 32-bit integer for storage.
@@ -287,7 +293,7 @@ export class FastBit32 {
 }
 
 /**
- * BitMapper — The Human-to-Hardware Bridge.
+ * BitMapper -- The Human-to-Hardware Bridge.
  *
  * Translates semantic string names into 32-bit integer indices and raw masks.
  * Protects developers from raw integer math while keeping the engine hot-path fast.
@@ -329,15 +335,15 @@ export class BitMapper {
     getActiveNames(fastBit32Instance: FastBit32): string[];
 
     /**
-     * O(1) reverse lookup — integer bit index to string name.
+     * O(1) reverse lookup -- integer bit index to string name.
      *
-     * @param bit - The bit index (0–31).
+     * @param bit - The bit index (0-31).
      * @returns The registered name, or `undefined` if no name is registered at that index.
      */
     getName(bit: number): string | undefined;
 }
 
-// ── O(k) Iteration Helpers ─────────────────────────────────
+// -- O(k) Iteration Helpers --
 
 /**
  * Iterates active bits in a mask, calling back with the corresponding array element.

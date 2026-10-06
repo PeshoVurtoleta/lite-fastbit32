@@ -6,20 +6,22 @@
 
 FastBit32 is a single-class library that wraps a plain unsigned 32-bit integer with a fluent, chainable API for bitwise flag operations. It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations. Zero branches.
 
-**When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance — ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
+**When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
-**When NOT to use FastBit32:** You need more than 32 flags (use `@zakkster/lite-bits`), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive — it trusts the caller.
+**When NOT to use FastBit32:** You need more than 32 flags (use `@zakkster/lite-bits`), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
 
 ## Import
 
 ```javascript
-import { FastBit32, BitMapper } from '@zakkster/lite-fastbit32';
+import { FastBit32, BitMapper, VERSION } from '@zakkster/lite-fastbit32';
 
 // Standalone iteration helpers
 import {
     forEachArray, forEachObject, forEachMapped,
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
+
+// VERSION is the package version string ('1.2.0'), synced with package.json.
 ```
 
 ## Constructor
@@ -31,7 +33,7 @@ new FastBit32(initial?: number)
 - `initial` defaults to `0`.
 - Coerced to unsigned 32-bit via `>>> 0`.
 - `-1` becomes `4294967295` (all 32 bits set).
-- Floats are truncated (`3.9` → `3`).
+- Floats are truncated (`3.9` -> `3`).
 
 ## API Reference
 
@@ -41,9 +43,9 @@ All mutating methods return `this` for chaining unless noted otherwise.
 
 | Method | Returns | Description |
 |---|---|---|
-| `.add(bit)` | `this` | Set bit at position 0–31. |
-| `.remove(bit)` | `this` | Clear bit at position 0–31. |
-| `.toggle(bit)` | `this` | Flip bit at position 0–31. |
+| `.add(bit)` | `this` | Set bit at position 0-31. |
+| `.remove(bit)` | `this` | Clear bit at position 0-31. |
+| `.toggle(bit)` | `this` | Flip bit at position 0-31. |
 | `.has(bit)` | `boolean` | Test if bit is set. |
 
 ### Bulk Mask Operations
@@ -59,21 +61,21 @@ All mutating methods return `this` for chaining unless noted otherwise.
 | Method | Returns | Operation |
 |---|---|---|
 | `.clear()` | `this` | Reset to 0. |
-| `.union(mask)` | `this` | `value \|= mask` — add bits. |
-| `.difference(mask)` | `this` | `value &= ~mask` — remove bits. |
-| `.intersect(mask)` | `this` | `value &= mask` — keep only shared bits. |
+| `.union(mask)` | `this` | `value \|= mask` -- add bits. |
+| `.difference(mask)` | `this` | `value &= ~mask` -- remove bits. |
+| `.intersect(mask)` | `this` | `value &= mask` -- keep only shared bits. |
 
 ### Advanced Helpers
 
 | Method | Returns | Description |
 |---|---|---|
-| `.count()` | `number` | O(1) popcount (Hamming weight). Active bit count, 0–32. |
+| `.count()` | `number` | O(1) popcount (Hamming weight). Active bit count, 0-32. |
 | `.countMasked(mask)` | `number` | O(1) popcount within masked region only. |
 | `.countRange(start, end)` | `number` | O(1) popcount within inclusive range `[start, end]`. Caller must ensure `0 <= start <= end <= 31`. |
-| `.lowest()` | `number` | Index of least significant set bit (0–31). Returns `-1` if empty. |
-| `.highest()` | `number` | Index of most significant set bit (0–31). Returns `-1` if empty. |
-| `.nextClearBit()` | `number` | Index of least significant **clear** bit (0–31). Returns `-1` if full. Zero-alloc object-pool slot lookup. |
-| `.highestClearBit()` | `number` | Index of most significant **clear** bit (0–31). Returns `-1` if full. |
+| `.lowest()` | `number` | Index of least significant set bit (0-31). Returns `-1` if empty. |
+| `.highest()` | `number` | Index of most significant set bit (0-31). Returns `-1` if empty. |
+| `.nextClearBit()` | `number` | Index of least significant **clear** bit (0-31). Returns `-1` if full. Zero-alloc object-pool slot lookup. |
+| `.highestClearBit()` | `number` | Index of most significant **clear** bit (0-31). Returns `-1` if full. |
 | `.isEmpty()` | `boolean` | True if value is 0. |
 | `.isFull()` | `boolean` | True if all 32 bits are set. |
 
@@ -93,7 +95,7 @@ All mutating methods return `this` for chaining unless noted otherwise.
 
 ### Debug & Init Helpers
 
-These methods allocate — keep them out of hot loops.
+These methods allocate -- keep them out of hot loops.
 
 | Method | Returns | Description |
 |---|---|---|
@@ -107,7 +109,7 @@ These methods allocate — keep them out of hot loops.
 |---|---|---|
 | `.value` | `number` | The raw 32-bit integer. Safe to read directly in hot paths. |
 
-## BitMapper — Human-to-Hardware Bridge
+## BitMapper -- Human-to-Hardware Bridge
 
 Translates semantic string names into bit indices and masks. Keeps engine hot paths fast while letting developers think in words.
 
@@ -121,17 +123,17 @@ const mapper = new BitMapper(['Position', 'Velocity', 'Health', 'Magic']);
 new BitMapper(names?: string[])
 ```
 
-- `names` — Array of up to 32 flag names. Each name maps to its array index (0–31).
+- `names` -- Array of up to 32 flag names. Each name maps to its array index (0-31).
 - Throws if more than 32 names are provided.
 
 ### BitMapper Methods
 
 | Method | Returns | Description |
 |---|---|---|
-| `.get(name)` | `number` | Bit index (0–31) for a flag name. Throws if unknown. |
+| `.get(name)` | `number` | Bit index (0-31) for a flag name. Throws if unknown. |
 | `.getMask(names)` | `number` | Combined uint32 mask from an array of flag names. |
 | `.getActiveNames(fb32)` | `string[]` | Array of active flag names from a FastBit32 instance. |
-| `.getName(bit)` | `string \| undefined` | O(1) reverse lookup — bit index to string name. |
+| `.getName(bit)` | `string \| undefined` | O(1) reverse lookup -- bit index to string name. |
 
 ### BitMapper Example
 
@@ -143,19 +145,19 @@ entity.add(mapper.get('Physics')).add(mapper.get('Input'));
 mapper.getActiveNames(entity); // ['Physics', 'Input']
 
 const PHYSICS_QUERY = mapper.getMask(['Physics', 'Render']);
-entity.hasAll(PHYSICS_QUERY); // false — missing Render
+entity.hasAll(PHYSICS_QUERY); // false -- missing Render
 ```
 
 ## Standalone Iteration Helpers
 
-All helpers are O(k) where k = number of active bits. No loops over 32 slots — only active bits are visited.
+All helpers are O(k) where k = number of active bits. No loops over 32 slots -- only active bits are visited.
 
 | Function | Signature | Description |
 |---|---|---|
-| `forEachArray` | `(mask, array, cb)` | Active bits → array indices. `cb(element, bit)` |
-| `forEachObject` | `(mask, keys, obj, cb)` | Active bits → keys array → object values. `cb(value, key, bit)` |
-| `forEachMapped` | `(mask, mapper, cb)` | Active bits → BitMapper names. `cb(name, bit)` |
-| `forEachMappedObject` | `(mask, mapper, obj, cb)` | Active bits → BitMapper names → object values. `cb(value, key, bit)` |
+| `forEachArray` | `(mask, array, cb)` | Active bits -> array indices. `cb(element, bit)` |
+| `forEachObject` | `(mask, keys, obj, cb)` | Active bits -> keys array -> object values. `cb(value, key, bit)` |
+| `forEachMapped` | `(mask, mapper, cb)` | Active bits -> BitMapper names. `cb(name, bit)` |
+| `forEachMappedObject` | `(mask, mapper, obj, cb)` | Active bits -> BitMapper names -> object values. `cb(value, key, bit)` |
 | `forEachMaskPair` | `(maskA, maskB, cb)` | Intersection (A & B). `cb(bit)` |
 | `forEachMaskDiff` | `(maskA, maskB, cb)` | Difference (A & ~B). `cb(bit)` |
 | `forEachMaskUnion` | `(maskA, maskB, cb)` | Union (A \| B). `cb(bit)` |
@@ -179,7 +181,7 @@ forEachMapped(mask, mapper, (name, bit) => {
 
 3. **No input validation.** Floats are truncated. Negative bit indices are coerced. NaN becomes 0. FastBit32 trusts the caller for maximum performance.
 
-4. **32-bit limit.** Only bits 0–31 are addressable. For larger bitfields, use `@zakkster/lite-bits`.
+4. **32-bit limit.** Only bits 0-31 are addressable. For larger bitfields, use `@zakkster/lite-bits`.
 
 ## Correct Usage Patterns
 
@@ -197,7 +199,7 @@ if (entity.hasAll(PHYSICS_QUERY)) {
 }
 ```
 
-### Object Pool — Find First Free Slot (zero-allocation)
+### Object Pool -- Find First Free Slot (zero-allocation)
 
 ```javascript
 const occupied = new FastBit32();
@@ -277,7 +279,7 @@ forEachMappedObject(entity, components, systems, (system, name, bit) => {
 
 ```javascript
 const raw = flags.serialize();       // number (uint32)
-const json = JSON.stringify(raw);    // "18" — not an object
+const json = JSON.stringify(raw);    // "18" -- not an object
 const restored = FastBit32.deserialize(JSON.parse(json));
 ```
 
@@ -295,13 +297,13 @@ const flags = new FastBit32()
 ## Common Mistakes
 
 ```javascript
-// WRONG: Bit index out of range — silently wraps to bit 0
+// WRONG: Bit index out of range -- silently wraps to bit 0
 flags.add(32);
 
 // WRONG: Comparing signed vs unsigned after setting bit 31
 flags.add(31);
-flags.value === 2147483648; // false — value is -2147483648 (signed)
-(flags.value >>> 0) === 2147483648; // true — correct unsigned comparison
+flags.value === 2147483648; // false -- value is -2147483648 (signed)
+(flags.value >>> 0) === 2147483648; // true -- correct unsigned comparison
 
 // WRONG: Using FastBit32 for more than 32 flags
 // Use @zakkster/lite-bits instead
@@ -311,19 +313,19 @@ const result = flags.add(5); // returns `this`, not true/false
 const check = flags.has(5);  // returns boolean
 
 // WRONG: Mutating and checking in one expression
-if (flags.toggle(3).has(3)) { } // Works, but toggle mutates first — has() checks the NEW state
+if (flags.toggle(3).has(3)) { } // Works, but toggle mutates first -- has() checks the NEW state
 
 // WRONG: Assuming clone shares state
 const copy = flags.clone();
 copy.add(10);
-flags.has(10); // false — clone is independent
+flags.has(10); // false -- clone is independent
 ```
 
 ## Performance Characteristics
 
 - All single-bit operations: one bitwise instruction, zero branches.
 - `count()`: 5 bitwise operations (Hacker's Delight parallel popcount), zero loops.
-- `lowest()` / `highest()`: 1–2 operations using `Math.clz32`, zero loops.
+- `lowest()` / `highest()`: 1-2 operations using `Math.clz32`, zero loops.
 - `forEach` and all standalone helpers: O(k) where k = active bits, not 32.
 - All methods except `clone()` and `deserialize()`: zero allocations.
 - V8 monomorphic: single hidden class for the lifetime of the object.

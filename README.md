@@ -409,27 +409,7 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 
 ## Changelog
 
-### v1.2.0
-
-**New: Clear-bit scans** — `nextClearBit()` and `highestClearBit()`. O(1) bit-scan on the inverted mask via `Math.clz32`. The object-pool slot-lookup pattern is now truly zero-allocation; the prior `new FastBit32(~pool.value & 0xFFFFFFFF).lowest()` workaround is retired.
-
-**New: `isFull()`** — Companion to `isEmpty()`. Uses `~this.value === 0` for correctness across both signed (`-1`) and unsigned (`0xFFFFFFFF`) representations of an all-set int32.
-
-**New: `countRange(start, end)`** — O(1) popcount within an inclusive bit range. Mask is built with `>>>` to sidestep the `1 << 32` wraparound.
-
-**New: Debug & init helpers** — `toBinaryString(padded?)`, `toArray()`, `fromArray(bits)`. Clearly documented as allocating; kept outside the hot-path API surface. `toBinaryString` forces unsigned via `>>> 0` so bit 31 does not trigger `toString(2)`'s minus-sign formatting. `toArray` inlines the `v &= v - 1` loop rather than delegating to `forEach`, avoiding a per-call closure allocation. `fromArray` **replaces** the current value (does not OR into it) and writes `this.value` exactly once.
-
-### v1.1.0
-
-**New: BitMapper** — Human-to-hardware bridge. Maps semantic string names to bit indices and masks, with O(1) reverse lookup via `getName(bit)`.
-
-**New: `forEach(callback)`** — O(k) iteration on FastBit32 instances. Visits only active bits in ascending order using `v &= v - 1` bit-clearing. Returns `this` for chaining.
-
-**New: 7 standalone iteration helpers** — `forEachArray`, `forEachObject`, `forEachMapped`, `forEachMappedObject`, `forEachMaskPair`, `forEachMaskDiff`, `forEachMaskUnion`. All O(k). Connect masks directly to arrays, objects, BitMapper dictionaries, and mask set operations without intermediate allocations.
-
-### v1.0.0
-
-Initial release. FastBit32 core: single-bit ops, bulk mask ops, in-place set math, O(1) popcount, O(1) bit-scan (lowest/highest), clone, serialize/deserialize.
+See [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
