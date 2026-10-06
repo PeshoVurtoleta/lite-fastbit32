@@ -145,11 +145,6 @@ for (const name of ORDER) {
     for (const f of r.fails) allFails.push(f);
     totalGreen += r.green;
     console.error('[' + name + '] fails=' + r.fails.length + ' green=' + r.green);
-    // tiers carrying FB-01 expected-red rows (T1/T2/T3/T5/T8) report the tally;
-    // green MUST be 0 at S0 (a green FB-01 row is a FAIL, folded into totalGreen).
-    if (r.fb01Red !== undefined) {
-        console.error('[' + name + '] FB-01 expected-red rows: ' + r.fb01Red + ' red, ' + r.green + ' green');
-    }
 }
 
 // MEASURE lines (stderr only)

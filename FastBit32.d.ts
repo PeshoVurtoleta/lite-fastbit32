@@ -87,7 +87,9 @@ export class FastBit32 {
 
     /**
      * Tests whether **all** bits in the mask are active.
-     * Equivalent to `(value & mask) === mask`.
+     * Equivalent to `(~value & mask) === 0` -- signedness-agnostic: `mask` and
+     * `mask >>> 0` answer the same, so a mask carrying bit 31 (e.g. from
+     * `BitMapper.getMask`) matches correctly (FB-01, fixed 1.2.1).
      *
      * @param mask - Bitmask to test against.
      */

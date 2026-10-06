@@ -9,7 +9,7 @@
  * Sanitize your inputs upstream if your domain logic requires strict bounds!
  */
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.2.1';
 
 export class FastBit32 {
     constructor(initial = 0) {
@@ -36,7 +36,7 @@ export class FastBit32 {
     }
 
     hasAll(mask) {
-        return (this.value & mask) === mask;
+        return (~this.value & mask) === 0;
     }
 
     hasAny(mask) {

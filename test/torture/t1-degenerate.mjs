@@ -1,8 +1,12 @@
-// test/torture/t1-degenerate.mjs -- GENERATED from git HEAD:FastBit32.js.
-// Degenerate bit/mask/ctor inputs pinned to HEAD's literal answers. Comparing
-// the working library against this table proves S0 changed no behaviour. Rows
-// matching C5 (non-int32 mask whose true hasAll answer is true) are todo.
-// Regenerate: git show HEAD:FastBit32.js > /tmp/h.js && node test/torture/gen-t1.mjs /tmp/h.js
+// test/torture/t1-degenerate.mjs -- GENERATED from FastBit32.js by gen-t1.mjs.
+// A GOLDEN SNAPSHOT of the library's own literal answers for degenerate bit /
+// mask / ctor inputs (not an independent oracle): the working library must
+// reproduce every pinned row. The four hasAll C5 rows (0xFFFFFFFF / 2**32 / NaN /
+// undefined) carry the FB-01 fix answer (true); hasAll is signedness-agnostic
+// from 1.2.1 on. hasAll(NaN|undefined) === true even on an empty instance is a
+// deliberate fail-open (ToInt32 -> 0), pinned here and in test/Pinned.test.mjs,
+// to be closed in S6 / SC-3.
+// Regenerate: node test/torture/gen-t1.mjs FastBit32.js
 
 const GOLDEN = [
     { op: "add", tag: "0", want: 1 },
@@ -67,16 +71,16 @@ const GOLDEN = [
     { op: "hasAll", tag: "-1", want: true },
     { op: "hasAny", tag: "-1", want: true },
     { op: "hasNone", tag: "-1", want: true },
-    { op: "hasAll", tag: "0xFFFFFFFF", want: false, todo: true },
+    { op: "hasAll", tag: "0xFFFFFFFF", want: true },
     { op: "hasAny", tag: "0xFFFFFFFF", want: true },
     { op: "hasNone", tag: "0xFFFFFFFF", want: true },
-    { op: "hasAll", tag: "2**32", want: false, todo: true },
+    { op: "hasAll", tag: "2**32", want: true },
     { op: "hasAny", tag: "2**32", want: false },
     { op: "hasNone", tag: "2**32", want: true },
-    { op: "hasAll", tag: "NaN", want: false, todo: true },
+    { op: "hasAll", tag: "NaN", want: true },
     { op: "hasAny", tag: "NaN", want: false },
     { op: "hasNone", tag: "NaN", want: true },
-    { op: "hasAll", tag: "undefined", want: false, todo: true },
+    { op: "hasAll", tag: "undefined", want: true },
     { op: "hasAny", tag: "undefined", want: false },
     { op: "hasNone", tag: "undefined", want: true },
     { op: "ctor", tag: "'garbage'", want: 0 },
@@ -193,21 +197,12 @@ const INPUT = {
 export function run(ctx) {
     const FB = ctx.FB;
     const fails = [];
-    let green = 0;   // expected-red (FB-01/C5) rows that came out GREEN = failures
-    let fb01Red = 0;
     for (let i = 0; i < GOLDEN.length; i++) {
         const row = GOLDEN[i];
         const lit = INPUT[row.tag]();
         let got;
         try { got = apply(FB, row.op, lit); } catch (e) { got = 'THROW:' + e.message; }
-        if (row.todo) {
-            // C5 expected-red: `want` is the pinned BUGGY answer. Still buggy
-            // (got === want) = red; changed to the true answer = green (fixed),
-            // which fails the run (flips only on purpose, in S1).
-            if (Object.is(got, row.want)) fb01Red++; else green++;
-            continue;
-        }
         if (!Object.is(got, row.want)) fails.push('T1: ' + row.op + '(' + row.tag + ') got ' + String(got) + ' want ' + String(row.want));
     }
-    return { fails, green, fb01Red };
+    return { fails, green: 0 };
 }

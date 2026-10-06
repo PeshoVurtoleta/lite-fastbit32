@@ -4,17 +4,19 @@
 // `apply(ctx)` mutates the ctx in place. `cheap` controls run in-process inside
 // T9; the rest are exercised as child processes by controls-runner.mjs.
 
-function fixedHasAll(FB) {
-    // FB-01 fixed. S1 edits the real prototype method in place, which also
-    // reaches clone()/deserialize() results (base instances using the patched
-    // prototype). A subclass override alone does NOT -- clone() and
-    // deserialize() hard-code `new FastBit32(...)` (FastBit32.js:120,136), so
-    // they return base instances with the buggy hasAll. Override both to
-    // construct the subclass, otherwise the control would leave 36 of the 90
-    // isC5 rows red (the clone/deserialize build forms) and misreport a second
-    // defect that does not exist: the in-place fix greens all 90.
+function oldHasAll(FB) {
+    // The 1.2.0 (pre-FB-01) body: `(value & mask) === mask` compares a signed
+    // int32 to an unsigned double, so any mask carrying bit 31 in unsigned form
+    // never matches. S1 fixed hasAll in place on the prototype, which also
+    // reaches clone()/deserialize() results. This control REINSTALLS the buggy
+    // body. clone() and static deserialize() hard-code `new FastBit32(...)`
+    // (FastBit32.js), returning base (fixed) instances, so both are overridden
+    // to construct the subclass -- otherwise the clone/deserialize build forms
+    // in T2 would stay fixed and the control would leave rows green. With the
+    // overrides every build form carries the bug and it MUST fail T0, T1, T2,
+    // T3, T5, T8.
     return class extends FB {
-        hasAll(mask) { return (~this.value & mask) === 0; }
+        hasAll(mask) { return (this.value & mask) === mask; }
         clone() { return new this.constructor(this.value); }
         static deserialize(value) { return new this(value); }
     };
@@ -53,7 +55,7 @@ function flipOracle(oracle) {
 }
 
 export const CONTROLS = {
-    'hasall-fixed': { tiers: ['T1', 'T2', 'T3', 'T5', 'T8'], cheap: true, apply(ctx) { ctx.FB = fixedHasAll(ctx.FB); } },
+    'hasall-old': { tiers: ['T0', 'T1', 'T2', 'T3', 'T5', 'T8'], cheap: true, apply(ctx) { ctx.FB = oldHasAll(ctx.FB); } },
     'lowest-noguard': { tiers: ['T0', 'T1'], cheap: true, apply(ctx) { ctx.FB = lowestNoGuard(ctx.FB); } },
     'isfull-unsigned': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB = isFullUnsigned(ctx.FB); } },
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },

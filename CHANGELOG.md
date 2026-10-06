@@ -3,12 +3,13 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
-## [Unreleased]
+## [1.2.1] - 2026-10-06
 
-Ships inside 1.2.1. S0 is a harness-only session: no runtime behaviour changed.
-Every `FastBit32.js` function body is byte-identical to 1.2.0 (verified 40/40 by
-a `.toString()` parity check against `git show HEAD:FastBit32.js`); the only code
-addition is `export const VERSION`.
+Two sessions fold in here: S0 (harness only -- node:test
+port, torture tiers, perf gate, hygiene) and S1 (the FB-01 fix). The only
+runtime change is the one-line `hasAll` fix below; every other `FastBit32.js`
+function body is byte-identical to 1.2.0 (parity-checked line-by-line against the
+S0 baseline), and the only addition is `export const VERSION`.
 
 ### Added
 
@@ -48,24 +49,57 @@ addition is `export const VERSION`.
 
 ### Fixed
 
+- FB-01 (S1): `hasAll(mask)` returned `false` whenever `mask` carried bit 31 in
+  unsigned form. The 1.2.0 body `(value & mask) === mask` compared a signed int32
+  to an unsigned double, so `new FastBit32().add(31).hasAll(0x80000000)` and even
+  `new FastBit32(-1).hasAll(0xFFFFFFFF)` were `false`, and any mapped mask from
+  `BitMapper.getMask` (which always returns `>>> 0`) that included the 32nd flag
+  never matched. Fixed to `(~this.value & mask) === 0` -- same op count, 0 B/op
+  (perf gate + T6 unchanged), and signedness-agnostic: `mask` and `mask >>> 0`
+  answer identically, so `0x80000000`, `0xFFFFFFFF` and a bit-31 `getMask` now
+  match correctly. hasAll now follows V8's ToInt32 coercion like every other mask
+  op. Proven over the T0/T1/T2/T3/T5/T8 torture tiers against the lib-free oracle
+  (0 mismatches; an instrumented QA run counted 601,352 hasAll comparisons --
+  no gate prints this count); the `hasall-old` control reinstalls the 1.2.0
+  body and fails every one of those tiers (revert-checked).
+  - **BEHAVIOUR CHANGE (fail-open, FB-02 class):** ToInt32 consistency also means
+    a mask that coerces to 0 -- `undefined`, `NaN`, `null`, `2**32` -- now returns
+    `true` on EVERY instance, including an empty one
+    (`new FastBit32().hasAll(undefined) === true`). 1.2.0 returned `false` for
+    these on every instance, by the same signed-compare accident. This is a
+    false -> true change in the FB-02 "null is zero" class, not a guarantee: a
+    signature that is `undefined` matches every entity. It is pinned in
+    `test/Pinned.test.mjs` and fails closed in S6 (SC-3). The body is left
+    ToInt32-consistent on purpose; the cold-path validation is an S6 door.
 - FB-07: the iterator tests imported the 7 free functions from
   `../FastBit32.d.ts` (a types file with no runtime bodies), so all seven failed
   with `TypeError: forEachArray is not a function`. They now import from
   `../FastBit32.js` and pass.
 
+### Notes for dependents
+
+- **lite-ecs** (`World.js:30`) builds system signatures as `(1 << idx) >>> 0` and
+  matches entities with `entity.mask.hasAll(sys.signature)`. Before 1.2.1 a system
+  requiring component 31 silently never ran (FB-01). It now matches correctly;
+  bump the `@zakkster/lite-fastbit32` floor to `^1.2.1`. lite-ecs is not edited
+  from this session.
+- **Keep signatures defined.** Because of the fail-open change above,
+  `hasAll(undefined)` is now `true` (a signature that is `undefined`/`NaN`/`null`
+  matches every entity), where 1.2.0 returned `false`. Build masks through
+  `BitMapper.getMask`, which throws on an unknown name; a raw `undefined` field
+  read does not throw and will silently match. Fails closed in S6 (SC-3).
+
 ### Known / pinned (unchanged behaviour, flips in a later session)
 
-- FB-01 (todo, flips in S1): `hasAll(mask)` returns false whenever `mask` carries
-  bit 31 in unsigned form (`(value & mask) === mask` compares a signed int32 to
-  an unsigned double). Three node:test cases and the T1/T2/T3/T5/T8 torture rows are
-  registered `todo` and become hard assertions in S1. An in-place fix greens all
-  of them (verified: the `hasall-fixed` control, which simulates the fix, turns
-  every one of those rows green); there is no second FB-01 defect class.
 - FB-02..FB-06 (pinned): null/undefined map to bit 0; `fromArray` coerces
   non-integers and holes; `serialize` is representation-unstable; `deserialize`
   and the constructor accept garbage; `countRange` has no domain; `BitMapper`
   accepts duplicates and yields `undefined` names. Each is pinned to its literal
   today-answer in `test/Pinned.test.mjs` so a later session changes it on purpose.
+  - FB-02 extension (new in 1.2.1): `hasAll(undefined|NaN|null|2**32)` is `true`
+    on any instance (ToInt32 -> 0), where 1.2.0 returned `false` on a set
+    instance. Same "null is zero" fail-open class; pinned on an empty instance in
+    `test/Pinned.test.mjs`, fails closed in S6 (SC-3).
 
 ### Measured (S0 baseline, Node 26.8.2, both --min/--max-semi-space-size=4)
 
@@ -74,7 +108,11 @@ space scavenges ~2x more than grown new space); the perf gate asserts both pins
 and fails closed if absent, and the torture B/op lanes discard any window that
 scavenged (read after an awaited settle). Every comparison is NaN-fails-closed.
 
-- node:test: 119 cases -- 116 pass, 0 fail, 3 `todo` (all FB-01). (Includes QA's
+- node:test: 128 cases -- 128 pass, 0 fail, 0 `todo` (the three FB-01 cases are
+  now hard assertions, plus a pinned fail-open case, all fixed/pinned in S1;
+  QA's test/S1HasAllEdges.test.mjs adds 8 hasAll edge cases, 5 of which fail on
+  the 1.2.0 body).
+  (Includes QA's
   test/Boundary.test.mjs and test/TortureGuards.test.mjs; the semi-space pin
   bypass cases -- repeated last-occurrence and underscore spelling -- the
   --minor-ms / --minor_ms young-GC mode cases, and the young-GC detector
@@ -121,7 +159,8 @@ scavenged (read after an awaited settle). Every comparison is NaN-fails-closed.
 
 A genuine HeapNumber box in a shipped 1.2.0 body. S0 changes no code and never
 widens a budget; the hole is pinned RED so a later session must close it on
-purpose (a green reading FAILS the gate, like an FB-01 todo row):
+purpose (a green reading FAILS the gate -- an expected-red lane, like T6's
+highestClearBit bit-31-clear lanes below):
 
 - `highestClearBit()` boxes on a bit-31-CLEAR word -- `31 - clz32(~value >>> 0)`
   with the operand >= 2^31. Reproduced at V8 DEFAULT tier (the reviewer confirmed

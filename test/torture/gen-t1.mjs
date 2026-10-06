@@ -1,25 +1,23 @@
-// test/torture/gen-t1.mjs -- regenerates t1-degenerate.mjs's golden table from a
-// HEAD copy of FastBit32.js. The golden is the pin that proves S0 changed no
-// behaviour; it must be derived from git HEAD, not the working file.
+// test/torture/gen-t1.mjs -- regenerates t1-degenerate.mjs's golden snapshot from
+// a copy of FastBit32.js. The golden pins the library's own literal answers for
+// degenerate inputs; it is regenerated only when behaviour changes ON PURPOSE
+// (e.g. the FB-01 hasAll fix in S1) and the resulting diff is reviewed row by
+// row.
 //
 // Usage:
-//   git show HEAD:FastBit32.js > /tmp/head-FastBit32.js
-//   node test/torture/gen-t1.mjs /tmp/head-FastBit32.js
+//   node test/torture/gen-t1.mjs FastBit32.js
 //
-// With no argument it defaults to ../../FastBit32.js (the working file) and
-// prints a warning -- use that only to refresh the loop/apply scaffolding, never
-// to re-pin the golden.
+// With no argument it defaults to ../../FastBit32.js (the working file).
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { oHasAll } from './oracle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, 't1-degenerate.mjs');
 
 const arg = process.argv[2];
-if (!arg) console.error('gen-t1: no HEAD path given; defaulting to the WORKING FastBit32.js (not a valid re-pin).');
+if (!arg) console.error('gen-t1: no source path given; defaulting to the working ../../FastBit32.js.');
 const srcPath = arg ? resolve(arg) : join(HERE, '..', '..', 'FastBit32.js');
 const { FastBit32: HEAD } = await import(pathToFileURL(srcPath).href);
 
@@ -40,7 +38,7 @@ const CTORS = [
 
 const valOf = (lit) => eval('(' + lit + ')');
 const rows = [];
-const push = (op, tag, lit, want, todo = false) => rows.push({ op, tag, lit, want, todo });
+const push = (op, tag, lit, want) => rows.push({ op, tag, lit, want });
 
 for (const [tag, lit] of BITS) {
     const b = valOf(lit);
@@ -51,8 +49,7 @@ for (const [tag, lit] of BITS) {
 }
 for (const [tag, lit] of MASKS) {
     const m = valOf(lit);
-    const todo = m !== (m | 0) && oHasAll(-1, m) === true;
-    push('hasAll', tag, lit, new HEAD(-1).hasAll(m), todo);
+    push('hasAll', tag, lit, new HEAD(-1).hasAll(m));
     push('hasAny', tag, lit, new HEAD(-1).hasAny(m));
     push('hasNone', tag, lit, new HEAD(0).hasNone(m));
 }
@@ -71,16 +68,20 @@ for (const [tag, lit] of CTORS) {
 
 const serWant = (w) => (typeof w === 'boolean' ? String(w) : Object.is(w, -0) ? '-0' : String(w));
 
-let out = `// test/torture/t1-degenerate.mjs -- GENERATED from git HEAD:FastBit32.js.
-// Degenerate bit/mask/ctor inputs pinned to HEAD's literal answers. Comparing
-// the working library against this table proves S0 changed no behaviour. Rows
-// matching C5 (non-int32 mask whose true hasAll answer is true) are todo.
-// Regenerate: git show HEAD:FastBit32.js > /tmp/h.js && node test/torture/gen-t1.mjs /tmp/h.js
+let out = `// test/torture/t1-degenerate.mjs -- GENERATED from FastBit32.js by gen-t1.mjs.
+// A GOLDEN SNAPSHOT of the library's own literal answers for degenerate bit /
+// mask / ctor inputs (not an independent oracle): the working library must
+// reproduce every pinned row. The four hasAll C5 rows (0xFFFFFFFF / 2**32 / NaN /
+// undefined) carry the FB-01 fix answer (true); hasAll is signedness-agnostic
+// from 1.2.1 on. hasAll(NaN|undefined) === true even on an empty instance is a
+// deliberate fail-open (ToInt32 -> 0), pinned here and in test/Pinned.test.mjs,
+// to be closed in S6 / SC-3.
+// Regenerate: node test/torture/gen-t1.mjs FastBit32.js
 
 const GOLDEN = [
 `;
 for (const r of rows) {
-    out += `    { op: ${JSON.stringify(r.op)}, tag: ${JSON.stringify(r.tag)}, want: ${serWant(r.want)}${r.todo ? ', todo: true' : ''} },\n`;
+    out += `    { op: ${JSON.stringify(r.op)}, tag: ${JSON.stringify(r.tag)}, want: ${serWant(r.want)} },\n`;
 }
 out += `];
 
@@ -118,25 +119,16 @@ ${[...BITS, ...MASKS, ...CTORS].reduce((acc, [tag, lit]) => {
 export function run(ctx) {
     const FB = ctx.FB;
     const fails = [];
-    let green = 0;   // expected-red (FB-01/C5) rows that came out GREEN = failures
-    let fb01Red = 0;
     for (let i = 0; i < GOLDEN.length; i++) {
         const row = GOLDEN[i];
         const lit = INPUT[row.tag]();
         let got;
         try { got = apply(FB, row.op, lit); } catch (e) { got = 'THROW:' + e.message; }
-        if (row.todo) {
-            // C5 expected-red: \`want\` is the pinned BUGGY answer. Still buggy
-            // (got === want) = red; changed to the true answer = green (fixed),
-            // which fails the run (flips only on purpose, in S1).
-            if (Object.is(got, row.want)) fb01Red++; else green++;
-            continue;
-        }
         if (!Object.is(got, row.want)) fails.push('T1: ' + row.op + '(' + row.tag + ') got ' + String(got) + ' want ' + String(row.want));
     }
-    return { fails, green, fb01Red };
+    return { fails, green: 0 };
 }
 `;
 
 writeFileSync(OUT, out);
-console.error('wrote t1-degenerate.mjs with ' + rows.length + ' rows (' + rows.filter((r) => r.todo).length + ' todo) from ' + srcPath);
+console.error('wrote t1-degenerate.mjs with ' + rows.length + ' rows from ' + srcPath);

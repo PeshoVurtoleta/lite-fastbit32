@@ -1,9 +1,9 @@
 // test/torture/t0-laws.mjs -- metamorphic algebra over a fuzz corpus, in both
 // representations (ctor-built unsigned and add-built signed). Section-5 laws
 // minus the S4/S5 rows (cursor/rank/select). The hasAll <=> popcount-identity
-// law is scoped to masks within bits 0..30 so FB-01 (bit 31) does not fail a
-// law that is not its home tier. The lowest-noguard control (returns 63 on an
-// empty word) fails the lowest/highest laws here.
+// law runs over the full word (bit 31 included) now that FB-01 is fixed. The
+// lowest-noguard control (returns 63 on an empty word) fails the lowest/highest
+// laws here.
 
 import {
     oCount, oCountMasked, oLowest, oHighest, oNextClearBit, oHighestClearBit,
@@ -58,9 +58,22 @@ export function run(ctx) {
         if (u.count() !== u.countMasked(m) + u.countMasked((~m) >>> 0)) F('count split w=' + w + ' m=' + m);
         // hasAny === !hasNone
         if (u.hasAny(m) !== !u.hasNone(m)) F('hasAny==!hasNone w=' + w);
-        // hasAll <=> countMasked(m)===popcount(m), scoped to bits 0..30
-        const m30 = m & 0x7FFFFFFF;
-        if (u.hasAll(m30) !== (u.countMasked(m30) === oCount(m30))) F('hasAll popcount-identity w=' + w + ' m=' + m30);
+        // hasAll <=> countMasked(m) === popcount(m), full word (bit 31 included;
+        // hasAll is signedness-agnostic from 1.2.1 / FB-01 on)
+        if (u.hasAll(m) !== (u.countMasked(m) === oCount(m))) F('hasAll popcount-identity w=' + w + ' m=' + m);
+        // The FB-01 teeth: run the identity on a mask that is actually a SUBSET
+        // of the word, passed in UNSIGNED form so a bit-31 mask arrives as
+        // 2147483648. hasAll(ms) must be true (true answer) and the identity must
+        // hold. The 1.2.0 body reads false here (signed value vs unsigned double),
+        // so hasall-old fails T0. (Full-word m alone cannot catch it: no corpus
+        // word fully contains a bit-31 mask whose true answer is true.)
+        const ms = (m & w) >>> 0;              // subset of w
+        if (u.hasAll(ms) !== (u.countMasked(ms) === oCount(ms))) F('hasAll subset-mask w=' + w + ' ms=' + ms);
+        // the set's own bits as an unsigned mask, on the ADD-BUILT signed
+        // instance: always true, and the identity holds; bit-31 words carry the
+        // FB-01 shape directly.
+        const wu = w >>> 0;
+        if (s.hasAll(wu) !== (s.countMasked(wu) === oCount(wu))) F('hasAll self-mask w=' + w);
 
         // De Morgan on the int32 bit pattern
         if ((((~(w | m)) ^ ((~w) & (~m))) | 0) !== 0) F('de morgan w=' + w + ' m=' + m);

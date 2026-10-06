@@ -1,9 +1,9 @@
-// test/torture/t2-representation.mjs -- the representation matrix (FB-01 lives
-// here). 5 build forms x {m, m>>>0, m|0} x key matrix x every mask op. Sets are
-// compared as (a ^ b) === 0, never === on .value. Any mask carrying bit 31 in
-// unsigned form is an FB-01 "expected-red" row: at S0 the library disagrees with
-// the oracle (red). A GREEN such row (e.g. under the hasall-fixed control) is a
-// FAIL, which is how this tier proves it can fail.
+// test/torture/t2-representation.mjs -- the representation matrix (FB-01's home
+// tier). 5 build forms x {m, m>>>0, m|0} x key matrix x every mask op. Sets are
+// compared as (a ^ b) === 0, never === on .value. hasAll is signedness-agnostic
+// from 1.2.1 / FB-01 on, so every mask representation (bit 31 included) is a
+// plain oracle check. The hasall-old control reinstalls the 1.2.0 body and must
+// fail here.
 
 import {
     oHasAll, oHasAny, oHasNone, oCountMasked, oUnion, oIntersect, oDifference, ubit
@@ -12,8 +12,6 @@ import {
 export function run(ctx) {
     const FB = ctx.FB;
     const fails = [];
-    let green = 0;
-    let fb01Red = 0;
 
     const lanes = ctx.h.LANE_VALUES; // 6 lanes
     const signed = ctx.h.LANE_SIGNED;
@@ -72,19 +70,11 @@ export function run(ctx) {
                     if (((new FB(w).difference(m).value ^ oDifference(w, m)) >>> 0) !== 0) {
                         fails.push('T2: difference lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
                     }
-                    // hasAll: FB-01 zone is exactly C5 -- a non-int32 mask
-                    // (m !== (m|0)) whose true answer is true. Elsewhere the
-                    // op is signedness-agnostic and must match the oracle.
-                    const libAll = inst.hasAll(m);
-                    const trueAll = oHasAll(w, m);
-                    const isC5 = (m !== (m | 0)) && (trueAll === true);
-                    if (isC5) {
-                        // expected-red: at S0 lib must DISAGREE (red). agreement = green = fail.
-                        if (libAll === trueAll) green++; else fb01Red++;
-                    } else {
-                        if (libAll !== trueAll) {
-                            fails.push('T2: hasAll lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
-                        }
+                    // hasAll is signedness-agnostic after the FB-01 fix: it
+                    // must match the oracle for every mask representation, bit
+                    // 31 included (C5 is no longer an expected-red zone).
+                    if (inst.hasAll(m) !== oHasAll(w, m)) {
+                        fails.push('T2: hasAll lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
                     }
                     void signed;
                     void ubit;
@@ -93,5 +83,5 @@ export function run(ctx) {
         }
     }
 
-    return { fails, green, fb01Red };
+    return { fails, green: 0 };
 }

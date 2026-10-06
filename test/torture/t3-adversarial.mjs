@@ -7,8 +7,6 @@ import { oNextClearBit, oToArray, oUnion, oToArray as _t, ubit } from './oracle.
 export function run(ctx) {
     const FB = ctx.FB;
     const fails = [];
-    let green = 0;
-    let fb01Red = 0;
     const F = (m) => fails.push('T3: ' + m);
 
     // ---- pool: fill 32 slots via nextClearBit --------------------------------
@@ -52,15 +50,9 @@ export function run(ctx) {
     for (let idx = 0; idx < 32; idx++) {
         const sig = (1 << idx) >>> 0;
         const e = new FB().add(idx);
-        const trueMatch = true; // entity has exactly the one component it needs
-        if (idx === 31 || sig !== (sig | 0)) {
-            // FB-01 zone: a non-int32 signature mask (idx 31). At S0 the library
-            // must DISAGREE with trueMatch (red); agreement means the in-place
-            // fix landed, which at S0 is a FAIL (folds into totalGreen).
-            if (e.hasAll(sig) === trueMatch) green++; else fb01Red++;
-        } else {
-            if (e.hasAll(sig) !== trueMatch) F('ECS size-1 idx ' + idx);
-        }
+        // entity has exactly the one component it needs; hasAll must be true for
+        // every signature incl. the unsigned bit-31 mask (FB-01 fixed in 1.2.1).
+        if (e.hasAll(sig) !== true) F('ECS size-1 idx ' + idx);
     }
     // size 32: all bits set, assert via isFull/count (signedness-safe)
     const all = new FB();
@@ -91,5 +83,5 @@ export function run(ctx) {
     if (!allArr.isFull()) F('fromArray all not full');
 
     void oToArray; void oUnion; void _t; void ubit;
-    return { fails, green, fb01Red };
+    return { fails, green: 0 };
 }

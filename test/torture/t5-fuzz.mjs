@@ -1,16 +1,17 @@
 // test/torture/t5-fuzz.mjs -- differential fuzz against the oracle. 200k mixed
 // ops (strict: every op checked; TORTURE_FAST=1: every 16th). Every 64th op
-// re-derives the word and checks serialize() equality as a set. FB-01 (C5)
-// mismatches are counted SEPARATELY and must be > 0 (proof the bug is live at
-// S0). Any OTHER mismatch is a failure with a replay line. The oracle-flip
-// control injects a wrong oracle -> non-C5 mismatches -> this tier fails.
+// re-derives the word and checks serialize() equality as a set. hasAll is
+// signedness-agnostic from 1.2.1 / FB-01 on, so it is a plain oracle check over
+// every word (the instance's own bits as an unsigned mask, bit 31 included). Any
+// mismatch is a failure with a replay line. The oracle-flip control injects a
+// wrong oracle -> mismatches -> this tier fails; the hasall-old control
+// reinstalls the 1.2.0 body -> the self-mask hasAll check diverges -> fails.
 
 export function run(ctx) {
     const FB = ctx.FB;
     const o = ctx.oracle;
     const h = ctx.h;
     const fails = [];
-    let green = 0;
     const strict = process.env.TORTURE_FAST !== '1';
     const stride = strict ? 1 : 16;
     const OPS = 200000;
@@ -19,7 +20,6 @@ export function run(ctx) {
     const model = new Uint8Array(32); // truth bits
     const wordOf = () => { let r = 0; for (let i = 0; i < 32; i++) if (model[i]) r += 2 ** i; return r >>> 0; };
 
-    let c5count = 0;
     let firstFail = -1;
 
     for (let i = 0; i < OPS; i++) {
@@ -55,16 +55,23 @@ export function run(ctx) {
             for (const [name, got, want] of checks) {
                 if (got !== want && firstFail < 0) { firstFail = i; fails.push('T5: ' + name + ' op ' + i + ' got ' + got + ' want ' + want); }
             }
-            // hasAll on the instance's own bits as an unsigned mask (true answer).
+            // hasAll on the instance's own bits as an unsigned mask (true
+            // answer is true). Signedness-agnostic after the FB-01 fix: must
+            // match the oracle for every word, bit 31 included.
             const selfMask = fb.value >>> 0;
-            const libAll = fb.hasAll(selfMask);
-            const trueAll = o.oHasAll(ew, selfMask);
-            const isC5 = (selfMask !== (selfMask | 0)) && (trueAll === true);
-            if (isC5) {
-                if (libAll !== trueAll) c5count++;      // expected FB-01 divergence
-                else green++;                            // fixed -> green (fails under hasall-fixed)
-            } else if (libAll !== trueAll && firstFail < 0) {
+            if (fb.hasAll(selfMask) !== o.oHasAll(ew, selfMask) && firstFail < 0) {
                 firstFail = i; fails.push('T5: hasAll op ' + i);
+            }
+            // false case: a mask with one bit NOT in the word -> true answer is
+            // false. Both unsigned and signed mask forms. The self-mask check
+            // above is always-true, so a `return true` body would pass it; this
+            // catches that (and the oracle-flip control stays caught elsewhere).
+            const clr = o.oNextClearBit(ew);   // lowest clear bit, or -1 if full
+            if (clr >= 0) {
+                const missU = (ew | (1 << clr)) >>> 0;
+                const missS = (ew | (1 << clr)) | 0;
+                if (fb.hasAll(missU) !== o.oHasAll(ew, missU) && firstFail < 0) { firstFail = i; fails.push('T5: hasAll-false(u) op ' + i); }
+                if (fb.hasAll(missS) !== o.oHasAll(ew, missS) && firstFail < 0) { firstFail = i; fails.push('T5: hasAll-false(s) op ' + i); }
             }
         }
 
@@ -75,8 +82,6 @@ export function run(ctx) {
     }
 
     if (firstFail >= 0) fails.push('T5: replay -> ' + h.replayLine(ctx.seed, firstFail));
-    if (c5count === 0) fails.push('T5: expected FB-01 (C5) divergences > 0, saw 0 (positive control)');
 
-    // c5count = FB-01 rows that stayed buggy (red); green = rows that got fixed.
-    return { fails, green, fb01Red: c5count };
+    return { fails, green: 0 };
 }

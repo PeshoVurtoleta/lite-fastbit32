@@ -1,4 +1,4 @@
-# @zakkster/lite-fastbit32 v1.2.0
+# @zakkster/lite-fastbit32 v1.2.1
 
 > Zero-GC, monomorphic, branchless 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code.
 
@@ -21,7 +21,7 @@ import {
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
 
-// VERSION is the package version string ('1.2.0'), synced with package.json.
+// VERSION is the package version string ('1.2.1'), synced with package.json.
 ```
 
 ## Constructor
@@ -52,7 +52,7 @@ All mutating methods return `this` for chaining unless noted otherwise.
 
 | Method | Returns | Description |
 |---|---|---|
-| `.hasAll(mask)` | `boolean` | True if ALL bits in mask are set. `(value & mask) === mask` |
+| `.hasAll(mask)` | `boolean` | True if ALL bits in mask are set. `(~value & mask) === 0` (signedness-agnostic; a mask with bit 31 matches -- FB-01, fixed 1.2.1) |
 | `.hasAny(mask)` | `boolean` | True if ANY bit in mask is set. `(value & mask) !== 0` |
 | `.hasNone(mask)` | `boolean` | True if NO bits in mask are set. `(value & mask) === 0` |
 
@@ -177,7 +177,7 @@ forEachMapped(mask, mapper, (name, bit) => {
 
 1. **Silent modulo-32 wraparound.** JavaScript bitwise shifts apply `% 32` implicitly. `add(32)` is identical to `add(0)`. `add(40)` is identical to `add(8)`. There is no bounds checking.
 
-2. **Sign bit.** `add(31)` sets the sign bit. After this, `.value` may be a negative signed integer in JavaScript. All bitwise operations still work correctly on the bit pattern, but `===` comparisons between signed and unsigned representations will fail. Use `>>> 0` if you need unsigned comparison: `(a.value >>> 0) === (b.value >>> 0)`.
+2. **Sign bit.** `add(31)` sets the sign bit, so `.value` may read as a negative signed integer in JavaScript. The predicates (`has`, `hasAll`, `hasAny`, `hasNone`, `isEmpty`, `isFull`) are signedness-agnostic: they answer the same for a mask and its `>>> 0` form (FB-01, fixed 1.2.1). Only direct `.value` and `serialize()` comparisons need `>>> 0`: `(a.value >>> 0) === (b.value >>> 0)`. (serialize() itself stays representation-unstable until FB-03 / S6.)
 
 3. **No input validation.** Floats are truncated. Negative bit indices are coerced. NaN becomes 0. FastBit32 trusts the caller for maximum performance.
 

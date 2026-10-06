@@ -1,7 +1,7 @@
 {
   "name": "@zakkster/lite-fastbit32",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Zero-GC, monomorphic 32-bit flag manager and ECS masking primitive for high-performance game loops.",
   "type": "module",
   "sideEffects": false,

@@ -17,7 +17,7 @@ reading. The exception is FB-12, which is marked unmeasured.
 | Session | Deliverable | Version | Kind | State |
 | --- | --- | --- | --- | --- |
 | **S0** | node:test port + torture T0-T9 + perf-gate + hygiene | (folds into 1.2.1) | harness, no behaviour change | DONE 2026-10-06 (uncommitted) |
-| **S1** | **URGENT** `hasAll` sign-bit fix (FB-01) + sign-bit doc truth | 1.2.1 | bug fix | planned |
+| **S1** | **URGENT** `hasAll` sign-bit fix (FB-01) + sign-bit doc truth | 1.2.1 | bug fix | DONE 2026-10-06 (reviewer APPROVED, qa PASS; uncommitted, awaiting /release 1.2.1) |
 | **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | planned |
 | **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.2.2 | internal, output-identical | planned |
 | **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | planned |
@@ -89,7 +89,7 @@ re-run with `node -e`.
 | ID | Sev | Finding | Reproduction |
 | --- | --- | --- | --- |
 | **FB-01** | **S1** | **`hasAll(mask)` is false whenever `mask` carries bit 31 in unsigned form.** The body `(v & mask) === mask` compares a signed int32 to an unsigned double. `BitMapper.getMask` *always* returns `>>> 0`, so any mapped mask that includes the 32nd flag never matches. Even `new FastBit32(-1).hasAll(0xFFFFFFFF)` is false. **lite-ecs `World.js:30` builds signatures as `(1 << idx) >>> 0` and calls `entity.mask.hasAll(sys.signature)`: a system that requires component 31 never runs, silently.** The README claims bit 31 is handled "correctly under the hood". | `new FastBit32().add(31).hasAll(0x80000000)` -> `false`; `new FastBit32().add(0).add(31).hasAll(m.getMask(['C0','C31']))` -> `false` |
-| **FB-02** | **S1** | **`null` is zero.** `add(undefined)`, `add(null)` set bit 0; `has(undefined)` is `true` when bit 0 is set. A misspelled enum key (`flags.add(Flags.PLAYNIG)`) silently sets and reads bit 0. `fromArray([undefined, NaN, 'x'])` -> `1`; holey `fromArray([, 5])` -> `33`. The suite law, verbatim, violated. | `new FastBit32().add(undefined).value` -> `1` |
+| **FB-02** | **S1** | **`null` is zero.** `add(undefined)`, `add(null)` set bit 0; `has(undefined)` is `true` when bit 0 is set. A misspelled enum key (`flags.add(Flags.PLAYNIG)`) silently sets and reads bit 0. `fromArray([undefined, NaN, 'x'])` -> `1`; holey `fromArray([, 5])` -> `33`. The suite law, verbatim, violated. Since 1.2.1 `hasAll(undefined\|NaN\|null\|2**32)` is `true` on any instance (ToInt32 -> 0; was `false` by the FB-01 signed-compare accident in 1.2.0) -- same fail-open class, fails closed in S6. | `new FastBit32().add(undefined).value` -> `1`; `new FastBit32().hasAll(undefined)` -> `true` |
 | **FB-03** | S2 | **Two representations of one set.** Constructor and `fromArray` store `>>> 0` (unsigned; a heap double for >= 2^31); every mutator stores signed int32. The same set serializes as `2147483648` or `-2147483648` depending on how it was built, so save-state equality, dedupe and hashing break. `d.ts`, README and llms.txt all document `value` as "unsigned". | `[new FastBit32(0x80000000).serialize(), new FastBit32().add(31).serialize()]` -> `[2147483648, -2147483648]` |
 | **FB-04** | S2 | **`deserialize` / constructor accept garbage silently**: `'garbage'` -> 0, `NaN` -> 0, `2**32 + 1` -> 1, `1.5` -> 1. A corrupted save loads as a plausible mask. This is the one boundary where validation costs nothing. | `FastBit32.deserialize('garbage').value` -> `0` |
 | **FB-05** | S2 | `countRange` has no domain: `(5, 2)` -> `27`, `(0, 32)` -> `1`, `(-1, 3)` -> `1` on a full word. Documented "caller must guarantee", but the failure is plausible numbers, not an error. | `new FastBit32(-1).countRange(5, 2)` -> `27` |
@@ -899,11 +899,15 @@ HOT PATH
 
 ASSERTIONS
   - T1 re-pinned under the new law. Every throw is asserted with its code,
-    and the object state is unchanged after a throw.
+    and the object state is unchanged after a throw. The re-pin MUST cover the
+    1.2.1 fail-open: `FastBit32().hasAll(undefined|NaN|null)` is `true` today and
+    must fail closed on CheckedFastBit32 (and per the SC-3 decision on the
+    default class).
   - serialize() is stable across representations:
     new FastBit32(0x80000000).serialize() === new FastBit32().add(31).serialize()
-  - CheckedFastBit32 throws on add(undefined); FastBit32 behaviour is pinned
-    and documented
+  - CheckedFastBit32 throws on add(undefined) and hasAll(undefined)/hasAll(NaN);
+    FastBit32's permissive fail-open (hasAll(undefined) === true, FB-02 class
+    since 1.2.1) is pinned and documented
   - revert-check: the new T1/T4 gates fail on 1.4.0
   - perf gate + T6 0 B/op on the default class; the mixed-site lane is recorded
 

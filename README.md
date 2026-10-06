@@ -172,7 +172,7 @@ if (entity.hasAll(PHYSICS_QUERY)) runPhysics(entity);
 if (entity.hasAll(RENDER_QUERY))  drawSprite(entity);
 ```
 
-> **Bit 31 (Sign Bit) Warning:** In JavaScript, `1 << 31` evaluates to `-2147483648` — a negative number. FastBit32 handles this correctly under the hood, but if you log raw mask values to the console, you will see negative integers and assume a bug. This also affects `serialize()`: masks using bit 31 produce negative numbers in JSON. **Recommendation:** Keep ECS component indices to 0–30 (31 components). If you must use all 32, compare serialized values with `>>> 0` to force unsigned representation.
+> **Bit 31 (Sign Bit):** In JavaScript, `1 << 31` evaluates to `-2147483648` -- a negative number -- so an instance holding bit 31 may log a negative `.value`, and `serialize()` may emit a negative integer in JSON, depending on how the instance was built (FB-03, planned fix in a later release). The predicates are signedness-agnostic: `hasAll` (and `has`/`hasAny`/`hasNone`/`isEmpty`/`isFull`) answer the same for a mask and its `>>> 0` form, so a 32-component ECS signature (including component 31, as produced by `BitMapper.getMask`) matches correctly. This was not true before 1.2.1: `hasAll` returned `false` for any mask carrying bit 31 (see [CHANGELOG](./CHANGELOG.md), FB-01). Only direct `.value` or `serialize()` equality needs `>>> 0` to compare unsigned.
 
 </details>
 

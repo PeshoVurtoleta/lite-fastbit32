@@ -108,9 +108,9 @@ describe('torture entry guards (fail closed)', () => {
     });
 
     it('unknown TORTURE_CONTROL: exit 2 with did-you-mean', () => {
-        const r = run(['--expose-gc', ...PINS], { TORTURE_CONTROL: 'hasall-fixd' });
+        const r = run(['--expose-gc', ...PINS], { TORTURE_CONTROL: 'hasall-od' });
         assert.strictEqual(r.status, 2);
-        assert.match(r.stderr, /did you mean: hasall-fixed/);
+        assert.match(r.stderr, /did you mean: hasall-old/);
     });
 
     for (const bad of ['abc', '1.5', '0x10', 'NaN', '1e3', ' ']) {
