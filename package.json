@@ -1,0 +1,64 @@
+{
+  "name": "@zakkster/lite-fastbit32",
+  "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
+  "version": "1.2.0",
+  "description": "Zero-GC, monomorphic 32-bit flag manager and ECS masking primitive for high-performance game loops.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "FastBit32.js",
+  "types": "FastBit32.d.ts",
+  "exports": {
+    ".": {
+      "types": "./FastBit32.d.ts",
+      "import": "./FastBit32.js",
+      "default": "./FastBit32.js"
+    }
+  },
+  "files": [
+    "FastBit32.js",
+    "FastBit32.d.ts",
+    "llms.txt",
+    "README.md"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/PeshoVurtoleta/lite-fastbit32#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-fastbit32.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-fastbit32/issues",
+    "email": "shinikchiev@yahoo.com"
+  },
+  "keywords": [
+    "bitflags",
+    "bitmask",
+    "bitmap",
+    "bitwise",
+    "state-machine",
+    "ecs",
+    "gamedev",
+    "engine",
+    "performance",
+    "branchless",
+    "zero-gc",
+    "fast",
+    "32bit",
+    "flags",
+    "bit-operations",
+    "low-level",
+    "realtime",
+    "rendering",
+    "pipeline",
+    "lite-tools",
+    "fastbit32"
+  ],
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "bundle-check": "npx esbuild FastBit32.js --bundle --format=esm --outfile=test-bundle.js",
+    "prepublishOnly": "npm run test && npm run bundle-check"
+  }
+}
