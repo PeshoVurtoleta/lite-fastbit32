@@ -78,8 +78,12 @@
     "torture": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs",
     "torture:controls": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs",
     "test:perf": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 --test test/perf/PerfGate.test.mjs",
+    "witness": "node test/witness.mjs",
+    "witness:fast": "WITNESS_FAST=1 node test/witness.mjs",
+    "bench:sc1": "node benchmark/experiments/sc1-scans.mjs",
+    "bench:sc2": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 benchmark/experiments/sc2-repr.mjs",
     "bundle-check": "esbuild FastBit32.js --bundle --format=esm --outfile=.bundle-check/test-bundle.js",
-    "verify": "npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf",
+    "verify": "npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf && npm run witness:fast",
     "prepublishOnly": "npm run verify && npm run bundle-check"
   }
 }

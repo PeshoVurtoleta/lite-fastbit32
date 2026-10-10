@@ -4,6 +4,7 @@ Compiled 2026-10-06 against `main` (1052881, published 1.2.0, node v26.8.2). Mod
 and `../LiteLogN/RESEARCH.md`. Feeds
 `ROADMAP.md`; every claim below marked **(measured)** was reproduced with a probe in this session, every claim
 marked **(to measure)** is a session task, not a fact. Nothing here is a settle call -- those live in ROADMAP section 3.
+Section 11 (multi-word drafts, evaluated 2026-10-08 against 37dc47d) was measured on a different host; it says which.
 
 ---
 
@@ -29,8 +30,7 @@ one a 32-iteration loop or a `Set<number>` does not have.
 
 | Consumer | Uses | Notes |
 | --- | --- | --- |
-| lite-ecs `Entity.js`, `World.js` | `FastBit32` per entity, `BitMapper` for components, `hasAll(signature)` per system per entity | `World.js:30` builds signatures as `(1 << idx) >>> 0` -- **
-hit by FB-01 at component 31** |
+| lite-ecs `Entity.js`, `World.js` | `FastBit32` per entity, `BitMapper` for components, `hasAll(signature)` per system per entity | `World.js:30` builds signatures as `(1 << idx) >>> 0` -- **hit by FB-01 at component 31** |
 | lite-tween-pro `TweenPro.js` | `flags.add/has/toggle/clear` with a small enum | small indices; exposed to FB-02 if an enum key is misspelled |
 | lite-depth `Depth.js` | `BitMapper` only, then `1 << FLAGS.get(name)` by hand into a `Uint32Array` lane | wants a one-bit-mask accessor (`BitMapper.bit`), not the class |
 | lite-fxpro | devDep `^1.1.1` | not inspected |
@@ -56,46 +56,54 @@ That claim is falsifiable, and the foils below fail it visibly.
 
 ### The witness, precisely
 
-- **Density sweep:** for d in 0..32, a corpus of 4096 words with popcount d
-  (seeded). Time each hot op over the corpus. Gate: max/min ns-per-op ratio across d below a flatness floor (lite-logn's
-  witness uses the same shape).
+- **Density sweep:** for d in 0..32, a corpus of 2048 words with popcount d
+  (seeded). Time each hot op over the corpus. Gate: max/min ns-per-op ratio across d below a flatness floor AND the
+  unclamped max - min spread below a multiple of the run's measured noise (lite-logn's witness uses the same shape).
 - **Position sweep:** for p in 0..31, single-bit words `1 << p`, plus the two extremes `0` and `-1`. Same flatness gate.
   This is the sweep that catches a sign-bit slow path (FB-12 territory: values >= 2^30 or >= 2^31 leaving Smi).
-- **Iteration slope:** `forEach` / cursor iteration over popcount k = 0..32. Fit time = a + b*k; gate that the residual
-  is small and `a` is under one call's overhead. O(k), not O(32).
+- **Iteration slope:** `forEach` / cursor iteration over popcount k = 0..32. Fit time = a + b*k; gate R^2, a two-sided
+  `|a|` bound in units of the per-bit slope, and the curvature of a quadratic fit. O(k), not O(32) (foil: a fixed
+  32-step scan) and not O(k^2) (foil: a re-walking iterator).
 - **Foils (must visibly fail flatness):** Kernighan's popcount
   (`while (v !== 0) { v &= v - 1; c++; }` -- O(k), the common real-world implementation), the 16-bit lookup table (flat
   when L1-hot, data-dependent under cache pressure -- the reason the witness runs two cache lanes), a 32-iteration
   popcount loop with early exit,
   `for (b = 0; b < 32; b++) if (v & (1 << b))` for lowest, and a `Set<number>`
   of indices. If a foil passes the flatness gate, the gate has no teeth.
-- **popcount candidates, S2a witness harness (2026-10-07, node v26.8.2, Apple Silicon).** Numbers
-  from `test/witness.mjs` + `test/witness/run-one.mjs` -- each candidate in its OWN process behind a monomorphic inlined
-  call site, best-of-N min minus an empty-loop floor, result sunk into an Int32Array slot. ns/op is floor-subtracted (
-  net); HOT is a tight loop, PRESSURE streams 32 MB at a 4099-word stride in both the op and floor loops. Density sweep
-  0..32. Flatness = max/min of net across the sweep, each cell clamped up to a per-lane noise floor (EPS_HOT 0.8,
-  EPS_PRESSURE 0.18 ns). Full floors + margins in
-  `benchmark/METHODOLOGY.md`.
+- **popcount candidates, S2a witness harness (reworked 2026-10-10, node v26.8.2, Apple M4 Pro).** Numbers from
+  the witness harness -- each candidate in its OWN process behind a monomorphic inlined call site; per cell 3 (HOT) / 5
+  (PRESSURE) passes of interleaved op/floor loops, net = median pass, result sunk into an Int32Array slot. Absolute ns
+  come from two `npm run witness` runs (round 1, both exit 0); flatness in N from the 8 re-freeze calibration runs
+  (round 2, quiet host). HOT is a tight loop; PRESSURE streams 32 MB at a 4099-word stride (int32 index, persistent) in both
+  the op and floor loops. Density sweep d0..d32 in BOTH lanes. Flatness is gated as a ratio (cells clamped up to EPS)
+  AND as an unclamped spread, both in units of the run's own NOISE (median cell-to-cell spread of the real-op rows:
+  0.038-0.073 ns HOT, 0.046-0.081 ns PRESSURE in the calibration runs). No absolute-ns constant gates. The PRESSURE
+  lane needs a quiet host: under concurrent load its noise doubles and the run returns a host verdict. Frozen constants and
+  calibration in `benchmark/METHODOLOGY.md`.
 
   | candidate | HOT net ns/op (flatness) | PRESSURE net ns/op (flatness) |
-    | --- | --- | --- |
-  | SWAR (shipped) | 0.29-0.43, flat (ratio 1.0) | ~0-0.22, flat (ratio 1.0) |
-  | 16-bit LUT (64 KB), 2 loads | 0.26-0.44, flat (ratio 1.0-1.67) | **hump 0.1-0.66, data-dependent (ratio 2.6-3.6)** |
-  | Kernighan `v &= v - 1` | 0.29 (d0) -> 7.55 (d32), O(k) (ratio ~9-24) | O(k) |
+  | --- | --- | --- |
+  | SWAR (shipped) | 0.35-0.40, flat (spread 0.24-2.03 N) | -0.23..+0.01 (relative: the lane's negative bias), flat (1.13-2.29 N) |
+  | 16-bit LUT (64 KB), 2 loads | 0.33-0.35, flat (0.25-2.52 N) | **-0.24..0.99: ~0 at d0/d32, 0.5-1.0 mid-density -- data-dependent (8.82-18.91 N, beats the worst real op by 6.89-15.40 N)** |
+  | Kernighan `v &= v - 1` | 0.60 (d0) -> 7.80 (d32), O(k) (113-218 N) | 0.01 (d0) -> 6.90 (d32), O(k) (84.6-174.8 N) |
 
   The 16-bit LUT fails the flatness gate in the PRESSURE lane and passes it when L1-HOT -- the data-dependence the
-  witness forbids. Kernighan fails it in both lanes (O(popcount)). SWAR is the only popcount candidate flat in BOTH
-  lanes, so
-  **SWAR stays** (no LUT member ships). Earlier **(superseded)** ad-hoc probe
+  witness forbids. Kernighan fails it in both lanes (O(popcount); run and pinned red in both). SWAR is the only
+  popcount candidate flat in BOTH lanes, so
+  **SWAR stays** (no LUT member ships). PRESSURE resolves cache behaviour, not ALU work: a ~0.7 ns full-word ALU step
+  (the foilSubEps control) is caught in HOT (9.3-20.0 N) and invisible in PRESSURE, where op loops run up to 0.48 ns
+  FASTER than the empty loop (a measured negative floor bias; PRESSURE nets are relative across cells).
+  **(superseded)** the first S2a table (2026-10-07: SWAR 0.29-0.43 HOT, LUT16 hump 0.1-0.66, ratios 2.6-3.6) -- its
+  PRESSURE loop deopted (`si += 4099` left int32), its boolean ops carried the harness's own `?1:0` branch, and its
+  ratios used an absolute 0.8 ns clamp. Earlier **(superseded)** ad-hoc probe
   (2026-10-06, best of 5 x 5e7, same verdict): SWAR 0.36-0.56 HOT / ~0 streaming; 8-bit LUT (256 B) 0.53-0.70 ties SWAR;
   nibble LUT (16 B) 1.41-1.48; 16-bit LUT 0.28-0.33 HOT / +0.3-0.7 streaming; Kernighan 0.97/2.42/4.01/8.43 at
   0/8/16/32. The 8-bit and nibble tables (not re-run under the S2a harness) never beat SWAR there -- loads cost more
   than ALU ops.
 
-  Verdict: SWAR stays. The 8-bit and nibble tables never beat it (loads cost more than ALU ops). The 16-bit table wins
-  by ~0.15 ns only while hot; under cache pressure its cost depends on which words arrive (0x0000/0xFFFF entries stay
-  cached, mixed words miss), which is exactly what the constant-time witness forbids, and it costs 64 KB per realm plus
-  a 65,536-step import-time init. Kernighan is O(k), ~0.25 ns per set bit.
+  Cost notes behind the verdict: the 16-bit table also costs 64 KB per realm plus a 65,536-step import-time init, and
+  its PRESSURE hump comes from which words arrive (0x0000/0xFFFF entries stay cached, mixed words miss). Kernighan is
+  ~0.25 ns per set bit.
 
   An earlier version of this probe called every candidate through one shared
   `bench(fn)` site, so nothing inlined and SWAR read ~4 ns (mostly call overhead, plus a ~0.77 ns artifact on sparse
@@ -141,9 +149,7 @@ with its own number:
 
 Report alongside every win: the abstraction tax (part 1), the cost of the fail-closed variant once it exists (ROADMAP
 S6), and the `forEach` closure cost when the callback captures (measured 2026-10-06: **425 scavenges over 2e6 calls with
-a capturing closure, 0 with a hoisted function**). The cursor API (section
-
-4) exists precisely because of that last number.
+a capturing closure, 0 with a hoisted function**). The cursor API (section 4) exists precisely because of that last number.
 
 ### Competitive matrix (apples-to-apples, reproducible)
 
@@ -187,8 +193,7 @@ and unsigned forms where relevant:
 
 | Member | Body | Why |
 | --- | --- | --- |
-| `nextSetBit(from)` | `w = v & (-1 << (from & 31)) & ((from - 32) >> 31); return 31 - clz32(w & -w)` | **closure-free
-iteration**: `for (b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))`. Branchless, `from` in 0..32, returns -1 past the end. The `(from - 32) >> 31` term kills the `<< 32` wraparound without a branch. |
+| `nextSetBit(from)` | `w = v & (-1 << (from & 31)) & ((from - 32) >> 31); return 31 - clz32(w & -w)` | **closure-free iteration**: `for (b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))`. Branchless, `from` in 0..32, returns -1 past the end. The `(from - 32) >> 31` term kills the `<< 32` wraparound without a branch. |
 | `prevSetBit(from)` | `31 - clz32(v & (-1 >>> (31 - from)) & ~(from >> 31))` | descending cursor, `from` in -1..31 |
 | `rank(bit)` | popcount of `v & ((1 << bit) - 1)` | set bits strictly below `bit` -- the index into a packed/compressed array (HAMT-style sparse slots). Bit 31 case verified. |
 | `equals(other)` / `equalsValue(x)` | `(this.value ^ x) === 0` | signedness-agnostic equality; today users must remember `>>> 0` on both sides (README itself documents the trap) |
@@ -227,8 +232,10 @@ uses it, and it is rejected into the ledger, not shipped.
 
 ### The boundary -- explicitly OUT of scope
 
-- **Multi-word bitsets of arbitrary capacity.** lite-o1 `BitSet` (1.4.0) owns this, with a summary layer for O(1)
+- **Multi-word bitsets of arbitrary capacity.** (A FIXED 32 x 32 geometry is not this: `FastBit1024`, ROADMAP SC-5,
+  section 13.) lite-o1 `BitSet` (1.4.0) owns this, with a summary layer for O(1)
   firstSet. lite-o1 RESEARCH already records the non-overlap from its side.
+  Section 11 reviews three drafts that cross this line; what survives is routed to lite-o1 or to docs, not here.
 - **O(1) rank/select over long bitvectors.** lite-o1 `RankSelect` (proposed 1.8.0). The Tier 1 `rank` here is
   single-word only.
 - **Priority queues over bit buckets.** lite-scheduler `FastBitScheduler`.
@@ -297,18 +304,18 @@ All four verified against the oracle (0 mismatches, both representations). With
 claim, though, is only true with
 `31 -`. ROADMAP SC-1 carries the decision.
 
-**S2a measured (2026-10-07):** for `lowest`/`highest`/`nextClearBit` the guard is a well-predicted branch and the
-branchless gap is ~0.01-0.08 ns -- uniformity, not speed. But `highestClearBit` is a special case the SC-1 experiment
-found by accident: its CURRENT body `const inv = ~this.value >>> 0; ... 31 - clz32(inv)`
-makes `inv` a **HeapNumber** for every word with bit 31 clear (`~value >= 2^31`), and `Math.clz32(thatDouble)` then runs
-a **data-dependent slow path of 19-53 ns**
-(empty-heavy/full-heavy/random corpora, both lanes; witness flatness ratio 57 HOT, 483 PRESSURE). The
-branchless `31 - Math.clz32(~v)` (no `>>> 0`) is **flat at
-~0 ns**. So `highestClearBit` is NOT constant time today -- the one hot op that is not -- and S3's branchless body both
-fixes it and removes the dead `>>> 0`
-coercion (FB-09). `nextClearBit` shares the `~v >>> 0` but survives because
-`inv & -inv` forces the double back to int32 before `clz32`. Numbers:
-`benchmark/experiments/sc1-scans.mjs`, witness finding in `benchmark/METHODOLOGY.md`.
+**S2a measured (reworked 2026-10-10, `npm run bench:sc1`):** for `lowest`/`highest`/`nextClearBit` the gaps are
+-0.064..+0.121 ns: HOT branchless faster in 7 of 9 cells (+0.031..+0.121 ns), PRESSURE 7 of 9 sub-noise -- uniformity,
+not speed. But `highestClearBit` is a special case the SC-1 experiment found by accident: its CURRENT body
+`const inv = ~this.value >>> 0; ... 31 - clz32(inv)` makes `inv` a **HeapNumber** for every word with bit 31 clear
+(`~value >= 2^31`), and `Math.clz32(thatDouble)` then runs a **data-dependent slow path: 26.9-29.8 ns HOT and
+46.5-64.4 ns PRESSURE** on the empty-heavy and random corpora (0.93 ns HOT full-heavy, where 90% of words take the
+`inv === 0` exit); the witness pins it red (spread 40-135 N HOT, 17.6-89 N PRESSURE). The branchless
+`31 - Math.clz32(~v)` (no `>>> 0`) reads **~0.01-0.05 ns HOT / ~0.19-0.37 ns PRESSURE** (sub-noise). So `highestClearBit` is NOT
+constant time today -- the one hot op that is not -- and S3's branchless body both fixes it and removes the dead
+`>>> 0` coercion (FB-09). `nextClearBit` shares the `~v >>> 0` but survives because `inv & -inv` forces the double
+back to int32 before `clz32`. Numbers: `benchmark/experiments/sc1-scans.mjs`, witness finding in
+`benchmark/METHODOLOGY.md`.
 
 ### FB-03 -- one representation
 
@@ -346,15 +353,14 @@ S6 records which of these the package adopts; this section only lays out the gro
 Four panels, one page, `demo/index.html`, every frame loop under the demo-audit law (no allocation, reads before
 writes, `#profile` layout profiler):
 
-1. **Bit board.** 32 cells; click to toggle. Live readouts: value as signed, unsigned, hex, binary; `count`, `lowest`
-   , `highest`, `nextClearBit`,
-   `highestClearBit`. Bit 31 cell styled as the sign bit with a note.
+1. **Bit board.** 32 cells; click to toggle. Live readouts: value as signed, unsigned, hex, binary; `count`, `lowest`, `highest`,
+   `nextClearBit`, `highestClearBit`. Bit 31 cell styled as the sign bit with a note.
 2. **SWAR popcount, staged.** The three reduction steps drawn as 16 2-bit lanes -> 8 4-bit lanes -> 4 bytes -> `imul`
    sum, for the current word.
 3. **Object pool.** 32 particle slots allocated with `nextClearBit`, freed on expiry; slot occupancy word drawn live; a
    counter showing 0 allocations per frame for the pool logic.
-4. **ECS signature matcher.** 32 components via `BitMapper`, three systems as masks, 64 entities highlighted by `hasAll`
-   . A system that requires component 31 is included on purpose: it is the FB-01 regression made visible.
+4. **ECS signature matcher.** 32 components via `BitMapper`, three systems as masks, 64 entities highlighted by `hasAll`.
+   A system that requires component 31 is included on purpose: it is the FB-01 regression made visible.
 
 Plus the browser-side Smi probe (FB-12): a hidden `#measure` mode that times the position sweep in Chrome and prints it,
 so the pointer-compression question gets an answer.
@@ -369,7 +375,270 @@ one breaking release, then demo and docs. ROADMAP section 4 is the ordered versi
 
 ---
 
-## 11. Further researched draft proposals:
+## 11. Draft proposals beyond one word: evaluation (2026-10-08)
+
+Three drafts were added to this file in 37dc47d: `FastBitArray` (flat multi-word bitset), `MultiBit32`
+(the same with exact capacity and index checks) and `SparseBit1024` (a two-level 32 x 32 bitmap). They are kept
+**verbatim in Appendix A** so the history stays readable; this section is the review. Every **(measured)** row below
+comes from `benchmark/experiments/s11-drafts.mjs`, which loads the drafts straight out of Appendix A.
+Host for this section: node v22.22.0 / V8 12.4, x64 Xeon @ 2.1 GHz cloud container. That is a **different host from
+the S2a numbers in section 2**, and the probe is ad hoc, not the S2a harness. Read the timings as ratios, not as
+absolute numbers.
+
+### 11.1 Verdict
+
+| Draft | What it is | In scope for fastbit32? | Correct in range? | Verdict |
+| --- | --- | --- | --- | --- |
+| `FastBitArray` | `Uint32Array` of words, unchecked indices, O(words) scans | **No**: section 4 boundary; lite-o1 `BitSet` (M14, 1.4.0, ADR 0019) owns multi-word | all ops agree with the oracle **except `contains`** (FB-01 class) | reject as a member; `contains` names a real gap in `BitSet` (11.4) |
+| `MultiBit32` | the same with exact capacity, `#check`, `lastMask` | **No**, same reason | `contains` broken (FB-01 class); `isFull` broken at capacity mod 32 in {0, 31}; `#check` fails open | reject; the padding question is already settled in `BitSet` (11.3 e) |
+| `SparseBit1024` | 1024 bits = 32 data words + one 32-bit routing word | **No** as a class (still multi-word), **yes** as an idea | `nextClearBit` wrong (returns the first EMPTY word, not the lowest clear bit) and loops; any bad index corrupts the routing word | **salvage the idea**: corrected in 11.5, routed in 11.4 |
+
+The research instinct is sound: all three drafts aim at the two operations that real consumers hit when 32 is not
+enough (ECS signature match = subset test, object pool = lowest clear slot). Neither operation exists in lite-o1
+`BitSet` today (its surface is test/set/unset/toggle/firstSet/nextSet + in-place and/or/xor/andNot). The drafts found
+real gaps, just in a sibling package. They also re-derive, without being told, two defects this file already
+documents (FB-01, FB-02). That is the most useful finding here: those defect classes come back by default (11.3).
+
+### 11.2 Measured defects
+
+All **(measured)** with the probe. "want" is the oracle (`Uint8Array` of booleans, linear scans, shares no trick).
+
+| # | Repro | got | want | Class |
+| --- | --- | --- | --- | --- |
+| D1 | `FastBitArray(64)`: `{31}.contains({31})` | `false` | `true` | FB-01: `(a & b) !== b` compares a signed int32 to a `Uint32Array` read (unsigned, `2147483648`) |
+| D2 | `FastBitArray(64)`: `{5,63}.contains({63})` | `false` | `true` | same; bit 31 of **any** word (bits 31, 63, 95, ...) |
+| D3 | `MultiBit32(64)`: D1 and D2 | `false` | `true` | same body, same bug |
+| D4 | `MultiBit32(n)` all bits set, `isFull()`, n = 31, 32, 63, 64 | `false` | `true` | `lastMask` is `0xFFFFFFFF` (n mod 32 = 0) or `(1 << 31) - 1 = -2147483649` (n mod 32 = 31); `(w & lastMask) === lastMask` never holds. n = 1, 33 pass |
+| D5 | `MultiBit32(0).isFull()` | `false` | `true` (vacuous) | reads `w[-1]` |
+| D6 | `MultiBit32(10).add(x)` for x = `undefined`, `null`, `NaN` | sets bit 0 | throws | FB-02: `bit < 0 \|\| bit >= n` is false for all three |
+| D7 | `MultiBit32(10).add(x)` for x = `1.5`, `'3'`, `true` | sets bits 1, 3, 1 | throws | a range check is not a type check |
+| D8 | `FastBitArray(10).add(12)` then `count()` / `forEach` | `1` / `[12]` | `0` / `[]` | a padding bit becomes a visible member |
+| D9 | `FastBitArray(10).add(undefined)` then `has(0)` | `true` | `false` | FB-02 |
+| D10 | `FastBitArray(10).add(-1)` | silently dropped (`-1 >>> 5` = 134217727, a typed array ignores the out-of-bounds store) | throws | fails open, no trace |
+| D11 | `SparseBit1024`: `{0}.nextClearBit()` | `32` | `1` | returns the first **empty** word, not the lowest **clear** bit |
+| D12 | `SparseBit1024`: `{0..39}.nextClearBit()` | `64` | `40` | same |
+| D13 | `SparseBit1024`: `{}.add(1024)` then `lowest()` | `63` | `-1` | `1 << 32` is `1 << 0`: routing bit 0 is set over an empty word, then `clz32(0) ^ 31 = 63` |
+| D14 | `SparseBit1024`: `{5}.remove(1029)` then `lowest()` | `-1` | `5` | the out-of-bounds read is `undefined & m = 0`, so routing bit 0 is cleared and bit 5 disappears from `lowest`/`forEach` while `has(5)` still says `true` |
+
+Differential fuzz (4000 seeded trials, in-range indices only, a quarter of them near-full): `FastBitArray` and
+`MultiBit32` agree with the oracle on `count/lowest/highest/nextClearBit/forEach`. `SparseBit1024.nextClearBit`
+disagrees on **117** trials (D11 shape). D4 is missed by the fuzz, which rarely builds a full set at n = 31/32/63/64.
+That is why the targeted rows exist next to the fuzz (the T1 "pin the degenerate values" rule).
+
+**Timing (measured, net of an empty-loop floor, own process per candidate, three runs):**
+`SparseBit1024.nextClearBit` takes **0.80-1.02 ns** when the free slot is in word 0 and **30.4-34.2 ns** when 31 full
+words come first. That is a 33-38x data-dependent spread on that x64 host. **Re-run 2026-10-10 on the maintainer's
+host (node v26.8.2, arm64 Apple Silicon): 0.50 ns vs 8.66 ns, about 17x; the 11.5 sketch 0.34 / 0.46 ns.** The ratio
+itself moves 2x between hosts, so the portable statement is "an order of magnitude, data-dependent" -- and the section 2
+witness exists to reject exactly that. The 11.5 sketch measures **0.6-0.8 ns in both shapes** on x64. A note on measurement: the first run of this probe timed both classes through one shared
+`timeIt(s)` function. The call site went polymorphic and the numbers came out inverted (the draft looked faster).
+That is the section 2 lesson repeated, and it is why the probe now forks one process per candidate.
+
+### 11.3 What the defects teach (the general laws)
+
+a. **The compare-to-zero law.** A bitwise result is a signed int32. A `Uint32Array` element, a `>>> 0` value, or a
+   literal like `0xFFFFFFFF` is an unsigned double. `===` between the two families fails whenever bit 31 is set. D1-D4
+   are three new copies of FB-01, in fresh code written after FB-01 was documented. So the law has to
+   be mechanical, not remembered: **compare a bitwise expression only to `0`** (or to another bitwise expression).
+   Subset is `(b & ~a) === 0`. Full is `~(w | padMask) === 0`. Equality is `(a ^ b) === 0`. A grep for `) === [a-z]`
+   / `) !== [a-z]` over bitwise lines catches the pattern. Candidate for the shared law in ROADMAP section 1 and
+   for T8 cross-package conformance.
+
+b. **A summary multiplies the cost of a bad index.** In one word, a bad index damages one bit, at worst a wrong bit
+   (`add(32)` sets bit 0; FB-02). Under a summary it damages **other answers**: D13 makes `lowest()` invent bit 63
+   in an empty set, and D14 makes `lowest()` and `forEach` lose a member that `has()` still reports. The summary and
+   the data disagree, and nothing ever repairs them. This is the structural reason lite-o1 `BitSet` makes every
+   mutator fail closed (ADR 0019 call 4), while fastbit32 can defensibly keep raw-index hot ops permissive (SC-3
+   option A/C). **"Trust the caller" does not scale past one word.** Input to SC-3: record it as the argument for
+   why the single-word answer does not transfer.
+
+c. **A range check is not a type check.** `bit < 0 || bit >= n` lets `undefined`, `null`, `NaN`, `1.5`, `'3'` and
+   `true` through (D6, D7), because every comparison with `NaN` is false and the others coerce. The one-test form
+   used by lite-o1 is `typeof i !== 'number' || (i >>> 0) !== i || i >= n`. `typeof` comes first so a Symbol/BigInt
+   never reaches `>>>`. The cold throw must build its message with `String(i)`, not a template literal, which throws
+   on a Symbol. Same law as FB-02 and S6.
+
+d. **A summary answers exactly one question.** An "is this word non-empty" summary answers lowest-**set** in O(1).
+   It says nothing about lowest-**clear**, because a non-empty word can still be full or have room. D11/D12 are the
+   draft treating "empty word" as "lowest free slot". The dual needs its own summary: lowest clear of `x` is lowest
+   set of `~x`, and "word `~x` is non-empty" means "word `x` is not full". So a pool index keeps **two** routing words
+   (11.5). This is also why the draft's fallback had to loop.
+
+e. **Padding: enforce it on write, do not mask it on read.** `MultiBit32` masks the last word on every read
+   (`lastMask` in `highest`, `nextClearBit`, `forEach`, `isFull`), so every hot read pays for the padding question and
+   one read (`count`) forgot to mask. lite-o1 `BitSet` instead keeps the invariant "padding bits are always 0":
+   mutators reject `i >= nbits`, and `setAll` writes `0xFFFFFFFF >>> (32 - rem)` (rem in 1..31, never a 32-shift).
+   The invariant costs nothing on reads. `(1 << rem) - 1` is the wrong spelling at rem = 31 (D4).
+
+f. **Doc truth applies to drafts too** (FB-08). "Loop-free Hamming Weight" (a loop over words), "Instantly" and
+   "O(1)" on O(words) scans, "No loops. Just two SWAR operations" (two `clz32` scans; SWAR means the parallel-lane
+   popcount, not bit scans), "Safe by default" (D6), "Sparse" (storage is dense: 128 B of data always; the *index*
+   is what skips empty words, and in the literature "sparse bitmap" means Roaring-style compressed containers). The
+   section 2 witness would have caught the "O(1)" `nextClearBit` (17x arm64 / 33-38x x64 spread, 11.2).
+
+g. **Smaller notes.** `bytes()`/`serialize()` expose host byte order through a `Uint8Array` view of a `Uint32Array`.
+   Every mainstream host is little-endian, but a save format should state it, or use `DataView` with an explicit
+   endianness on the cold path. `~data[i] >>> 0` in both drafts' `nextClearBit` is the dead coercion FB-09 removes.
+   `physicalCapacity` is unused. `Uint32Array` vs `Int32Array` storage made **no measurable difference** to popcount
+   or the corrected subset loop on words with bit 31 set (measured, within noise, this host). The choice of
+   `Int32Array` in 11.5 is about compare semantics (law a), not speed.
+
+### 11.4 Where the findings are useful (routing)
+
+| Finding | Home | Shape | Status |
+| --- | --- | --- | --- |
+| Lowest **clear** bit at N > 32 (pool allocation) | lite-o1 `BitSet` | `firstClear()` / `nextClear(from)` over a second "non-full" summary of the same geometry as the existing one. Level 1: bit j set iff `(_w[j] \| padMask_j) !== -1`, where padMask covers bits >= nbits in the last word, so padding counts as occupied. Levels 2-3 are non-empty summaries of level 1, so the existing `_firstWordFrom` descent is reused unchanged. Cost: every mutator also tracks the full<->non-full transition (one more compare in the common case, propagation only on a flip), plus ~n/1024 words. Measure it with BitSet's existing witness. | **handoff proposal**, goes through lite-o1's own pipeline (ADR before code). Not fastbit32 work |
+| Subset / intersects at N > 32 (ECS signatures past 32 components) | lite-o1 `BitSet` | non-mutating `isSubsetOf(other)` = every word `(a & ~b) === 0`, and `intersects(other)` = some word `(a & b) !== 0` (law a). O(words) disclosed, like and/or. Option: walk only the words that `other`'s summary marks non-empty (the `hibitset` join idea), so a sparse signature costs O(its non-empty words) | **handoff proposal**, same pipeline |
+| Two-level index over 32 words | fastbit32 **demo / learning notes**, not code, not the README | a recipe: "1024 slots = 32 words + an `active` word + a `full` word", built from the single-word idioms fastbit32 already ships (`lowest`, `nextClearBit`, `31 - clz32(x & -x)`). It teaches the composition without crossing the boundary. With the Tier-3 word kernel (section 4) the recipe gets shorter. Not the README: a README recipe is code users copy, and 11.3 b says this shape must fail closed if it ships, which makes the recipe longer than its point | S7 demo stretch (the pool panel at 1024 slots) |
+| The compare-to-zero law (11.3 a) | ROADMAP section 1 shared law + T8 | one rule and one grep; D1-D4 become T8 cross-package rows ("`Uint32Array`-backed subset with bit 31 per word") | **adopt** |
+| "Trust the caller does not scale past one word" (11.3 b) | ROADMAP SC-3 | add as a recorded argument; it supports option C (cold entries fail closed, hot raw ops permissive) for the single word and explains why lite-o1 differs | **adopt** |
+| More than 32 components (open question 3, SC-4) | still open | the drafts are the array-backed answer, and that answer already exists (lite-o1 `BitSet`). They do not settle `FastBit64` (two int32 fields, no array, `hasAll` = two ANDs and no loop), which is the only shape that keeps 33-64 components at single-word cost. **(to measure, if SC-4 is ever scheduled):** `FastBit64.hasAll` vs `BitSet.isSubsetOf` at 64 bits | open |
+
+### 11.5 The salvaged structure, corrected (reference sketch, not a proposed export)
+
+The idea in `SparseBit1024` that holds up: 1024 = 32 x 32, so **two** `clz32` scans locate any bit with no loop.
+The draft breaks it in two places: it keeps only an `active` summary (11.3 d), and it takes unchecked indices into a
+summarized structure (11.3 b). The fixed shape keeps two routing words and updates both on every write. It also
+drops the draft's `if (chunk === 0)` branch in `remove`; that branch was harmless, but losing it keeps the mutators
+straight-line, like FastBit32's own:
+
+```js
+const nz = (x) => (x | -x) >>> 31;  // 1 iff x !== 0, for EVERY int32 x. At x = -2^31, JS -x does NOT wrap: it is the
+                                    // double 2^31, and `|` truncates it back to -2^31 (ToInt32), so bit 31 is still 1
+
+class Occupancy1024 {               // 0 <= bit < 1024, caller-guaranteed (see 11.3 b before shipping this anywhere)
+    constructor() { this.active = 0; this.full = 0; this.data = new Int32Array(32); }
+    add(bit) {
+        const w = bit >>> 5, d = this.data[w] | (1 << (bit & 31));
+        this.data[w] = d;
+        this.active |= 1 << w;                      // a word with a set bit is non-empty: unconditional
+        this.full |= (nz(~d) ^ 1) << w;             // full iff ~d === 0
+        return this;
+    }
+    remove(bit) {
+        const w = bit >>> 5, d = this.data[w] & ~(1 << (bit & 31));
+        this.data[w] = d;
+        this.full &= ~(1 << w);                     // a word with a clear bit is not full: unconditional
+        this.active &= ~((nz(d) ^ 1) << w);         // empty iff d === 0
+        return this;
+    }
+    lowest() {                                      // lowest set bit, or -1
+        const a = this.active; if (a === 0) return -1;
+        const w = 31 - Math.clz32(a & -a), d = this.data[w];
+        return (w << 5) + (31 - Math.clz32(d & -d));
+    }
+    nextClearBit() {                                // lowest clear bit, or -1
+        const f = ~this.full; if (f === 0) return -1;
+        const w = 31 - Math.clz32(f & -f), c = ~this.data[w];
+        return (w << 5) + (31 - Math.clz32(c & -c));
+    }
+}
+```
+
+**(measured)** 0 `lowest`/`nextClearBit` mismatches against the oracle (the 1/3 of fuzz trials at capacity 1024,
+including the near-full pool phases) plus the pinned extremes (all set, then free 1023, then free 31, then all
+clear). `nextClearBit` costs 0.6-0.8 ns net in both the "free slot in word 0" and the "free slot in word 31" shapes,
+flat where the draft spreads 17-38x by host. It is "allocate the lowest free slot", the policy
+that keeps occupancy dense at the bottom. That matters beyond tidiness: the draft's "first empty word" policy hands
+out slots 0, 32, 64, ..., so all 32 words become active almost at once, and the summary-guided `forEach` no longer
+skips anything.
+
+**Prior art** (the drafts reinvent a well-known structure, a good sign for the instinct):
+two-level bitmaps for O(1) "first non-empty class" are the core of **TLSF** (Masmano, Ripoll, Crespo, Real, *TLSF:
+a New Dynamic Memory Allocator for Real-Time Systems*, ECRTS 2004) and of the Linux 2.6 **O(1) scheduler**'s
+140-priority bitmap (`sched_find_first_bit`). The multi-level, fan-out-word version is a **hierarchical bitset**:
+lite-o1 `BitSet` here (3 levels, fan-out 32), and the Rust `hibitset` crate that backs the `specs` ECS's component
+joins (the "walk only non-empty words" idea in 11.4). The recursive limit of the same split is the **van Emde Boas**
+layout. Truly sparse sets are **Roaring** bitmaps (Chambi, Lemire, Kaser, Godin 2016), which is where the word
+"sparse" belongs.
+
+### 11.6 Not next
+
+- **Superseded in part 2026-10-10 by SC-5:** a FIXED 32 x 32 class (`FastBit1024`, section 13) does enter. No
+  arbitrary-capacity multi-word class enters fastbit32. The section 4 boundary and ADR 0019 (lite-o1) both say so, and the drafts
+  add nothing BitSet lacks except the two handoff ops in 11.4, which belong in BitSet.
+- The handoffs are proposals to lite-o1's roster, not edits to it. Each needs its ADR (geometry, cost, witness
+  foil) before code, the M14 way.
+- The 11.5 sketch is a teaching reference and a recipe seed. If anything like it ships, it ships fail-closed
+  (11.3 b), in whichever package owns it.
+
+---
+
+## 12. Open questions
+
+1. **Representation in the browser.** Does a field holding bit-30/31 values cost anything per write in
+   pointer-compressed V8 (Chrome, Deno, Electron)? Node cannot answer this; the demo's `#measure` mode can.
+2. **Is `forEach` worth keeping on the hot path** once `nextSetBit` exists, or should the docs demote it to "warm, hoist
+   your callback"?
+3. **`FastBit64`.** Same package (two fields, same idioms, still one object) or out of scope in favour of
+   lite-o1 `BitSet`? The answer decides whether ECS users with 33+ components have a zero-alloc path that is not
+   array-backed. Section 11.4: the array-backed path exists (BitSet) but lacks a subset test; `FastBit64` is still
+   the only loop-free 33-64 option.
+4. **lite-ecs migration.** FB-01 is fixed in fastbit32 by S1, but lite-ecs pins
+   `^1.0.0`; any lite-ecs user on a lockfile keeps the bug until they update. Does lite-ecs get a floor bump to `^1.2.1`
+   in its own session?
+5. **`countRange` contract.** Validate (it is called on hot paths by some users)
+   or keep "caller must guarantee" and pin the garbage? Decided in S6.
+6. **The compare-to-zero law (11.3 a).** **Adopted into ROADMAP section 1 (2026-10-10); T8 rows land with the next
+   torture-touching session.** Promote it to the ROADMAP section 1 shared law and add the D1-D4 rows to T8?
+   It is the one rule that would have prevented FB-01 and all three of its re-occurrences in section 11.
+7. **SC-3 input (11.3 b).** **Recorded in ROADMAP SC-3 (2026-10-10).** Record "a summary multiplies the cost of a bad index" in SC-3 as the reason the
+   single-word answer (permissive hot ops) does not generalize, so a future multi-word helper is not built on it.
+8. **lite-o1 handoff (11.4).** Do `BitSet.firstClear/nextClear` (non-full summary) and
+   `BitSet.isSubsetOf/intersects` enter the lite-o1 roster? Decided there, in its own ADR, not here.
+9. **llms.txt boundary pointer.** `llms.txt` line 11 sends ">32 flags" users to `@zakkster/lite-bits`. The suite's
+   multi-word bitset documented everywhere else (this file, ADR 0019) is lite-o1 `BitSet`. Verify that `lite-bits`
+   exists; if not, this is FB-13-class doc drift, to fix in S8. **Checked 2026-10-10: no `lite-bits` package in the
+   suite** -- it is drift; S8 repoints the line to lite-o1 `BitSet`.
+
+---
+
+## 13. FastBit1024: the 32 x 32 class (SC-5 SETTLED: A, 2026-10-10)
+
+The maintainer chose to ship the section 11 idea here, as a fixed-geometry export. Draft:
+`benchmark/experiments/fb1024-draft.mjs`; checker: `benchmark/experiments/fb1024-check.mjs` (research only).
+
+**Shape.** `data: Int32Array(32)` plus three scalars: `active` (bit w iff `data[w] !== 0`), `full` (bit w iff
+`data[w] === -1`) and `n` (exact count). Every mutator keeps all of them up to date, so no reader repairs anything.
+Two summaries, because one summary answers one question (11.3 d): `active` routes lowest/highest/cursor/forEach,
+`full` routes nextClearBit/acquire.
+
+**Capacity 1..1024 without read-side masking.** Bits at or above capacity are never stored (mutators reject them),
+so `nextClearBit` needs only `s < cap ? s : -1`: the lowest clear bit at or above capacity means there is none
+below it (11.3 e: enforce padding on write, not on read).
+
+**Fail closed (11.3 b, 11.3 c).** One check per call: `(i & 1023) !== i || i >= cap`. It rejects `undefined`, `null`,
+`NaN`, `1.5`, `'3'`, `true`, `-1`, `1024` and `2^32`; a Symbol or BigInt throws on `&` itself. `-0` passes as slot 0.
+`release(slot)` also throws when the slot is not held (double release). A rejected call leaves the state unchanged.
+
+**Branch-free summary updates.** Full-word test without a branch: `nz(d + 1) ^ 1` where `nz(x) = (x | -x) >>> 31`
+(at d = 2^31 - 1, d + 1 is the double 2^31 and `|` truncates it to -2^31, so nz is still 1). Count update:
+`n += ((old >>> b) & 1) ^ 1` on add, `n -= (old >>> b) & 1` on remove.
+
+**Cursor at the end.** `nextSetBit(from)` accepts from = capacity. For words above w it uses
+`active & (-2 << w) & ((w - 32) >> 31)`: `-2 << 31` is 0, and the last term zeroes the mask at w = 32
+(from = 1024), where `-2 << 32` would wrap to `-2 << 0`.
+
+**(measured, 2026-10-10, node v26.8.2, arm64)** 3000 trials over capacities {1, 2, 31, 32, 33, 63, 64, 65, 500,
+991, 992, 993, 1023, 1024} plus random ones, near-full phases included: ~290k checkpoints x 10 ops against a
+`Uint8Array` oracle, invariants I1-I4 at every checkpoint, the fill-1024/free-{1023,31,0} extremes, the bad-input
+matrix on every mutator: **0 failures**. Timing, net of an empty-loop floor, own process per (op, shape), three
+runs: `nextClearBit` 0.47-0.52 ns with the free slot in word 0 and 0.48-0.52 ns behind 31 full words (flat);
+`acquire` + `release` pair 5.19-5.33 ns in both shapes (flat, but slower than it should be; S4b profiles it
+against lite-object-pool's free stack).
+
+**Open for S4b:** why the acquire/release pair costs ~5 ns; whether `has` should stay fail-closed on the hot read
+path (it cannot corrupt state, but `has(undefined)` answering for slot 0 is FB-02 again); hasAll/hasAny across
+different capacities (the draft does not check; words above capacity are always 0, so the answer is still exact).
+
+---
+
+## Appendix A -- the section 11 drafts as submitted (verbatim, 37dc47d)
+
+Kept unedited so section 11 can cite it and `benchmark/experiments/s11-drafts.mjs` can load it. The probe pins the block's
+sha256 and refuses to run if it changes, so do not reflow or reformat this block. **Do not copy from
+here**: section 11.2 lists the defects. The box-drawing comment rules are the file's only non-ASCII bytes. RESEARCH.md
+is not in the shipped files list and the hygiene test does not scan it, but strip them if this code ever moves.
 
 ```js
 /**
@@ -1072,20 +1341,3 @@ export class SparseBit1024 {
 }
 
 ```
-
----
-
-## 11. Open questions
-
-1. **Representation in the browser.** Does a field holding bit-30/31 values cost anything per write in
-   pointer-compressed V8 (Chrome, Deno, Electron)? Node cannot answer this; the demo's `#measure` mode can.
-2. **Is `forEach` worth keeping on the hot path** once `nextSetBit` exists, or should the docs demote it to "warm, hoist
-   your callback"?
-3. **`FastBit64`.** Same package (two fields, same idioms, still one object) or out of scope in favour of
-   lite-o1 `BitSet`? The answer decides whether ECS users with 33+ components have a zero-alloc path that is not
-   array-backed.
-4. **lite-ecs migration.** FB-01 is fixed in fastbit32 by S1, but lite-ecs pins
-   `^1.0.0`; any lite-ecs user on a lockfile keeps the bug until they update. Does lite-ecs get a floor bump to `^1.2.1`
-   in its own session?
-5. **`countRange` contract.** Validate (it is called on hot paths by some users)
-   or keep "caller must guarantee" and pin the garbage? Decided in S6.

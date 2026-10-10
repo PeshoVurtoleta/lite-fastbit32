@@ -18,9 +18,10 @@ reading. The exception is FB-12, which is marked unmeasured.
 | --- | --- | --- | --- | --- |
 | **S0** | node:test port + torture T0-T9 + perf-gate + hygiene | (folds into 1.2.1) | harness, no behaviour change | DONE 2026-10-06 (uncommitted) |
 | **S1** | **URGENT** `hasAll` sign-bit fix (FB-01) + sign-bit doc truth | 1.2.1 | bug fix | DONE 2026-10-06 (reviewer APPROVED, qa PASS; uncommitted, awaiting /release 1.2.1) |
-| **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | planned |
+| **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | **S2a DONE 2026-10-10** (reviewer APPROVED round 4, qa PASS; uncommitted). S2b (competitor matrix) planned, needed before S8 |
 | **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.2.2 | internal, output-identical | planned |
 | **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | planned |
+| **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | next minor after S4 | additive, new export | planned |
 | **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.4.0 | additive, gated | planned |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
@@ -76,6 +77,15 @@ method ships typed-but-untortured.
    gate.
 7. **Measure before deciding.** No idiom, branch-removal or representation call
    is made before S2's numbers exist (SC-1, SC-2).
+8. **Compare a bitwise expression only to `0`** (or to another bitwise
+   expression), never to a mask, a `Uint32Array` read, a `>>> 0` value or a
+   literal like `0xFFFFFFFF`. Subset is `(b & ~a) === 0`, full is `~v === 0`,
+   equality is `(a ^ b) === 0`. FB-01 came back three times in fresh code
+   (RESEARCH 11.2 D1-D4), so this is a grep, not a memory: any bitwise line
+   matching `) === [a-zA-Z0-9]` or `) !== [a-zA-Z0-9]` needs a justification in
+   review. Adopted 2026-10-10 (RESEARCH 11.3 a, open question 6); T8 gains
+   "`Uint32Array`-backed subset with bit 31 per word" rows in the next
+   torture-touching session.
 
 ---
 
@@ -146,7 +156,13 @@ A call marked **SETTLED** here is binding on every agent (suite CLAUDE.md).
 Until then it is **OPEN**, and the session named in its row decides it,
 records the ADR, and flips the status.
 
-### SC-1 -- the clz32 idiom (OPEN, decided in S3, measured in S2)
+### SC-1 -- the clz32 idiom (SETTLED 2026-10-10: B, maintainer)
+
+**SETTLED: B** -- `31 - Math.clz32(...)` everywhere, branchless scans. Basis: S2a
+measured highestClearBit at 27-64 ns today vs ~0.3 ns branchless (the one hot op
+that is not constant time); for the other three scans the gap is sub-noise, so B
+is chosen for uniformity and the free -1 sentinel, not speed. Binding on S3+.
+
 
 The maintainer asked for consistency and named `Math.clz32(v) ^ 31` as the
 example. The audit found one fact that bears on the choice, and it goes on the
@@ -176,6 +192,19 @@ or -1"), it removes four branches, and the suite already uses it
 removing the branches, B still beats A on uniformity with the rest of the suite.
 **The maintainer decides. If A is chosen, S3 implements A.**
 
+**S2a results (reworked 2026-10-10, node v26.8.2, Apple M4 Pro; `npm run bench:sc1`,
+witness finding in `benchmark/METHODOLOGY.md`).** Self-check: guarded === branchless
+on 5006 words incl 0, -1, 2^31 (0 mismatches). For `lowest`/`highest`/
+`nextClearBit` the gaps are -0.064..+0.121 ns: HOT branchless faster in 7 of 9
+cells (+0.031..+0.121 ns), PRESSURE 7 of 9 sub-noise (one +0.058, one -0.064) --
+uniformity, not speed. **But `highestClearBit` is not constant time today:** its
+`~this.value >>> 0` makes a HeapNumber and `31 - clz32(thatDouble)` costs **26.9-29.8
+ns HOT / 46.5-64.4 ns PRESSURE** (empty-heavy, random; 0.93 ns HOT full-heavy) **vs
+~0.01-0.05 / ~0.19-0.37 ns branchless (sub-noise)**. The witness pins it EXPECTED-RED
+(`FB-09/S3`: spread 40-135 x noise HOT, 17.6-89 x PRESSURE; a flat reading FAILS
+the run -- S3 flips the pin). B both unifies the idiom AND removes this slow path +
+the dead `>>> 0` (FB-09). The SC-1 evidence for B is decisive, not marginal.
+
 ### SC-2 -- the storage representation (OPEN, decided in S6)
 
 - **A. Status quo, pinned.** Two forms coexist and `serialize` is unstable.
@@ -189,6 +218,21 @@ removing the branches, B still beats A on uniformity with the rest of the suite.
 
 Recommendation: **B in 2.0.0.** It changes `new FastBit32(0x80000000).value` from
 `2147483648` to `-2147483648`, which is observable, so it is a major.
+
+**S2a results (reworked 2026-10-10, node v26.8.2, both semi-space pins = 4;
+`npm run bench:sc2`).** The 2026-10-07 block ("0 scavenges for BOTH, no per-op
+allocation tax") is WITHDRAWN: it ran both instances in one process (the map's
+field generalized to a double, so it compared one representation with itself), its
+mix inlined, and it counted window 0 only. Reworked: one process per
+representation, ASSERTED with `%DebugPrint` (signed = bare Smi, unsigned =
+`<HeapNumber>`); a boxing control that must scale N -> 8N (7 -> 61, both processes).
+Scavenges at N = 2e6 / 8N, steady over windows 1..3: **`serialize()` through a
+call site shared by >= 5 classes: signed 0 / 0, unsigned 7 / 61** (one box per call,
+~16 B INFERRED from matching the HeapNumber control, not measured); inlined mix 0 / 0 for both (escape analysis); shared `count()` 0 / 0 for
+both. So the unsigned form DOES carry a Node per-op tax, at the double-returning
+edge only. Option B removes it as well as fixing serialize stability / equality /
+hashing (FB-03). The browser pointer-compression half stays open for the demo's
+`#measure` mode (S7).
 
 ### SC-3 -- the input law for raw bit indices (OPEN, decided in S6)
 
@@ -204,10 +248,45 @@ Recommendation: **B in 2.0.0.** It changes `new FastBit32(0x80000000).value` fro
 
 Recommendation: **C.** It honours both laws without trading one for the other.
 
+Recorded argument (2026-10-10, RESEARCH 11.3 b): **"trust the caller" does not
+scale past one word.** In one word a bad index damages one bit (FB-02). Under a
+summary word it damages OTHER answers -- RESEARCH 11.2 D13 (`lowest()` invents a
+bit in an empty set) and D14 (`lowest`/`forEach` lose a member `has()` still
+reports). So C's permissive hot ops are defensible here and only here; any future
+multi-word or summarized helper fails closed on every mutator (lite-o1 `BitSet`,
+ADR 0019 call 4), and must not cite this SC as precedent.
+
 ### SC-4 -- `FastBit64` (OPEN, not scheduled)
 
 This is a boundary question with lite-o1 `BitSet` (RESEARCH open question 3). No
 session touches it until it is settled.
+
+### SC-5 -- `FastBit1024` in this package (SETTLED 2026-10-10, maintainer)
+
+- **A. Export `FastBit1024` from `FastBit32.js`.** (chosen)
+- B. Hand the idea to lite-o1 `BitSet` as `firstClear` / `nextClear` only.
+- C. A lowest-slot policy in lite-object-pool.
+
+**SETTLED: A.** Reasons: the section 4 boundary excludes multi-word bitsets of
+*arbitrary capacity*; a fixed 32 x 32 geometry is not that. It is built only
+from this package's word idioms, every op stays loop-free, and the section 2
+witness applies unchanged (draft measured flat: `nextClearBit` ~0.5 ns with the
+free slot in word 0 or behind 31 full words, vs 0.50 / 8.66 ns for the
+SparseBit1024 draft; RESEARCH 11.2, 13). Binding consequences:
+1. **`FastBit1024` fails closed on every index from day one** (RESEARCH 11.3 b,
+   SC-3 recorded argument): one `(i & 1023) !== i || i >= cap` check per call,
+   cold `RangeError`, `release` of a free slot throws. The two classes in one
+   package therefore have DIFFERENT input laws until S6; the README says so in
+   one sentence and links SC-3/SC-5.
+2. `Int32Array` storage; every bitwise compare is to `0` (law 8).
+3. Four invariants kept by every mutator (active, full, exact count, nothing
+   stored at or above capacity); torture T0 checks all four after every op.
+4. Not a general bitset: no resize, no capacity above 1024, no `and/or/xor`
+   with arbitrary sizes. Anything bigger is lite-o1 `BitSet`.
+5. SC-4 (`FastBit64`) stays OPEN and separate: for 33-64 component
+   signatures, two plain fields still beat any array-backed class.
+Draft + oracle checker: `benchmark/experiments/fb1024-draft.mjs`,
+`fb1024-check.mjs` (RESEARCH section 13).
 
 ---
 
@@ -699,6 +778,118 @@ DONE WHEN
   the stated tolerance
 ```
 
+### S2 execution plan (pre-staged 2026-10-06 after 1.2.1 -- go straight to coder)
+
+S2 is the largest session left and is measurement-only, so it is SPLIT to fit
+a token budget. Each half is independently shippable (neither touches
+FastBit32.js; neither releases). Run S2a first: S3 and S6 need only its numbers.
+
+```
+S2a -- the witness + the SC-1/SC-2 experiments (the decision inputs)
+  1. test/witness/run-one.mjs: ONE subject x ONE op x ONE lane per process,
+     argv-driven, a monomorphic call site, best-of-5 minus an empty-loop floor
+     (shape proven by the RESEARCH section 2 probe). Prints one JSON line.
+     Both semi-space pins + --expose-gc NOT required (timing, not GC).
+  2. test/witness.mjs: the driver. Spawns run-one per cell, collects JSON:
+       density sweep 0..32 and position sweep 0..31 + {0, -1} for every
+       constant-time op (count, countMasked, countRange, lowest, highest,
+       nextClearBit, highestClearBit, has, hasAll, hasAny, hasNone, isEmpty,
+       isFull); iteration slope k = 0..32 for forEach + the 7 free iterators;
+       lanes HOT and PRESSURE (32 MB stream, 4099-word stride).
+     Gates are NOISE-RELATIVE (superseded 2026-10-10 by the S2a rework: units of the run's own measured NOISE, see benchmark/METHODOLOGY.md; never a frozen absolute-ns constant):
+       flatness = max/min ns-per-op across the sweep, per op, per lane;
+       slope fit for O(k) ops (R^2 floor + intercept bound).
+     CALIBRATE, then FREEZE (lite-logn D-02 pattern): the first full run
+     measures; the floors are frozen as constants at calibration + a stated
+     margin, with the calibration numbers pasted in a comment. Record them in
+     benchmark/METHODOLOGY.md (no ADR -- decisions/0001 stays reserved for
+     SC-1 in S3).
+     Teeth: the five foils (Kernighan, 16-bit LUT [must fail PRESSURE],
+     early-exit loop, naive lowest scan, Set<number>) MUST fail flatness;
+     a foil that passes fails the run.
+     Self-checks: a repeated cell agrees within tolerance; the floor is
+     subtracted; a cell reading <= 0 after floor subtraction is flagged, not
+     silently clamped (a dead-code-eliminated loop reads ~0 -- sink the result
+     into an Int32Array slot).
+     Runtime budget: <= 90 s on the maintainer's machine; if over, add
+     `witness:fast` (one lane, coarser sweep) and keep the full run out of
+     verify. Script: "witness": "node test/witness.mjs".
+  3. SC-1 experiment (benchmark/experiments/sc1-scans.mjs, scratch copy of
+     the scans, NOT a lib edit): guarded `clz32 ^ 31` scans vs branchless
+     `31 - clz32` scans (RESEARCH section 7 bodies) on empty-heavy (90% zero
+     words), full-heavy (90% -1) and random corpora, both lanes. Output: ns/op
+     per variant + the gap. This is the number S3's SC-1 vote needs.
+  4. SC-2 experiment (benchmark/experiments/sc2-repr.mjs): the same op mix on
+     an add()-built (signed) instance vs a constructor-built (unsigned double,
+     new FastBit32(0x80000000 | x)) instance, including highestClearBit and
+     serialize(); ns/op + scavenges at N and 8N (pinned semi-space). Confirms
+     or refutes "unsigned storage costs time/alloc" for S6's SC-2 vote.
+  5. Record S2a results: RESEARCH section 2 popcount table replaced by
+     harness numbers (keep the probe numbers as "superseded"); a short
+     "S2a results" block appended to the SC-1 and SC-2 rows in section 3.
+  DONE WHEN: witness green with all five foils red in the right lane; SC-1
+  and SC-2 numbers recorded; npm run verify still exit 0.
+
+  S2a progress (2026-10-07): step 1 done -- test/witness/run-one.mjs.
+  S2a progress: step 2 done -- test/witness.mjs (full ~75s green; witness:fast
+    ~5s in verify; superseded by the 2026-10-10 rework below), floors frozen + benchmark/METHODOLOGY.md written; scripts
+    witness/witness:fast added.
+  S2a progress: step 3 done -- benchmark/experiments/sc1-scans.mjs (+ bench:sc1).
+  S2a progress: step 4 done -- benchmark/experiments/sc2-repr.mjs (+ bench:sc2).
+  S2a progress: step 5 done -- RESEARCH section 2 popcount table replaced
+    (old marked superseded) + section 7 highestClearBit finding; SC-1/SC-2
+    "S2a results" blocks appended to section 3. S2a COMPLETE.
+  Key finding for S3: highestClearBit is NOT constant time today (the ~v >>> 0
+    HeapNumber slow path, 26.9-29.8 ns HOT / 46.5-64.4 ns PRESSURE) -- witness
+    pins it EXPECTED-RED FB-09/S3; S3's branchless body fixes it and S3 flips
+    the pin. All 12 other hot ops flat in both lanes, both sweeps.
+  S2a REWORK (2026-10-10, after reviewer REJECT): witness gates are now
+    noise-relative (no absolute-ns constant), ratio + unclamped spread, d0/d32
+    and the position sweep gated in PRESSURE, highestClearBit expected-red
+    (flat = FAIL), slope gate two-sided with curvature + O(k^2)/32-step foils,
+    sub-EPS foil, broken-floor and self-check controls; run-one fixes (int32
+    persistent stream index, branch-free boolean consumption, Math.imul fill,
+    process.execPath); floors re-frozen (METHODOLOGY). Full witness 81-88 s,
+    witness:fast 9.9 s in verify. SC-1 re-run; SC-2 rebuilt (one process per
+    representation, asserted) -- its "no per-op tax" claim withdrawn.
+  S2a REWORK round 2 (2026-10-10, after second REJECT): PRESSURE 5 passes
+    (best-of-3) and re-frozen from 8 quiet full runs (SPREAD_K 4.5 vs worst
+    real 3.50 N; FOIL_SPREAD_K 5.5 vs LUT16 >= 8.82 N; EPS_K 7; no PRESSURE
+    ratio gate); NOISE_FLOOR_MAX PRESSURE 0.08 (host-load verdict: the full
+    witness needs a quiet host); slope gate gains a residual check + per-op R^2
+    floors + foilIterStep (it caught the residual check missing from the
+    verdict); SC-2 doc: inlined ns/op gap unexplained, 16 B/box inferred.
+  S2a REWORK round 3 (2026-10-10): NOISE_FLOOR_MAX HOT 0.27 (fires before
+    foilSubEps can flip at ~0.33) + HOST relabelling of a failed lane's gate
+    lines; slope curvature sign-aware [-0.60, 0.60]; forEachMapped gated on
+    phase k = 0 mod 4, forEachArray residual vs quadratic fit -- common R^2
+    0.90 / RESID_K 3.5; step resolution 6-16 callbacks for every iterator
+    (synthetic series, METHODOLOGY); foil verdict spread-only.
+
+S2b -- the competitor matrix + report (only needed before S8's README)
+  1. devDeps (benchmark only): fastbitset, typedfastbitset, bitset -- pin
+     exact versions; verify each one's current API before writing adapters.
+  2. benchmark/Harness.mjs + Matrix.mjs + Report.mjs + results.json, modeled
+     on ../LiteLogN/benchmark (results.json keys: meta, subjects, dimensions,
+     results); every row a ratio to raw bitwise; meta stamps process.version,
+     V8 version, seed, lane, machine model (os.cpus()[0].model).
+  3. benchmark/METHODOLOGY.md first line: "multi-word libraries are compared
+     on their 32-bit subset only". Verdict per README comparison-table row:
+     reproduced / struck (with the measurement or API fact).
+  4. Report.mjs refuses to build without a version stamp; a second run
+     reproduces every ratio within the stated tolerance.
+  DONE WHEN: results.json reproducible; every README comparison row has a
+  verdict.
+
+Design calls the coder must NOT make silently (report them in the handback):
+  - the frozen flatness floors and margins (values + calibration run);
+  - whether witness runs inside `npm run verify` (only if <= 90 s);
+  - any op found NOT flat in the PRESSURE lane (that is a finding for
+    RESEARCH, not a floor to widen).
+Pipeline: coder -> reviewer -> qa per half. Reviewer focus: one process per
+subject (no shared call site), floor subtraction, dead-code elimination
+guarded, foils fail in the claimed lane, floors frozen from a recorded run.
+
 ===============================================================================
 # S3 -- 1.2.2 -- the word-math law (SC-1, FB-09)
 ===============================================================================
@@ -746,9 +937,32 @@ ASSERTIONS
   - `grep -c '\^ 31' FastBit32.js` -> 0 (if B) or `grep -c '31 - Math.clz32'` -> 0 (if A)
   - parity green; the T9 "guard removed under ^ 31" control still fails
   - witness: scans flat; perf gate 0 B/op
+  - FLIP the highestClearBit expected-red pin (witness.mjs gateRed) to a
+    normal flat row in the same diff as the new body; the pin failing on the
+    new body is the revert-check evidence
+
+WITNESS BACKLOG (S2a reviewer round-4 / qa notes, 2026-10-10). NOT part of S3
+and NOT blocking any release: the maintainer moved to a lighter process
+(2026-10-10) -- witness polish is done only when a session needs it.
+  - forEachMapped k = 2 mod 4 cells are printed, not gated: a +40 ns
+    regression confined to that phase passes. Add a loose pin (inside the
+    documented bimodal band, or within a stated multiple of slope of the
+    phase-0 fit) with a must-fail synthetic series.
+  - Load advisory (witness.mjs ~:411) says "expect HOST" above load 2; data
+    says HOT noise/floor 0.135-0.158 at load 2-3.7, 0.336 only at 6-11.7.
+    Move the advisory threshold to ~5.
+  - HOST verdict gets its own exit code (2) + "re-run on a quiet host"
+    message; optionally one automatic witness:fast retry before failing.
+    Never an env var that skips it in prepublishOnly.
+  - gateFlat on an EMPTY row passes as flat (metrics([]) -> ratio NaN,
+    spread -Infinity, both read in-bounds). Unreachable today (sweeps are
+    constants); pinned as a `todo` in test/Witness.test.mjs. Fix: an empty
+    or short row fails closed; flip the todo.
+  - (RESOLVED by S2a qa: full witness green on a quiet host, load 1.98,
+    85.8 s, PRESSURE noise/floor 0.048, LUT16 11.30 N, SEP 8.39 N.)
 
 DONE WHEN
-  SC-1 SETTLED; one idiom in the file; parity proven
+  SC-1 SETTLED; one idiom in the file; parity proven; highestClearBit pin flipped
 ```
 
 ===============================================================================
@@ -802,6 +1016,51 @@ NON-GOALS
 
 DONE WHEN
   every Tier-1 member gated in all 13 accounting sites
+```
+
+===============================================================================
+# S4b -- next minor after S4 -- FastBit1024 (SC-5 SETTLED: A)
+===============================================================================
+
+```
+GOAL
+  Ship FastBit1024 from FastBit32.js: the 32 x 32 two-level bitmap for pools
+  and dense id sets up to 1024, fail-closed, every op loop-free except the
+  O(k) iterators and clear().
+
+START FROM
+  benchmark/experiments/fb1024-draft.mjs (oracle-fuzzed: 3000 trials,
+  ~290k checkpoints, invariants I1-I4, fail-closed rows; RESEARCH 13).
+  Reuse S4's names: nextSetBit cursor, hasAll/hasAny, isEmpty/isFull.
+
+SURFACE
+  new FastBit1024(capacity = 1024)        // 1..1024 integer, else RangeError
+  add/remove/toggle/has(bit)               // RangeError on any bad index
+  acquire() -> slot | -1                   // LOWEST free slot
+  release(slot)                            // throws on a free slot (double release)
+  size, capacity, isEmpty(), isFull()
+  lowest(), highest(), nextClearBit(), nextSetBit(from)
+  hasAll(other), hasAny(other)             // O(non-empty words of other)
+  forEach(cb), clear()                     // O(k + non-empty words)
+
+GATES
+  T0 invariants I1-I4 after every op; T1 degenerate: capacity 1, 31, 32, 33,
+  1023, 1024, full pool, drained pool; T2 every word value incl. -1 and -2^31
+  per word; T3 bad-input matrix (undefined, null, NaN, 1.5, '3', true, -1,
+  cap, 1024, 2^32, Symbol, BigInt, {}) throws AND leaves state unchanged;
+  T5 oracle fuzz (port fb1024-check.mjs); T6 0 B/op acquire/release/has/
+  nextSetBit; witness: acquire, nextClearBit, lowest, highest flat across
+  "free slot in word 0..31" shapes, both lanes; T9 controls: the SparseBit1024
+  draft policy (first EMPTY word) and a no-full-summary variant MUST fail T5.
+  Perf: profile acquire+release (draft 5.2 ns, flat) vs lite-object-pool's
+  free stack; report it, do not hide it.
+
+NON-GOALS
+  No resize, no >1024, no FastBit64 (SC-4), no change to FastBit32's input law.
+
+DONE WHEN
+  all gates green with controls red; the 13 accounting sites + d.ts +
+  llms.txt cover the new export; README states the two input laws.
 ```
 
 ===============================================================================

@@ -1,9 +1,12 @@
 # @zakkster/lite-fastbit32
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-fastbit32.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-fastbit32)
+[![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
+![Zero-GC](https://img.shields.io/badge/Zero--GC-Engine-00C853?style=for-the-badge&logo=leaf&logoColor=white)
 [![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-fastbit32?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-fastbit32)
 [![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-fastbit32?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-fastbit32)
 [![npm total downloads](https://img.shields.io/npm/dt/@zakkster/lite-fastbit32?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-fastbit32)
+![Tree-Shakeable](https://img.shields.io/badge/tree--shakeable-yes-brightgreen)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
