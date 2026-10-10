@@ -111,3 +111,35 @@ export function oRangeMask(start, end) {
 export function oCountRange(v, start, end) {
     return oCountMasked(v, oRangeMask(start, end));
 }
+
+// ---- S4 Tier-1 oracles (true definitions over the bit array) --------------
+// lowest set bit at index >= from, or -1 (from in 0..32).
+export function oNextSetBit(v, from) {
+    for (let i = from; i < 32; i++) if (ubit(v, i)) return i;
+    return -1;
+}
+
+// highest set bit at index <= from, or -1 (from in -1..31).
+export function oPrevSetBit(v, from) {
+    for (let i = from; i >= 0; i--) if (ubit(v, i)) return i;
+    return -1;
+}
+
+// set bits strictly below `bit` (bit in 0..31).
+export function oRank(v, bit) {
+    let c = 0;
+    for (let i = 0; i < bit; i++) if (ubit(v, i)) c++;
+    return c;
+}
+
+// every set bit of v is also set in m.
+export function oIsSubsetOf(v, m) {
+    for (let i = 0; i < 32; i++) if (ubit(v, i) && !ubit(m, i)) return false;
+    return true;
+}
+
+// same set (bit by bit).
+export function oEquals(a, b) {
+    for (let i = 0; i < 32; i++) if (ubit(a, i) !== ubit(b, i)) return false;
+    return true;
+}

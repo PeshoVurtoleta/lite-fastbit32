@@ -118,6 +118,16 @@ const SCALAR = {
   hasNone: 'r=inst.hasNone(0x0f0f0f0f)|0;',
   isEmpty: 'r=inst.isEmpty()|0;',
   isFull: 'r=inst.isFull()|0;',
+  // S4 Tier-1. Argument shape: a LITERAL constant argument per op (one
+  // monomorphic site, like countRange(4,27)); equals takes `other`, a second
+  // FastBit32 of the SAME hidden class whose word (0x0f0f0f0f) never changes,
+  // so the site sees one map. (equals(inst) would let V8 fold w ^ w to 0.)
+  nextSetBit: 'r=inst.nextSetBit(9);',
+  prevSetBit: 'r=inst.prevSetBit(22);',
+  rank: 'r=inst.rank(17);',
+  equals: 'r=inst.equals(other)|0;',
+  isSubsetOf: 'r=inst.isSubsetOf(0x0f0f0f0f)|0;',
+  equalsValue: 'r=inst.equalsValue(0x0f0f0f0f)|0;',
   // --- the floor (empty loop: just read the word) ---
   _floor: 'r=w;',
   // --- the five foils (MUST fail flatness) ---
@@ -153,7 +163,7 @@ function makeScalarLoop(stmt, pressure) {
   const stream = pressure ? STREAM_STMT : '';
   // eslint-disable-next-line no-new-func
   return new Function(
-    'inst', 'corpus', 'sets', 'LUT', 'outer', 'SINK', 'STREAM', 'SMASK', 'SI',
+    'inst', 'corpus', 'sets', 'LUT', 'outer', 'SINK', 'STREAM', 'SMASK', 'SI', 'other',
     'let si=SI[0], acc=0;\n' +
     'for(let o=0;o<outer;o++){\n' +
     '  for(let i=0;i<corpus.length;i++){\n' +
@@ -300,6 +310,8 @@ function main() {
   const outer = spec.outer || 512;
   const rng = makeRng(spec.seed || 0x1234abcd);
   const inst = new FastBit32(0);
+  const other = new FastBit32(0);
+  other.value = 0x0f0f0f0f; // same field write as inst.value = w: one map
   const LUT = (subject === 'foilLut16') ? buildLut16() : EMPTY_LUT;
   const stmtKey = subject === 'fb' ? op : subject; // foils ignore op
   const stmt = SCALAR[stmtKey];
@@ -333,7 +345,7 @@ function main() {
     const rn = [];
     for (let pi = 0; pi < P; pi++) {
       const corpus = corpora[pi], sets = setsBy[pi];
-      const call = (L) => L(inst, corpus, sets, LUT, outer, SINK, STREAM, SMASK, SI);
+      const call = (L) => L(inst, corpus, sets, LUT, outer, SINK, STREAM, SMASK, SI, other);
       bestPair(() => call(loop), () => call(floorLoop), reps);
       const o = BEST[0] * 1e6 / totalOps, f = BEST[1] * 1e6 / totalOps;
       if (o < opMin[pi]) opMin[pi] = o;

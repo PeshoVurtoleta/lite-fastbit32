@@ -6,6 +6,8 @@
 // mismatch is a failure with a replay line. The oracle-flip control injects a
 // wrong oracle -> mismatches -> this tier fails; the hasall-old control
 // reinstalls the 1.2.0 body -> the self-mask hasAll check diverges -> fails.
+// S4: nextSetBit/prevSetBit/rank/isSubsetOf/equalsValue and a bounded cursor
+// walk (== toArray, ascending and descending) are subjects too.
 
 export function run(ctx) {
     const FB = ctx.FB;
@@ -17,6 +19,7 @@ export function run(ctx) {
     const OPS = 200000;
 
     const fb = new FB();
+    const ub = new FB();   // unsigned twin: .value = the oracle word (uint32 double)
     const model = new Uint8Array(32); // truth bits
     const wordOf = () => { let r = 0; for (let i = 0; i < 32; i++) if (model[i]) r += 2 ** i; return r >>> 0; };
 
@@ -52,6 +55,35 @@ export function run(ctx) {
                 ['hasNone', fb.hasNone(mask), o.oHasNone(ew, mask)],
                 ['countMasked', fb.countMasked(mask), o.oCountMasked(ew, mask)]
             ];
+            // S4 Tier-1 subjects: cursors at a random from, rank, isSubsetOf,
+            // equalsValue (both mask forms), and a bounded full cursor walk.
+            checks.push(
+                ['nextSetBit', fb.nextSetBit(bit), o.oNextSetBit(ew, bit)],
+                ['prevSetBit', fb.prevSetBit(bit), o.oPrevSetBit(ew, bit)],
+                ['rank', fb.rank(bit), o.oRank(ew, bit)],
+                ['isSubsetOf', fb.isSubsetOf(mask), o.oIsSubsetOf(ew, mask)],
+                ['isSubsetOf(s)', fb.isSubsetOf(mask | 0), o.oIsSubsetOf(ew, mask)],
+                ['equalsValue(u)', fb.equalsValue(ew), true],
+                ['equalsValue(s)', fb.equalsValue(ew | 0), true],
+                ['equalsValue(m)', fb.equalsValue(mask), o.oEquals(ew, mask)]
+            );
+            {
+                let walk = '';
+                for (let b = fb.nextSetBit(0), n = 0; b !== -1 && n < 33; b = fb.nextSetBit(b + 1), n++) walk += b + ',';
+                let want = '';
+                const ta = o.oToArray(ew);
+                for (let k = 0; k < ta.length; k++) want += ta[k] + ',';
+                checks.push(['cursor==toArray', walk, want]);
+                let down = '';
+                for (let b = fb.prevSetBit(31), n = 0; b !== -1 && n < 33; b = fb.prevSetBit(b - 1), n++) down = b + ',' + down;
+                checks.push(['prevSetBit walk', down, want]);
+                ub.value = ew; // ctor representation (unsigned) of the same set
+                let uw = '';
+                for (let b = ub.nextSetBit(0), n = 0; b !== -1 && n < 33; b = ub.nextSetBit(b + 1), n++) uw += b + ',';
+                checks.push(['cursor==toArray(u)', uw, want]);
+                checks.push(['equals(u,s)', ub.equals(fb), true]);
+                checks.push(['rank(u)', ub.rank(bit), o.oRank(ew, bit)]);
+            }
             for (const [name, got, want] of checks) {
                 if (got !== want && firstFail < 0) { firstFail = i; fails.push('T5: ' + name + ' op ' + i + ' got ' + got + ' want ' + want); }
             }

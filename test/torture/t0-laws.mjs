@@ -1,14 +1,29 @@
 // test/torture/t0-laws.mjs -- metamorphic algebra over a fuzz corpus, in both
 // representations (ctor-built unsigned and add-built signed). Section-5 laws
-// minus the S4/S5 rows (cursor/rank/select). The hasAll <=> popcount-identity
+// plus the S4 Tier-1 rows (cursor, rank, equals, isSubsetOf, set/copy,
+// rangeMask); select is S5. The hasAll <=> popcount-identity
 // law runs over the full word (bit 31 included) now that FB-01 is fixed. The
 // lowest-noguard control (returns 63 on an empty word) fails the lowest/highest
 // laws here.
 
 import {
     oCount, oCountMasked, oLowest, oHighest, oNextClearBit, oHighestClearBit,
-    oIsEmpty, oIsFull, oUnion, oIntersect, oDifference, oToArray, ubit
+    oIsEmpty, oIsFull, oUnion, oIntersect, oDifference, oToArray, ubit,
+    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf
 } from './oracle.mjs';
+
+// S4 cursor walks, BOUNDED at 33 steps so a wrapping cursor (the
+// nextset-nowrap control) yields a wrong list instead of hanging the tier.
+function walkUp(inst) {
+    const out = [];
+    for (let b = inst.nextSetBit(0), n = 0; b !== -1 && n < 33; b = inst.nextSetBit(b + 1), n++) out.push(b);
+    return out;
+}
+function walkDown(inst) {
+    const out = [];
+    for (let b = inst.prevSetBit(31), n = 0; b !== -1 && n < 33; b = inst.prevSetBit(b - 1), n++) out.push(b);
+    return out;
+}
 
 export function run(ctx) {
     const FB = ctx.FB;
@@ -87,6 +102,46 @@ export function run(ctx) {
         const start = oLowest(m) < 0 ? 0 : (oLowest(m) % 16);
         const end = start + ((oHighest(m) < 0 ? 0 : oHighest(m)) % 16);
         if (u.countRange(start, end) !== u.countMasked(h.rangeMask(start, end))) F('countRange law w=' + w);
+
+        // ---- S4 Tier-1 laws, both representations (u ctor-built, s add-built)
+        const arrS = JSON.stringify(arr);
+        const revS = JSON.stringify(arr.slice().reverse());
+        for (const [tag, inst] of [['u', u], ['s', s]]) {
+            const up = walkUp(inst);
+            // cursor == forEach == toArray, ascending
+            if (JSON.stringify(up) !== arrS) F('cursor==forEach(' + tag + ') w=' + w);
+            if (JSON.stringify(walkDown(inst)) !== revS) F('prevSetBit descending(' + tag + ') w=' + w);
+            // the cursor's end conditions
+            if (inst.nextSetBit(32) !== -1) F('nextSetBit(32)===-1(' + tag + ') w=' + w);
+            if (inst.prevSetBit(-1) !== -1) F('prevSetBit(-1)===-1(' + tag + ') w=' + w);
+            // rank(lowest()) === 0 when non-empty; rank vs the oracle at every bit
+            if (arr.length > 0 && inst.rank(inst.lowest()) !== 0) F('rank(lowest)===0(' + tag + ') w=' + w);
+            for (let b = 0; b < 32; b++) {
+                if (inst.rank(b) !== oRank(w, b)) { F('rank(' + tag + ') w=' + w + ' bit=' + b); break; }
+                if (inst.nextSetBit(b) !== oNextSetBit(w, b)) { F('nextSetBit(' + tag + ') w=' + w + ' from=' + b); break; }
+                if (inst.prevSetBit(b) !== oPrevSetBit(w, b)) { F('prevSetBit(' + tag + ') w=' + w + ' from=' + b); break; }
+            }
+            // isSubsetOf(m) === new FB(m).hasAll(this.value), and vs the oracle
+            if (inst.isSubsetOf(m) !== new FB(m).hasAll(inst.value)) F('isSubsetOf==hasAll dual(' + tag + ') w=' + w + ' m=' + m);
+            if (inst.isSubsetOf(m) !== oIsSubsetOf(w, m)) F('isSubsetOf oracle(' + tag + ') w=' + w + ' m=' + m);
+            if (!inst.isSubsetOf(w)) F('isSubsetOf(self)(' + tag + ') w=' + w);
+            // equals / equalsValue <=> xor is empty, across representations
+            const eqx = new FB(w).union(m).difference(m).union(m & w).value; // same set as w, rebuilt signed
+            if (!inst.equals(u) || !inst.equals(s) || !inst.equalsValue(w) || !inst.equalsValue(w | 0)) F('equals self(' + tag + ') w=' + w);
+            if (!inst.equalsValue(eqx)) F('equalsValue rebuilt(' + tag + ') w=' + w);
+            const xm = new FB(w).toggle(0).value ^ 0; // differs from w in bit 0
+            if (inst.equalsValue(m) !== ((((w ^ m) >>> 0) === 0))) F('equalsValue xor law(' + tag + ') w=' + w + ' m=' + m);
+            if (inst.equalsValue(xm)) F('equalsValue one-bit diff(' + tag + ') w=' + w);
+            // set / copy store the same set
+            if (!new FB().set(w).equals(inst) || !new FB(7).copy(inst).equals(inst)) F('set/copy(' + tag + ') w=' + w);
+        }
+        // rangeMask/countRange law: countMasked(rangeMask(s,e)) === countRange(s,e)
+        {
+            const rs = ci & 31;
+            const re = rs + ((w >>> 3) % (32 - rs));
+            if (u.countMasked(FB.rangeMask(rs, re)) !== u.countRange(rs, re)) F('rangeMask/countRange law w=' + w + ' s=' + rs + ' e=' + re);
+            if (((FB.rangeMask(rs, re) ^ h.rangeMask(rs, re)) | 0) !== 0) F('rangeMask pattern s=' + rs + ' e=' + re);
+        }
 
         // deserialize(serialize(x)) equals x as a set
         const r = FB.deserialize(u.serialize());

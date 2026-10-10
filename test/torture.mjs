@@ -158,7 +158,12 @@ if (m.bopByLane) {
 }
 if (m.hcbByLane) {
     for (const lane of m.hcbByLane) {
-        console.error('MEASURE highestClearBit lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op' + (lane.red ? ' [expected-red: bit-31-clear boxes]' : ' [gated <0.1]'));
+        console.error('MEASURE highestClearBit lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op' + (lane.red ? ' [bit-31-clear, gated <0.1]' : ' [gated <0.1]'));
+    }
+}
+if (m.s4ByLane) {
+    for (const lane of m.s4ByLane) {
+        console.error('MEASURE S4 cursor/rank/equals/equalsValue/isSubsetOf/set/copy/BitMapper.bit+size lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
     }
 }
 if (m.sharedHasAllBop !== undefined) console.error('MEASURE shared-site sharedHasAll = ' + Number(m.sharedHasAllBop).toFixed(3) + ' B/op, sharedForEach = ' + Number(m.sharedForEachBop).toFixed(3) + ' B/op [gated <0.1]');

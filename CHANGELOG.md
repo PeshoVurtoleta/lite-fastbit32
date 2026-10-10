@@ -3,6 +3,72 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.3.0] - 2026-10-11
+
+Two sessions in one release (1.2.2 was never published). S3 is internal and
+output-identical (SC-1 settled B: decisions/0001-clz32-idiom.md). S4 adds the
+Tier-1 API (### Added). S3 changes no API; for every `.value` the API can produce (any int32 or uint32), every
+changed function returns exactly what 1.2.1 returns
+(test/S3Parity.test.mjs: 0 mismatches over the key matrix, the T5 corpus and
+1e6 seeded words, signed and unsigned representations; an exhaustive scratch run
+over all 2^32 words for the four scans: 0 mismatches, 487.0 s on 10 workers). A `.value` written directly
+with a non-integer or out-of-range number (NaN, 0.5, 2**32) is outside that
+contract and may answer differently (e.g. `nextClearBit` on NaN: 0 -> -1).
+
+### Added
+
+S4 (ROADMAP S4, RESEARCH 4 Tier 1). Additions only: relative to S3, every existing
+`FastBit32.js` body is byte-identical (`countRange` included, SC-3).
+
+- `nextSetBit(from)` (domain 0..32, 32 -> -1) and `prevSetBit(from)` (domain
+  -1..31, -1 -> -1): branchless O(1) cursors. Closure-free iteration
+  `for (b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))` is 0 B/op -- the
+  answer to FB-11 (a capturing `forEach` callback allocates per call).
+- `rank(bit)` (domain 0..31): set bits strictly below `bit`, O(1) SWAR.
+- `equals(other)`, `equalsValue(x)`: signedness-agnostic `(a ^ b) === 0`.
+  `equalsValue(undefined|null|NaN)` behaves like 0 (FB-02 class, pinned; S6).
+- `set(x)` (`value = x | 0`, signed int32) and `copy(other)`: one store, the
+  0 B/op alternative to `clone()`.
+- `isSubsetOf(mask)`: `(value & ~mask) === 0`, the dual of `hasAll`.
+- `static FastBit32.rangeMask(start, end)`: cold and validated; throws
+  `RangeError` unless both are integers with `0 <= start <= end <= 31`; returns
+  the `countRange` bit pattern as a signed int32. `countRange` itself is
+  unchanged (T0 law: `countMasked(rangeMask(s, e)) === countRange(s, e)`).
+- `BitMapper.bit(name)` (`1 << get(name)`, signed; throws on unknown) and the
+  `BitMapper.size` getter.
+- Raw-index ops (`nextSetBit`, `prevSetBit`, `rank`) are not validated: the
+  out-of-domain answers are pinned in test/Pinned.test.mjs until S6 (SC-3).
+- d.ts: every new member with its domain; `clone()` and a closure-capturing
+  `forEach` are marked as allocating.
+- Gates: T0 laws (cursor == forEach, prevSetBit descending, rank(lowest()) === 0,
+  isSubsetOf/hasAll duality, equals/xor, rangeMask/countRange), T2 rows over the
+  key matrix x 5 build forms, T5 fuzz subjects (both representations), a T6
+  0 B/op lane over all 6 key-matrix lanes, a perf-gate cursor scenario (measured
+  0 scavenges at N and 8N; the gate allows <= 2), six flat witness rows
+  (nextSetBit, prevSetBit, rank, equals, equalsValue, isSubsetOf; set/copy and
+  BitMapper.bit/size are covered by the T6 lane at 0.000 B/op), and the T9 control
+  `nextset-nowrap` (no `(from - 32) >> 31` term; red on T0 and T5).
+- Tests: test/S3Parity.test.mjs (4) and test/S4Boundary.test.mjs (60, checked
+  against a per-bit `Math.floor(u / 2**k) % 2` oracle; 12 scratch mutants all
+  red). node:test 128 -> 249 (248 pass, 1 todo: Witness.test.mjs empty-row
+  gateFlat, deferred to the witness backlog); perf gate 19 -> 20.
+
+### Changed
+
+- One bit-index idiom: every `Math.clz32(x) ^ 31` is now `31 - Math.clz32(x)`
+  (11 sites); the file header states the rule.
+- `lowest`, `highest`, `nextClearBit`, `highestClearBit` are branchless: the
+  four `=== 0` guards are gone (`31 - clz32(0)` is the `-1` sentinel).
+
+### Fixed
+
+- `highestClearBit` slow path removed: the 1.2.1 body's `~this.value >>> 0`
+  made a HeapNumber on every bit-31-clear word (~32 B/op, 26.9-64.4 ns in the
+  S2a witness). Now 0 B/op and constant time; the T6, perf-gate and witness
+  expected-red rows for it are normal gated rows.
+- FB-09: dropped the dead `>>> 0` in `forEachMaskPair` / `forEachMaskDiff` /
+  `forEachMaskUnion` (it only manufactured a double for words >= 2^31).
+
 ## [1.2.1] - 2026-10-06
 
 Two sessions fold in here: S0 (harness only -- node:test

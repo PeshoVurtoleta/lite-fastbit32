@@ -127,10 +127,8 @@ const popcount = {
 
 const scan = {
     name: 'FastBit32 scans lowest/highest/nextClearBit (bit-31-clear word)',
-    // lowest/highest/nextClearBit are 0-alloc on ANY word (nextClearBit consumes
-    // `inv` as int32 via `inv & -inv`). highestClearBit is NOT here: on this
-    // bit-31-clear word it boxes, and that box is pinned by an expected-red gate
-    // below -- not dodged by cherry-picking a bit-31-set word.
+    // lowest/highest/nextClearBit are 0-alloc on ANY word. highestClearBit has
+    // its own gate below on this same bit-31-clear word (the 1.2.1 box case).
     setup() { return { fb: new FastBit32(0x0F0F1234 | 0), sink: 0 }; },
     hot(s, n) {
         const fb = s.fb; let sink = s.sink | 0;
@@ -148,6 +146,25 @@ const forEachHoisted = {
     hot(s, n) {
         const fb = s.fb;
         for (let i = 0; i < n; i++) fb.forEach(cbBit);
+    },
+    statsOf(s) { return { grows: grows(s) }; }
+};
+
+// S4 (FB-11 answer): the closure-free cursor loop over a bit-31-SET word, plus
+// prevSetBit / rank / equals / isSubsetOf / set / copy. The same mustFail
+// (teethClosure, the capturing forEach) is its teeth.
+const cursorLoop = {
+    name: 'FastBit32 nextSetBit cursor loop + prevSetBit/rank/equals/isSubsetOf/set/copy',
+    setup() { return { fb: new FastBit32(0xA5A5A5A5 | 0), fb2: new FastBit32(0xA5A5A5A5), tmp: new FastBit32(0), sink: 0 }; },
+    hot(s, n) {
+        const fb = s.fb; const fb2 = s.fb2; const tmp = s.tmp; let sink = s.sink | 0;
+        for (let i = 0; i < n; i++) {
+            for (let b = fb.nextSetBit(0); b !== -1; b = fb.nextSetBit(b + 1)) sink = (sink + b) | 0;
+            const k = BITS[i & MASK];
+            sink = (sink + fb.prevSetBit(k) + fb.rank(k) + (fb.equals(fb2) ? 1 : 0) + (fb.isSubsetOf(MASKS[i & MASK]) ? 2 : 0)) | 0;
+            tmp.set(MASKS[i & MASK]); tmp.copy(fb);
+        }
+        s.sink = sink | 0;
     },
     statsOf(s) { return { grows: grows(s) }; }
 };
@@ -191,9 +208,9 @@ const teethClosure = {
 
 // Warmup wrapper (LiteLogN `chunked` shape): run the hot body ~400k times in
 // setup(), then chunk the measured window into 2048-op calls. A monolithic 200k
-// hot() call tiers into Maglev mid-call, where `~value >>> 0` transiently boxes;
-// chunked calls stay in the top tier. (The clear-bit scan boxing is a SEPARATE,
-// genuine issue -- see the highestClearBit expected-red gate below.)
+// hot() call tiers into Maglev mid-call, where a double-producing body can
+// transiently box; chunked calls stay in the top tier. (The 1.2.1
+// highestClearBit box was a SEPARATE, genuine issue -- fixed in S3, gated below.)
 const WARM_CHUNK = 2048;
 const WARM_ROUNDS = 200;
 function warmed(scn) {
@@ -205,7 +222,7 @@ function warmed(scn) {
     };
 }
 
-const GATED = [singleBit, maskOps, popcount, scan, forEachHoisted,
+const GATED = [singleBit, maskOps, popcount, scan, forEachHoisted, cursorLoop,
     feArray, feObject, feMapped, feMappedObject, feMaskPair, feMaskDiff, feMaskUnion];
 
 zgcSuite({
@@ -242,13 +259,12 @@ test('perf-gate: FB-11 teeth trips on scavenges (not a fake counter trip)', asyn
     assert.match(v.reasons[0], /^scavenges: \d+ > 2 \(transient allocation\)$/, 'reasons[0] must be the real over-budget reason, got: ' + v.reasons[0]);
 });
 
-// EXPECTED-RED (like an FB-01 todo row): highestClearBit() boxes a HeapNumber
-// per call on a bit-31-CLEAR word -- `31 - clz32(~value >>> 0)` with the operand
-// >= 2^31 -- in V8's default tier (reviewer-reproduced with %GetOptimizationStatus:
-// the warmed body was NOT TurboFan and boxed; --no-maglev read 0). It is a real
-// user-facing box, not dodged. A GREEN run here (box gone) must FAIL, so a later
-// session (S6/SC-2) changes it on purpose. maxScavenges stays at 2.
-test('perf-gate: highestClearBit boxes on a bit-31-clear word (expected-red)', async () => {
+// FLIPPED in S3 (1.3.0, FB-09): until 1.2.1 this row was EXPECTED-RED --
+// highestClearBit() boxed a HeapNumber per call on a bit-31-CLEAR word
+// (`31 - clz32(~value >>> 0)` with the operand >= 2^31). The branchless body
+// `31 - clz32(~value)` keeps the operand int32, so the row is now a normal
+// gate: finite scavenges <= 2 on the same word. maxScavenges stays at 2.
+test('perf-gate: highestClearBit is 0-alloc on a bit-31-clear word (flipped in S3)', async () => {
     const scn = {
         name: 'highestClearBit bit-31-clear',
         setup() { return { fb: new FastBit32(0x0F0F1234 | 0), sink: 0 }; },
@@ -258,8 +274,6 @@ test('perf-gate: highestClearBit boxes on a bit-31-clear word (expected-red)', a
     const result = await measure(warmed(scn), { N: 200000, k: 8 });
     const v = verdict(result, { maxScavenges: 2, counters: { grows: 0 } });
     console.error('  highestClearBit(bit-31-clear): scavenges N=' + result.minorLo + ' 8N=' + result.minorHi);
-    assert.strictEqual(v.pass, false, 'highestClearBit must still box on a bit-31-clear word in 1.2.0 (zero-box hole)');
-    // reject a fail-closed NaN trip (see teeth): FINITE count > 2 + exact reason.
-    assert.ok(Number.isFinite(result.minorHi) && result.minorHi > 2, 'highestClearBit must measure a finite scavenge count > 2, got ' + result.minorHi);
-    assert.match(v.reasons[0], /^scavenges: \d+ > 2 \(transient allocation\)$/, 'reasons[0] must be the real over-budget reason, got: ' + v.reasons[0]);
+    assert.ok(Number.isFinite(result.minorHi) && result.minorHi <= 2, 'highestClearBit scavenges 8N=' + result.minorHi + ' (expected finite <= 2)');
+    assert.strictEqual(v.pass, true, 'highestClearBit must not box on a bit-31-clear word: ' + v.reasons.join('; '));
 });

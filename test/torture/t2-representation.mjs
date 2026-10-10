@@ -6,8 +6,11 @@
 // fail here.
 
 import {
-    oHasAll, oHasAny, oHasNone, oCountMasked, oUnion, oIntersect, oDifference, ubit
+    oHasAll, oHasAny, oHasNone, oCountMasked, oUnion, oIntersect, oDifference, ubit,
+    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf, oEquals
 } from './oracle.mjs';
+
+const CURSOR_FROM = [0, 1, 15, 16, 29, 30, 31];
 
 export function run(ctx) {
     const FB = ctx.FB;
@@ -40,6 +43,23 @@ export function run(ctx) {
             if (((forms[0].value ^ forms[f].value) >>> 0) !== 0) {
                 fails.push('T2: build form ' + f + ' diverged on value lane ' + names[vi]);
             }
+        }
+
+        // S4: cursors, rank and equals per build form (no mask operand)
+        for (let f = 0; f < forms.length; f++) {
+            const inst = forms[f];
+            for (const from of CURSOR_FROM) {
+                if (inst.nextSetBit(from) !== oNextSetBit(w, from)) fails.push('T2: nextSetBit(' + from + ') lane ' + names[vi] + ' form ' + f);
+                if (inst.prevSetBit(from) !== oPrevSetBit(w, from)) fails.push('T2: prevSetBit(' + from + ') lane ' + names[vi] + ' form ' + f);
+                if (inst.rank(from) !== oRank(w, from)) fails.push('T2: rank(' + from + ') lane ' + names[vi] + ' form ' + f);
+            }
+            if (inst.nextSetBit(32) !== -1) fails.push('T2: nextSetBit(32) lane ' + names[vi] + ' form ' + f);
+            if (inst.prevSetBit(-1) !== -1) fails.push('T2: prevSetBit(-1) lane ' + names[vi] + ' form ' + f);
+            for (let g = 0; g < forms.length; g++) {
+                if (!inst.equals(forms[g])) fails.push('T2: equals lane ' + names[vi] + ' form ' + f + ' vs ' + g);
+            }
+            if (!new FB().set(w).equals(inst)) fails.push('T2: set lane ' + names[vi] + ' form ' + f);
+            if (!new FB().copy(inst).equals(inst)) fails.push('T2: copy lane ' + names[vi] + ' form ' + f);
         }
 
         for (let mi = 0; mi < lanes.length; mi++) {
@@ -75,6 +95,16 @@ export function run(ctx) {
                     // 31 included (C5 is no longer an expected-red zone).
                     if (inst.hasAll(m) !== oHasAll(w, m)) {
                         fails.push('T2: hasAll lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
+                    }
+                    // S4: isSubsetOf and equalsValue are signedness-agnostic
+                    if (inst.isSubsetOf(m) !== oIsSubsetOf(w, m)) {
+                        fails.push('T2: isSubsetOf lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
+                    }
+                    if (inst.equalsValue(m) !== oEquals(w, m)) {
+                        fails.push('T2: equalsValue lane ' + names[vi] + ' mask ' + names[mi] + '/' + repTags[r]);
+                    }
+                    if (inst.equals(new FB(m)) !== oEquals(w, m)) {
+                        fails.push('T2: equals lane ' + names[vi] + ' other ' + names[mi] + '/' + repTags[r]);
                     }
                     void signed;
                     void ubit;

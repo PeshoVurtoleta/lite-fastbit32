@@ -19,8 +19,8 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S0** | node:test port + torture T0-T9 + perf-gate + hygiene | (folds into 1.2.1) | harness, no behaviour change | DONE 2026-10-06 (uncommitted) |
 | **S1** | **URGENT** `hasAll` sign-bit fix (FB-01) + sign-bit doc truth | 1.2.1 | bug fix | DONE 2026-10-06 (reviewer APPROVED, qa PASS; uncommitted, awaiting /release 1.2.1) |
 | **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | **S2a DONE 2026-10-10** (reviewer APPROVED round 4, qa PASS; uncommitted). S2b (competitor matrix) planned, needed before S8 |
-| **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.2.2 | internal, output-identical | planned |
-| **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | planned |
+| **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.3.0 (folded with S4; 1.2.2 never released) | internal, output-identical | **DONE 2026-10-10** (lean: coder-medium 1 pass, reviewer APPROVED round 1; ships in 1.3.0 with S4, maintainer 2026-10-11) |
+| **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | **DONE 2026-10-11** (coder-medium 1 pass, reviewer APPROVED round 1, qa coverage gaps closed; uncommitted, awaiting /release 1.3.0) |
 | **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | next minor after S4 | additive, new export | planned |
 | **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.4.0 | additive, gated | planned |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned |
@@ -86,6 +86,22 @@ method ships typed-but-untortured.
    review. Adopted 2026-10-10 (RESEARCH 11.3 a, open question 6); T8 gains
    "`Uint32Array`-backed subset with bit 31 per word" rows in the next
    torture-touching session.
+
+---
+
+## 1b. Process for this package (maintainer, 2026-10-10; local, not suite law)
+
+Proportionate proof: the code takes minutes, so proving it must not take hours.
+- Behaviour change (FastBit32.js): coder -> reviewer -> qa on the EXISTING
+  torture + witness. At most 2 review rounds; round 2 only verifies round-1
+  blockers; everything else goes to a backlog.
+- Tests / benchmarks / tooling / docs: coder -> one review pass, no qa.
+  Blockers only for a wrong answer or a fail-open gate.
+- Research: draft + oracle fuzz + one timing, documented (the FastBit1024 model).
+- No new gate infrastructure and no threshold calibration inside a feature
+  session. The full witness runs once before a release on a quiet host;
+  `verify` keeps witness:fast.
+- coder-medium for mechanical sessions; coder (high) for design-heavy ones.
 
 ---
 
@@ -293,7 +309,7 @@ Draft + oracle checker: `benchmark/experiments/fb1024-draft.mjs`,
 ## 4. Session order
 
 ```
-S0 --> S1 --(release 1.2.1)--> S2 --> S3 --(1.2.2)--> S4 --(1.3.0)--> S5 --(1.4.0)--+
+S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S5 --(1.4.0)--+
                                  |                                                   |
                                  +--------------------> S7 (demo, uses S2 kernels) <--+
                                                                                      |
@@ -891,13 +907,13 @@ subject (no shared call site), floor subtraction, dead-code elimination
 guarded, foils fail in the claimed lane, floors frozen from a recorded run.
 
 ===============================================================================
-# S3 -- 1.2.2 -- the word-math law (SC-1, FB-09)
+# S3 -- 1.3.0 (folded; was 1.2.2) -- the word-math law (SC-1, FB-09)
 ===============================================================================
 
 ```markdown
 ---
 package: "@zakkster/lite-fastbit32"
-version_target: 1.2.2
+version_target: 1.3.0 (folded with S4)
 status: planned
 gc_maxMajor: 0
 gc_maxPauseMs: 4
@@ -958,6 +974,18 @@ and NOT blocking any release: the maintainer moved to a lighter process
     spread -Infinity, both read in-bounds). Unreachable today (sweeps are
     constants); pinned as a `todo` in test/Witness.test.mjs. Fix: an empty
     or short row fails closed; flip the todo.
+  - S3 reviewer notes (2026-10-10): `.value` is a mutable public field; a
+    direct out-of-range write (NaN, 0.5, 2**32) answers differently than
+    1.2.1 -> make `value` readonly in d.ts or document the invariant (S6).
+    S3Parity needs git history (sha 27291e4); before any CI, save the 1.2.1
+    body as a fixture file. README:14 / d.ts:5 "All operations are
+    branchless" over-claims for forEach*/toArray loops (S8).
+  - S4 reviewer (2026-10-11): witness rows for nextSetBit(9)/prevSetBit(22)/
+    rank(17) (and countRange(4,27)) take LITERAL args that TurboFan folds;
+    they prove word-flatness, not `from`-flatness, and under-cost a real
+    cursor step. Take the arg from data (`i & 31` or a corpus slot).
+  - FastBit32.js:7-9 header says values become unsigned; set() and every
+    mutator store signed (S6 / S8 wording).
   - (RESOLVED by S2a qa: full witness green on a quiet host, load 1.98,
     85.8 s, PRESSURE noise/floor 0.048, LUT16 11.30 N, SEP 8.39 N.)
 
@@ -1016,6 +1044,11 @@ NON-GOALS
 
 DONE WHEN
   every Tier-1 member gated in all 13 accounting sites
+  (scope clarified 2026-10-11 after qa: the witness covers the word-computing
+  ops -- nextSetBit, prevSetBit, rank, equals, equalsValue, isSubsetOf; set/copy
+  (one store) and BitMapper.bit/size (Map lookup / getter) are proven by the
+  T6 S4 0 B/op lane, not the witness. benchmark/Matrix.mjs (site 12) does not
+  exist until S2b.)
 ```
 
 ===============================================================================
@@ -1212,6 +1245,27 @@ ASSERTIONS
     reads before writes, cached DOM lookups, pointer events
   - `#profile` reports violationCount === 0 across all four panels
   - `npm pack --dry-run` excludes demo/
+
+PANEL 5 -- maintainer's mockup (2026-10-11): "1024-slot pool" (needs S4b FastBit1024)
+  Layout from the mockup: a 32 x 32 grid of slots (one row = one data word);
+  three stat cards: Allocated `n / 1024`, Fragmentation `%`, Next Free Index;
+  legend Free / Allocated / nextClearBit (recently handed-out slots tinted, the
+  current next free slot outlined); controls Pause, Clear Grid, click a cell to
+  toggle, Allocation Rate slider (e.g. 50/s), Volatility slider (e.g. 1x, the
+  release rate relative to allocation).
+  Behaviour: every tick runs acquire() at the rate and release() on random held
+  slots at rate x volatility; the outlined cell is nextClearBit() (lowest free
+  slot, so occupancy stays dense at the bottom -- the policy RESEARCH 11.5/13
+  argues for). Define Fragmentation before building it, e.g. free slots below
+  highest() / (highest() + 1), and say so on the page.
+  Teaching additions (cheap, the point of the panel): draw the two routing
+  words (`active`, `full`) as 32-cell strips beside the grid, and show the
+  two clz32 steps that find the next free slot (word = lowest clear of ~full,
+  bit = lowest clear of that word). Optional toggle: the SparseBit1024 draft's
+  "first EMPTY word" policy side by side, to show slots 0, 32, 64... being
+  handed out and every word going active at once (RESEARCH 11.2 D11/D12).
+  Frame loop under the demo-audit law: 0 allocations per tick for the pool
+  logic, counter on screen.
 
 DONE WHEN
   demo runs; Demo.test green; FB-12 answered with numbers

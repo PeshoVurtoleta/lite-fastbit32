@@ -95,10 +95,10 @@ Five operations, zero loops, zero branches. Works for any value of the 32-bit in
 Finding the lowest set bit uses isolation + Count Leading Zeros:
 
 ```
-lowest = Math.clz32(value & -value) ^ 31
+lowest = 31 - Math.clz32(value & -value)
 ```
 
-`value & -value` isolates the lowest set bit into a power-of-two. `Math.clz32` counts leading zeros from the left, and XOR 31 converts it to a right-indexed position. One expression, no loops.
+`value & -value` isolates the lowest set bit into a power-of-two. `Math.clz32` counts leading zeros from the left, and `31 -` converts it to a right-indexed position. On an empty word `clz32(0)` is 32, so the result is the `-1` sentinel with no guard. One expression, no loops, no branches.
 
 `highest` uses `31 - Math.clz32(value)` directly.
 
@@ -152,6 +152,31 @@ Tested on Apple M2 Pro, Node 22, V8 12.x. All values in **ops/ms**.
 ---
 
 ## Recipes
+
+<details>
+<summary><strong>Iterate set bits in a hot loop (zero-GC)</strong></summary>
+
+`forEach` with a callback that captures per-call state allocates a closure on every
+call. The `nextSetBit` cursor (1.3.0) needs no callback at all: O(1) per step,
+0 B/op (gated in the torture T6 lane and the perf gate).
+
+```javascript
+import { FastBit32 } from '@zakkster/lite-fastbit32';
+
+const alive = new FastBit32();
+alive.add(3).add(17).add(31);
+
+function update(dt) {
+    for (let b = alive.nextSetBit(0); b !== -1; b = alive.nextSetBit(b + 1)) {
+        integrate(b, dt);            // dt is a plain argument -- no closure, nothing captured
+    }
+}
+// Descending: for (let b = alive.prevSetBit(31); b !== -1; b = alive.prevSetBit(b - 1))
+```
+
+`nextSetBit(32)` returns `-1`, so `b + 1` on bit 31 ends the walk.
+
+</details>
 
 <details>
 <summary><strong>ECS Component Masks</strong></summary>
@@ -362,18 +387,27 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 | `.highestClearBit()` | `number` | O(1) index of most significant **clear** bit. `-1` if full. |
 | `.isEmpty()` | `boolean` | True if value is `0`. |
 | `.isFull()` | `boolean` | True if all 32 bits are active. |
+| `.rank(bit)` | `number` | O(1) number of active bits strictly below `bit` (0-31). Packed-array slot index. |
+| `.equals(other)` | `boolean` | Same set as another FastBit32 (signedness-agnostic). |
+| `.equalsValue(x)` | `boolean` | Same set as a raw word (signedness-agnostic). Not validated: `undefined` / `null` / `NaN` compare as `0`. |
+| `.isSubsetOf(mask)` | `boolean` | Every active bit is also in `mask` (the dual of `hasAll`). |
+| `FastBit32.rangeMask(start, end)` | `number` | Inclusive `[start, end]` mask as a signed int32. Cold, validated: throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
 
 ### Iteration
 
 | Method | Returns | Description |
 |---|---|---|
-| `.forEach(callback)` | `this` | O(k) iteration over active bits. `callback(bit)`. |
+| `.forEach(callback)` | `this` | O(k) iteration over active bits. `callback(bit)`. A callback that captures variables allocates a closure per call site evaluation -- hoist it, or use the cursor below. |
+| `.nextSetBit(from)` | `number` | O(1) branchless cursor: lowest active bit `>= from` (0-32), or `-1`. Zero-GC iteration: `for (let b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))`. |
+| `.prevSetBit(from)` | `number` | O(1) branchless descending cursor: highest active bit `<= from` (-1..31), or `-1`. |
 
 ### Utility
 
 | Method | Returns | Description |
 |---|---|---|
-| `.clone()` | `FastBit32` | Independent copy. Mutations do not propagate. |
+| `.clone()` | `FastBit32` | Independent copy. Allocates -- in a pool, use `copy()`. |
+| `.copy(other)` | `this` | Overwrite with `other.value`. Zero-alloc alternative to `clone()`. |
+| `.set(x)` | `this` | Overwrite with `x \| 0` (signed int32, like every mutator). |
 | `.serialize()` | `number` | Export raw uint32 for JSON/binary storage. |
 | `FastBit32.deserialize(n)` | `FastBit32` | Restore from a serialized uint32. |
 
@@ -394,6 +428,8 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 | `.get(name)` | `number` | Bit index for a flag name. Throws if unknown. |
 | `.getMask(names)` | `number` | Combined uint32 mask from flag name array. |
 | `.getActiveNames(fb32)` | `string[]` | Active flag names from a FastBit32 instance. |
+| `.bit(name)` | `number` | One-bit mask `1 << get(name)` (signed int32; bit 31 is `-2147483648`). Throws if unknown. |
+| `.size` | `number` | Number of distinct registered names (a duplicate keeps its last index). |
 | `.getName(bit)` | `string \| undefined` | O(1) reverse lookup — bit index to name. |
 
 ### Standalone Iteration Helpers

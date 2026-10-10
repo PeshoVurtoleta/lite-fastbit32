@@ -63,13 +63,33 @@ void raw; void bin; void bin2; void arr; void fromArr; void each; void restored;
 // @ts-expect-error -- add() expects a number, not a string.
 fb.add('nope');
 
+// --- S4 Tier-1 (1.3.0) -----------------------------------------------------
+const nsb: number = fb.nextSetBit(0);
+const psb: number = fb.prevSetBit(31);
+const rk: number = fb.rank(5);
+const eq: boolean = fb.equals(fb);
+const eqv: boolean = fb.equalsValue(0x80000000);
+const setChain: FastBit32 = fb.set(3).copy(fb);
+const sub: boolean = fb.isSubsetOf(0xFF);
+const rm: number = FastBit32.rangeMask(0, 31);
+for (let b = fb.nextSetBit(0); b !== -1; b = fb.nextSetBit(b + 1)) void b;
+void nsb; void psb; void rk; void eq; void eqv; void setChain; void sub; void rm;
+
+// @ts-expect-error -- equals() takes a FastBit32, not a raw word.
+fb.equals(5);
+
 // --- BitMapper -------------------------------------------------------------
 const mapper = new BitMapper(['Position', 'Velocity']);
 const bit: number = mapper.get('Position');
 const mask: number = mapper.getMask(['Position', 'Velocity']);
 const active: string[] = mapper.getActiveNames(fb);
 const name: string | undefined = mapper.getName(0);
-void bit; void mask; void active; void name;
+const oneBit: number = mapper.bit('Velocity');
+const mapperSize: number = mapper.size;
+void bit; void mask; void active; void name; void oneBit; void mapperSize;
+
+// @ts-expect-error -- size is a read-only getter.
+mapper.size = 3;
 
 // --- Free iteration helpers ------------------------------------------------
 forEachArray(fb, ['a', 'b', 'c'], (element: string, b: number) => { void element; void b; });

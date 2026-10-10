@@ -23,8 +23,25 @@ function oldHasAll(FB) {
 }
 
 function lowestNoGuard(FB) {
+    // The pre-S3 XOR-31 idiom with its zero guard removed. The shipped body
+    // (S3, `31 - clz32`) needs no guard; this override keeps the T0/T1 empty-word
+    // rows honest: they MUST see 63 instead of -1 and fail.
     return class extends FB {
         lowest() { return Math.clz32(this.value & -this.value) ^ 31; } // no zero guard -> 63 on empty
+    };
+}
+
+function nextSetNoWrap(FB) {
+    // S4 nextSetBit WITHOUT the `(from - 32) >> 31` term: at from === 32 the
+    // shift count wraps to 0, so nextSetBit(32) returns lowest() instead of -1
+    // and the cursor `b = nextSetBit(b + 1)` restarts at the bottom (an endless
+    // walk on any word with bit 31 set). T0 (cursor == forEach, nextSetBit(32))
+    // and T5 (bounded cursor walk) MUST fail.
+    return class extends FB {
+        nextSetBit(from) {
+            const w = this.value & (-1 << (from & 31));
+            return 31 - Math.clz32(w & -w);
+        }
     };
 }
 
@@ -57,6 +74,7 @@ function flipOracle(oracle) {
 export const CONTROLS = {
     'hasall-old': { tiers: ['T0', 'T1', 'T2', 'T3', 'T5', 'T8'], cheap: true, apply(ctx) { ctx.FB = oldHasAll(ctx.FB); } },
     'lowest-noguard': { tiers: ['T0', 'T1'], cheap: true, apply(ctx) { ctx.FB = lowestNoGuard(ctx.FB); } },
+    'nextset-nowrap': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextSetNoWrap(ctx.FB); } },
     'isfull-unsigned': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB = isFullUnsigned(ctx.FB); } },
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },
     'oracle-flip': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.oracle = flipOracle(ctx.oracle); } },

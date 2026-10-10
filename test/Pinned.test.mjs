@@ -87,3 +87,44 @@ describe('FB-01 -- hasAll and the sign bit (fixed in S1)', () => {
         assert.strictEqual(new FastBit32().hasAll(null), true);
     });
 });
+
+// S4 (1.3.0): the raw-index Tier-1 ops are permissive outside their domain,
+// like add/has (SC-3 undecided until S6). Pinned to today's answers.
+describe('Pinned S4 out-of-domain answers (SC-3 open; FB-02 class)', () => {
+    it('equalsValue(undefined|null|NaN) behaves like 0 (FB-02 class, closed in S6)', () => {
+        assert.strictEqual(new FastBit32().equalsValue(undefined), true);
+        assert.strictEqual(new FastBit32().equalsValue(null), true);
+        assert.strictEqual(new FastBit32().equalsValue(NaN), true);
+        assert.strictEqual(new FastBit32(1).equalsValue(undefined), false);
+    });
+
+    it('nextSetBit outside 0..32', () => {
+        const full = new FastBit32(-1);
+        assert.strictEqual(full.nextSetBit(33), -1);
+        assert.strictEqual(full.nextSetBit(-1), 31);          // from & 31 = 31
+        assert.strictEqual(full.nextSetBit(undefined), -1);   // (NaN - 32) >> 31 = 0
+        assert.strictEqual(full.nextSetBit(1.5), 1);
+        assert.strictEqual(full.nextSetBit(64), -1);
+    });
+
+    it('prevSetBit outside -1..31', () => {
+        const full = new FastBit32(-1);
+        assert.strictEqual(full.prevSetBit(32), 0);           // -1 >>> (-1 & 31) = 1
+        assert.strictEqual(full.prevSetBit(-2), -1);
+        assert.strictEqual(full.prevSetBit(undefined), 31);   // NaN shift count -> -1 >>> 0, full word
+        assert.strictEqual(full.prevSetBit(1.5), 2);          // 31 - 1.5 -> shift 29: answer ABOVE from
+    });
+
+    it('rank outside 0..31 (shift count wraps mod 32)', () => {
+        const full = new FastBit32(-1);
+        assert.strictEqual(full.rank(32), 0);
+        assert.strictEqual(full.rank(-1), 31);
+        assert.strictEqual(full.rank(undefined), 0);
+        assert.strictEqual(full.rank(1.5), 1);
+    });
+
+    it('set coerces through | 0 (garbage stores 0)', () => {
+        assert.strictEqual(new FastBit32(5).set(undefined).value, 0);
+        assert.strictEqual(new FastBit32(5).set(2 ** 32 + 1).value, 1);
+    });
+});

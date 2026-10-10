@@ -21,7 +21,7 @@
  * NO ABSOLUTE-ns CONSTANT GATES. Every bound below is either a dimensionless
  * ratio or a multiple of THIS run's own measured noise:
  *   NOISE(lane) = median cell-to-cell spread (max - min net) over the lane's
- *                 real-op rows (12 flat ops x 2 sweeps = 24 rows). This is the
+ *                 real-op rows (19 flat ops x 2 sweeps = 38 rows; 13 x 2 = 26 before S4). This is the
  *                 scatter a flat op shows across cells on this host in this run.
  *                 The pass-to-pass dispersion of a repeated cell is printed too,
  *                 but it is NOT the comparator: it ran 0.015-0.033 ns HOT while
@@ -47,7 +47,7 @@
  * The self-referential NOISE fails open only inside a BOUNDED window. The foils
  * are judged in the same units, but foilSubEps has a fixed ~0.7 ns step: NOISE
  * can inflate ~1.5-2x (to ~0.1 ns HOT) before that foil reads flat and fails the
- * run, and NOISE (a median over 24 rows) only inflates if >= 12 real-op rows
+ * run, and NOISE (a median over 38 rows) only inflates if >= 19 real-op rows
  * regress together. Inside that window a common regression of up to ~0.1 ns per
  * op could pass, and a single op is then allowed SPREAD_K x NOISE = 6 N ~ 0.6 ns
  * of spread. NOISE must also be finite, > 0 and <= NOISE_FLOOR_MAX x the lane's
@@ -75,11 +75,10 @@
  *             Kernighan floor drives the net negative) must trip the
  *             negative-cell gate; repeated-cell self-check runs TWO processes
  *             and its control (count vs Kernighan) must disagree.
- *   EXPECTED-RED highestClearBit (FB-09/S3): pinned NON-flat in HOT and
- *             PRESSURE, density and position. If it comes out flat the run
- *             FAILS ("flip in S3"): S3 removes the pin deliberately, nobody
- *             else does. Shown able to fail: the S3 body `31 - clz32(~v)` in a
- *             scratch copy reads ratio 1.00 / spread 0.63 N -> 2 FAIL.
+ *   highestClearBit (FB-09): was pinned EXPECTED-RED (the 1.2.1 body's
+ *             `~v >>> 0` HeapNumber slow path). S3 (1.3.0) shipped the
+ *             branchless `31 - clz32(~v)` and FLIPPED it to a normal flat row.
+ *             Revert-check: the 1.2.1 body in a scratch copy fails the flat row.
  *
  * ===========================================================================
  * FROZEN GATE (re-frozen 2026-10-10, node v26.8.2, Apple M4 Pro, darwin; D-02
@@ -168,9 +167,10 @@ const SLOPE_OP = {
   forEachArray: { residFit: 'quad', curvMin: -0.75 },
 };
 
-// NOT constant time today -- the `~v >>> 0` HeapNumber slow path; S3's
-// branchless body fixes it (FB-09). EXPECTED-RED: must stay non-flat.
-const EXPECTED_RED = { highestClearBit: 'FB-09/S3' };
+// Ops pinned NON-flat (a known finding; a flat reading FAILS the run). Empty
+// since S3 (1.3.0): highestClearBit's `~v >>> 0` slow path is gone (FB-09), so
+// it is a normal flat row.
+const EXPECTED_RED = {};
 
 const CALIBRATE = process.env.WITNESS_CALIBRATE === '1';
 const FAST = process.env.WITNESS_FAST === '1';
@@ -179,6 +179,11 @@ const CONST_OPS = [
   'count', 'countMasked', 'countRange', 'lowest', 'highest',
   'nextClearBit', 'highestClearBit', 'has', 'hasAll', 'hasAny',
   'hasNone', 'isEmpty', 'isFull',
+  // S4 Tier-1 (1.3.0): literal-argument sites, see run-one.mjs SCALAR.
+  'nextSetBit', 'prevSetBit', 'rank', 'equals', 'isSubsetOf', 'equalsValue',
+  // Not witness subjects: set/copy (one store, no word computation) and
+  // BitMapper.bit/size (a Map lookup / getter, independent of the word).
+  // Their 0 B/op proof is the T6 S4 lane.
 ];
 const ITER_OPS = [
   'forEach', 'forEachArray', 'forEachObject', 'forEachMapped',
@@ -278,7 +283,7 @@ export function laneNoise(lane, results) {
     `${f3(median(d))} ns), floor ${f3(floorMed)} ns, noise/floor=${f3(n / floorMed)} max=${NOISE_FLOOR_MAX[lane]} ${ok ? 'ok' : 'FAIL'}; ` +
     `EPS=${EPS_K[lane]}N=${f3(EPS_K[lane] * n)} ns`);
   if (!ok) {
-    fails.push(`NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 12 real-op rows regressed together`);
+    fails.push(`NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 19 real-op rows regressed together`);
     if (!CALIBRATE) HOST_BAD[lane] = true;
   }
   NOISE[lane] = n;
@@ -434,10 +439,10 @@ function run() {
       const m = gateFlat(r, `${r.op} (${r.mode})`);
       if (m.spread > worstSpread[r.mode]) worstSpread[r.mode] = m.spread;
     }
-    // 4. EXPECTED-RED highestClearBit: pinned non-flat until S3 flips it.
+    // 4. EXPECTED-RED ops (none since S3): pinned non-flat until flipped.
     for (const r of red) {
       gateRed(r, `${r.op} (${r.mode}) todo:${EXPECTED_RED[r.op]}`,
-        (m) => `expected-red highestClearBit [${lane} ${r.mode}] came out flat (ratio ${f2(m.ratio)}, spread ${f2(m.spread / NOISE[lane])}N) -- flip in S3`);
+        (m) => `expected-red ${r.op} [${lane} ${r.mode}] came out flat (ratio ${f2(m.ratio)}, spread ${f2(m.spread / NOISE[lane])}N) -- flip it on purpose`);
       printFlags(r);
     }
     // 5. same-corpus control: the harness's own null must be flat at d0/d32 too.

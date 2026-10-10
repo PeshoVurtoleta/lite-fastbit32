@@ -192,6 +192,9 @@ export class FastBit32 {
      * Creates an independent copy of this instance.
      * The clone has its own `value` -- mutations do not propagate.
      *
+     * WARNING: ALLOCATES a new object per call. In a hot path or a pool, use
+     * `target.copy(source)` (0 B/op) instead.
+     *
      * @returns A new `FastBit32` with the same value.
      */
     clone(): FastBit32;
@@ -201,6 +204,11 @@ export class FastBit32 {
     /**
      * O(k) iteration over active bits, where k is the number of set bits.
      * Visits each active bit index in ascending order.
+     *
+     * WARNING: a callback that CAPTURES per-call state (a closure created per
+     * call, e.g. `m.forEach(b => { acc += b + i })`) ALLOCATES once per call
+     * (FB-11). A module-scope callback is 0 B/op. For closure-free iteration
+     * use the cursor: `for (let b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))`.
      *
      * @param callback - Called with the bit index of each active bit.
      * @returns `this` for chaining.
@@ -243,6 +251,103 @@ export class FastBit32 {
      * @returns Active bit count within the range (0-32).
      */
     countRange(start: number, end: number): number;
+
+    // -- v1.3.0 Tier-1 Primitives (closure-free iteration + basics) --
+
+    /**
+     * Index of the lowest active bit at or above `from`, or `-1`.
+     * O(1), branchless, 0 B/op. The closure-free cursor:
+     * `for (let b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1))`.
+     *
+     * Domain: `from` is an integer in `0..32`; `32` returns `-1` (the cursor's
+     * end). Outside the domain the answer is unspecified and NOT validated
+     * (permissive, like `add`/`has`; pinned until S6 / SC-3).
+     *
+     * @param from - First bit index to consider (0-32).
+     * @returns Bit index (0-31), or `-1` if no active bit is at or above `from`.
+     */
+    nextSetBit(from: number): number;
+
+    /**
+     * Index of the highest active bit at or below `from`, or `-1`.
+     * O(1), branchless, 0 B/op. Descending cursor:
+     * `for (let b = m.prevSetBit(31); b !== -1; b = m.prevSetBit(b - 1))`.
+     *
+     * Domain: `from` is an integer in `-1..31`; `-1` returns `-1`. Outside the
+     * domain the answer is unspecified and NOT validated (pinned until S6).
+     *
+     * @param from - Highest bit index to consider (-1 to 31).
+     * @returns Bit index (0-31), or `-1` if no active bit is at or below `from`.
+     */
+    prevSetBit(from: number): number;
+
+    /**
+     * Number of active bits strictly below `bit` (popcount of
+     * `value & ((1 << bit) - 1)`). O(1) SWAR, 0 B/op. The packed-array slot
+     * index of `bit` in HAMT-style sparse storage.
+     *
+     * Domain: `bit` is an integer in `0..31` (`rank(31)` on a full word is 31).
+     * Outside the domain the answer is unspecified and NOT validated.
+     *
+     * @param bit - Bit index (0-31).
+     * @returns Active bit count below `bit` (0-31).
+     */
+    rank(bit: number): number;
+
+    /**
+     * Same set as `other`. Signedness-agnostic (`(a ^ b) === 0`): a ctor-built
+     * (unsigned) and a mutator-built (signed) instance of the same bits are equal.
+     *
+     * @param other - Another FastBit32.
+     */
+    equals(other: FastBit32): boolean;
+
+    /**
+     * Same set as the raw word `x`. Signedness-agnostic: `x` and `x >>> 0`
+     * answer the same. NOTE: `x` is coerced by ToInt32, so `undefined`, `null`
+     * and `NaN` behave like `0` (FB-02 class; closed in S6).
+     *
+     * @param x - A raw 32-bit word (int32 or uint32).
+     */
+    equalsValue(x: number): boolean;
+
+    /**
+     * Overwrites the word with `x | 0` (stored as a SIGNED int32, like every
+     * mutator: `set(0xFFFFFFFF).value === -1`). 0 B/op.
+     *
+     * @param x - A raw 32-bit word.
+     * @returns `this` for chaining.
+     */
+    set(x: number): this;
+
+    /**
+     * Overwrites the word with `other.value` (stored as-is). 0 B/op: the
+     * zero-alloc alternative to `clone()` for pooled instances.
+     *
+     * @param other - The FastBit32 to copy from.
+     * @returns `this` for chaining.
+     */
+    copy(other: FastBit32): this;
+
+    /**
+     * True when every active bit is also set in `mask` (`(value & ~mask) === 0`),
+     * the dual of `hasAll`. Signedness-agnostic.
+     *
+     * @param mask - Superset candidate.
+     */
+    isSubsetOf(mask: number): boolean;
+
+    /**
+     * The inclusive `[start, end]` mask -- the bit pattern `countRange` uses --
+     * as a SIGNED int32 (`rangeMask(0, 31) === -1`, `rangeMask(31, 31) === -2147483648`).
+     * COLD and validated: build it once, outside the hot loop.
+     *
+     * @param start - Lowest bit (integer, 0-31).
+     * @param end - Highest bit (integer, start-31).
+     * @throws RangeError unless both are integers with `0 <= start <= end <= 31`
+     *   (non-numbers, `NaN`, fractions, strings and Symbols included).
+     */
+    static rangeMask(start: number, end: number): number;
 
     // -- Debug & Init Helpers (allocate -- NOT hot-path safe) --
 
@@ -343,6 +448,21 @@ export class BitMapper {
      * @returns The registered name, or `undefined` if no name is registered at that index.
      */
     getName(bit: number): string | undefined;
+
+    /**
+     * One-bit mask for a name: `1 << get(name)`. A SIGNED int32: bit 31 gives
+     * `-2147483648` (use it with `hasAll`/`hasAny`, which are signedness-agnostic).
+     *
+     * @param name - The semantic string name of the flag.
+     * @throws Error if the flag name is not registered (through `get`).
+     */
+    bit(name: string): number;
+
+    /**
+     * Number of DISTINCT registered names. A duplicate name in the constructor
+     * keeps its last index and counts once (FB-06, closed in S6).
+     */
+    readonly size: number;
 }
 
 // -- O(k) Iteration Helpers --

@@ -1,9 +1,12 @@
 // test/FastBit32.test.mjs -- node:test port of the v1.2.0 engine-primitive suite.
 // 33 cases: nextClearBit, highestClearBit, isFull, countRange, toBinaryString,
 // toArray, fromArray. Behaviour pinned as-is (S0, no behaviour change).
+// S4 (1.3.0): + the Tier-1 suite at the bottom (cursors, rank, equals,
+// equalsValue, set, copy, isSubsetOf, rangeMask validation matrix).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { FastBit32 } from '../FastBit32.js';
+import { seedRng, randBelow, nextU32 } from './torture/harness.mjs';
 
 describe('FastBit32 -- v1.2.0 engine primitives', () => {
     describe('nextClearBit -- lowest 0 bit', () => {
@@ -197,5 +200,171 @@ describe('FastBit32 -- v1.2.0 engine primitives', () => {
             const mask = new FastBit32();
             assert.strictEqual(mask.fromArray([1]), mask);
         });
+    });
+});
+
+// ---- S4 Tier-1 ------------------------------------------------------------
+
+// The T5 corpus: the T5 op stream replayed from a fixed seed (as in
+// S3Parity), one word per op, as uint32.
+function t5Corpus(n) {
+    seedRng(0x5EED0004);
+    const fb = new FastBit32();
+    const out = [0, 0xFFFFFFFF, 0x80000000, 1, 0x7FFFFFFF];
+    for (let i = 0; i < n; i++) {
+        const op = randBelow(7);
+        const bit = randBelow(32);
+        const mask = nextU32();
+        switch (op) {
+            case 0: fb.add(bit); break;
+            case 1: fb.remove(bit); break;
+            case 2: fb.toggle(bit); break;
+            case 3: fb.union(mask); break;
+            case 4: fb.difference(mask); break;
+            case 5: fb.intersect(mask); break;
+            case 6: fb.clear(); break;
+        }
+        out.push(fb.value >>> 0);
+    }
+    return out;
+}
+const CORPUS = t5Corpus(20000);
+// both representations of one word: ctor (unsigned double) and add (signed int32)
+function reps(w) {
+    const s = new FastBit32();
+    for (let b = 0; b < 32; b++) if (((w >>> b) & 1) === 1) s.add(b);
+    return [new FastBit32(w), s];
+}
+function naiveRank(w, bit) {
+    let c = 0;
+    for (let i = 0; i < bit; i++) c += (w >>> i) & 1;
+    return c;
+}
+
+describe('FastBit32 -- S4 Tier-1 (1.3.0)', () => {
+    it('nextSetBit cursor visits exactly toArray() over the T5 corpus, both representations', () => {
+        let words = 0;
+        for (const w of CORPUS) {
+            for (const m of reps(w)) {
+                const got = [];
+                for (let b = m.nextSetBit(0); b !== -1; b = m.nextSetBit(b + 1)) {
+                    got.push(b);
+                    assert.ok(got.length <= 32, 'cursor did not terminate on w=' + w);
+                }
+                assert.deepStrictEqual(got, m.toArray(), 'w=' + w);
+            }
+            words++;
+        }
+        assert.strictEqual(words, 20005);
+    });
+
+    it('prevSetBit descending cursor visits toArray() reversed, both representations', () => {
+        for (const w of CORPUS) {
+            for (const m of reps(w)) {
+                const got = [];
+                for (let b = m.prevSetBit(31); b !== -1; b = m.prevSetBit(b - 1)) {
+                    got.push(b);
+                    assert.ok(got.length <= 32, 'cursor did not terminate on w=' + w);
+                }
+                assert.deepStrictEqual(got, m.toArray().reverse(), 'w=' + w);
+            }
+        }
+    });
+
+    it('cursor end conditions: nextSetBit(32), prevSetBit(-1), nextSetBit(0) on 0', () => {
+        for (const w of [0, 0xFFFFFFFF, 0x80000000, 1]) {
+            for (const m of reps(w)) {
+                assert.strictEqual(m.nextSetBit(32), -1);
+                assert.strictEqual(m.prevSetBit(-1), -1);
+            }
+        }
+        assert.strictEqual(new FastBit32().nextSetBit(0), -1);
+        assert.strictEqual(new FastBit32().prevSetBit(31), -1);
+        assert.strictEqual(new FastBit32().add(31).nextSetBit(31), 31);
+        assert.strictEqual(new FastBit32(0x80000000).nextSetBit(31), 31);
+        assert.strictEqual(new FastBit32(1).prevSetBit(0), 0);
+    });
+
+    it('rank: rank(31) on -1 is 31; rank(0) is 0; matches a naive oracle on the corpus', () => {
+        assert.strictEqual(new FastBit32(-1).rank(31), 31);
+        assert.strictEqual(new FastBit32().union(-1).rank(31), 31);
+        assert.strictEqual(new FastBit32(-1).rank(0), 0);
+        for (let i = 0; i < CORPUS.length; i += 7) {
+            const w = CORPUS[i];
+            for (const m of reps(w)) {
+                for (let b = 0; b < 32; b++) assert.strictEqual(m.rank(b), naiveRank(w, b), 'w=' + w + ' bit=' + b);
+            }
+        }
+    });
+
+    it('equals is true across representations', () => {
+        assert.strictEqual(new FastBit32(0x80000000).equals(new FastBit32().add(31)), true);
+        assert.strictEqual(new FastBit32(-1).equals(new FastBit32().union(-1)), true);
+        assert.strictEqual(new FastBit32(1).equals(new FastBit32(2)), false);
+        for (let i = 0; i < CORPUS.length; i += 13) {
+            const [u, s] = reps(CORPUS[i]);
+            assert.strictEqual(u.equals(s), true);
+            assert.strictEqual(s.equals(u), true);
+        }
+    });
+
+    it('equalsValue is signedness-agnostic', () => {
+        const m = new FastBit32().add(31);
+        assert.strictEqual(m.equalsValue(0x80000000), true);
+        assert.strictEqual(m.equalsValue(-(2 ** 31)), true);
+        assert.strictEqual(new FastBit32(0xFFFFFFFF).equalsValue(-1), true);
+        assert.strictEqual(m.equalsValue(0), false);
+    });
+
+    it('set stores signed int32; copy stores the other word; both chain', () => {
+        const m = new FastBit32();
+        assert.strictEqual(m.set(0xFFFFFFFF), m);
+        assert.strictEqual(m.value, -1);
+        assert.strictEqual(m.set(0x80000000).value, -(2 ** 31));
+        const src = new FastBit32(0x80000001);
+        assert.strictEqual(m.copy(src), m);
+        assert.strictEqual(m.value, src.value);
+        src.add(3);
+        assert.strictEqual(m.has(3), false, 'copy is by value, not by reference');
+    });
+
+    it('isSubsetOf is the dual of hasAll, both representations', () => {
+        assert.strictEqual(new FastBit32().add(31).isSubsetOf(0x80000000), true);
+        assert.strictEqual(new FastBit32(0x80000000).isSubsetOf(-(2 ** 31)), true);
+        assert.strictEqual(new FastBit32(3).isSubsetOf(1), false);
+        assert.strictEqual(new FastBit32().isSubsetOf(0), true);
+        for (let i = 0; i < CORPUS.length; i += 11) {
+            const w = CORPUS[i];
+            const mk = CORPUS[(i + 5) % CORPUS.length];
+            for (const m of reps(w)) {
+                assert.strictEqual(m.isSubsetOf(mk), new FastBit32(mk).hasAll(m.value), 'w=' + w + ' m=' + mk);
+                assert.strictEqual(m.isSubsetOf(mk | 0), m.isSubsetOf(mk >>> 0));
+            }
+        }
+    });
+
+    it('rangeMask returns the countRange bit pattern as a signed int32', () => {
+        assert.strictEqual(FastBit32.rangeMask(0, 31), -1);
+        assert.strictEqual(FastBit32.rangeMask(31, 31), -(2 ** 31));
+        assert.strictEqual(FastBit32.rangeMask(0, 0), 1);
+        assert.strictEqual(FastBit32.rangeMask(3, 5), 56);
+        const full = new FastBit32(-1);
+        for (let s = 0; s < 32; s++) {
+            for (let e = s; e < 32; e++) {
+                assert.strictEqual(full.countMasked(FastBit32.rangeMask(s, e)), full.countRange(s, e));
+                assert.strictEqual(full.countMasked(FastBit32.rangeMask(s, e)), e - s + 1);
+            }
+        }
+    });
+
+    it('rangeMask validation matrix throws RangeError (never a TypeError)', () => {
+        const bad = [undefined, null, NaN, 1.5, '3', -1, 32, Symbol('s'), Infinity, {}];
+        for (const x of bad) {
+            assert.throws(() => FastBit32.rangeMask(x, 31), RangeError, 'start=' + String(x));
+            assert.throws(() => FastBit32.rangeMask(0, x), RangeError, 'end=' + String(x));
+        }
+        assert.throws(() => FastBit32.rangeMask(5, 2), RangeError, 'start > end');
+        assert.throws(() => FastBit32.rangeMask(), RangeError);
+        assert.doesNotThrow(() => FastBit32.rangeMask(-0, 0));
     });
 });

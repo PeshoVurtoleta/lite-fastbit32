@@ -20,9 +20,10 @@
 //     toggle b) so the lane word never collapses to 0. UNSIGNED double lanes are
 //     READ-ONLY (a mutator would coerce them to int32); their value is re-checked
 //     unchanged. EVERY lane (signed and unsigned) is gated < 0.1 B/op -- the
-//     threshold never changes under a control. highestClearBit is split: gated
-//     < 0.1 on bit-31-SET words; EXPECTED-RED on bit-31-CLEAR words (~16-32
-//     B/op, a reading < 0.1 is green++ i.e. a failure). The shared megamorphic
+//     threshold never changes under a control. highestClearBit has its own lane
+//     per signed word, gated < 0.1 on bit-31-SET and bit-31-CLEAR words alike
+//     (until S3 / 1.3.0 the bit-31-clear rows were EXPECTED-RED at ~32 B/op:
+//     the 1.2.1 body's `~value >>> 0` boxed; the branchless body does not). The shared megamorphic
 //     call site is measured (sharedHasAll + sharedForEach), gated < 0.1. Every
 //     comparison is NaN-fails-closed (`valid < 3 || !(perOp < 0.1)`).
 //
@@ -152,7 +153,7 @@ export async function run(ctx) {
     }
     measures.bopByLane = bopByLane;
 
-    // ---- highestClearBit: gated on bit-31-set, expected-red on bit-31-clear -
+    // ---- highestClearBit: gated < 0.1 on bit-31-set AND bit-31-clear words --
     const hcbByLane = [];
     for (let li = 0; li < 4; li++) {           // signed lanes only
         const inst = new FB(0).union(h.LANE_INT32[li]);
@@ -161,16 +162,50 @@ export async function run(ctx) {
         const m = await h.measureBop(op, baseline);
         hcbByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, valid: m.valid, red: bit31Clear });
         if (m.valid < 3) { fails.push('T6 hcb: lane ' + h.LANE_NAMES[li] + ' had < 3 valid windows (NaN fails closed)'); continue; }
-        if (bit31Clear) {
-            // EXPECTED-RED: `~value >>> 0` >= 2^31 boxes today (~32 B/op). A
-            // < 0.1 reading means the box is gone -> green (a failure; flips
-            // only on purpose).
-            if (m.perOp < 0.1) green++;
-        } else {
-            if (!(m.perOp < 0.1)) fails.push('T6 hcb: bit-31-set lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op (expected < 0.1)');
-        }
+        // Flipped in S3 (FB-09): the bit-31-clear rows were expected-red
+        // (~32 B/op) under the 1.2.1 `~value >>> 0` body; now every row is gated.
+        if (!(m.perOp < 0.1)) fails.push('T6 hcb: bit-31-' + (bit31Clear ? 'clear' : 'set') + ' lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op (expected < 0.1)');
     }
     measures.hcbByLane = hcbByLane;
+
+    // ---- S4 Tier-1 lane: cursor loop, rank, equals, equalsValue, isSubsetOf, set, copy, BitMapper.bit/size --
+    // Every key-matrix lane (signed AND unsigned). `inst` is READ-ONLY (its
+    // value is re-checked unchanged); set/copy write a scratch instance, so the
+    // unsigned lanes are measured too. Gated < 0.1 B/op, NaN fails closed.
+    const s4ByLane = [];
+    const scratch = new FB(0);
+    const S4_NAMES = [];                                   // built once, cold
+    for (let n = 0; n < 32; n++) S4_NAMES.push('c' + n);
+    const s4Mapper = new ctx.Mapper(S4_NAMES);
+    for (let li = 0; li < h.LANE_VALUES.length; li++) {
+        const signed = h.LANE_SIGNED[li] === 1;
+        const want = signed ? h.LANE_INT32[li] : h.LANE_VALUES[li];
+        const inst = signed ? new FB(0).union(h.LANE_INT32[li]) : new FB(h.LANE_VALUES[li]);
+        const twin = signed ? new FB(h.LANE_VALUES[li]) : new FB(0).union(h.LANE_VALUES[li] | 0);
+        const op = (i) => {
+            let acc = 0;
+            for (let b = inst.nextSetBit(0); b !== -1; b = inst.nextSetBit(b + 1)) acc = (acc + b) | 0;
+            h.SINK[0] = acc;
+            h.SINK[2] = inst.rank(i & 31) | 0;
+            h.SINK[3] = (inst.equals(twin) ? 1 : 0) | (inst.isSubsetOf(MASK) ? 2 : 0);
+            scratch.set(inst.value);
+            scratch.copy(inst);
+            // every result reaches a sink (no dead store): prevSetBit, equalsValue,
+            // BitMapper.bit (Map lookup + shift) and BitMapper.size (getter)
+            h.SINK[1] = (inst.prevSetBit(i & 31) | 0) ^ (scratch.equalsValue(inst.value) ? 64 : 0) ^
+                s4Mapper.bit(S4_NAMES[i & 31]) ^ s4Mapper.size;
+            if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+        };
+        const m = await h.measureBop(op, baseline);
+        if (!Object.is(inst.value, want)) {
+            fails.push('T6 S4: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');
+        }
+        s4ByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, window0: m.window0, valid: m.valid, signed });
+        if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 S4: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        }
+    }
+    measures.s4ByLane = s4ByLane;
 
     // ---- shared megamorphic site: actually measured, NaN fails closed -------
     const si = new FB(0).union(h.LANE_INT32[2]); // -1

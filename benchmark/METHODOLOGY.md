@@ -73,11 +73,11 @@ The anchor: every hot op runs in the SAME time for every input word.
 - **The self-reference fails open only inside a bounded window.** The foils are
   judged in the same units, but foilSubEps has a fixed ~0.7 ns step: NOISE HOT
   can inflate ~1.5-2x (to ~0.1 ns, where 7 N passes the step) before that foil reads
-  flat and fails the run, and the median only inflates if >= 12 of the 24 real-op
+  flat and fails the run, and the median only inflates if >= 19 of the 38 real-op
   rows regress together. Inside that window a common regression of up to ~0.1 ns
   per op could pass, and one op is then allowed SPREAD_K x NOISE = 6 N ~ 0.6 ns
   of spread. NOISE must also be finite, > 0 and <= NOISE_FLOOR_MAX x the lane's
-  median floor ns; the failure message says "host too noisy ... or >= 12 real-op
+  median floor ns; the failure message says "host too noisy ... or >= 19 real-op
   rows regressed together".
 - **Host verdict.** NOISE_FLOOR_MAX HOT = 0.27 is derived so the precondition
   fires BEFORE foilSubEps can flip: quiet calibration max 0.243 (14 runs);

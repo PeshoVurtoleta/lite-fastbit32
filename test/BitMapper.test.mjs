@@ -61,3 +61,26 @@ describe('BitMapper -- string to bit resolution', () => {
         assert.strictEqual(mapper.getName(10), undefined);
     });
 });
+
+describe('BitMapper -- S4 bit(name) and size (1.3.0)', () => {
+    it('bit(name) is 1 << get(name), signed int32 at bit 31', () => {
+        const names = [];
+        for (let i = 0; i < 32; i++) names.push('C' + i);
+        const m = new BitMapper(names);
+        assert.strictEqual(m.bit('C0'), 1);
+        assert.strictEqual(m.bit('C5'), 32);
+        assert.strictEqual(m.bit('C31'), -(2 ** 31));
+        assert.strictEqual(new FastBit32().add(31).hasAll(m.bit('C31')), true);
+        assert.strictEqual((m.bit('C31') ^ m.getMask(['C31'])) | 0, 0, 'same pattern as getMask');
+    });
+
+    it('bit(name) throws on an unknown name (through get)', () => {
+        const m = new BitMapper(['A']);
+        assert.throws(() => m.bit('B'), /Unknown flag "B"/);
+    });
+
+    it('size is the number of names', () => {
+        assert.strictEqual(new BitMapper().size, 0);
+        assert.strictEqual(new BitMapper(['A', 'B', 'C']).size, 3);
+    });
+});
