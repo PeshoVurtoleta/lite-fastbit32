@@ -129,6 +129,11 @@ const SCALAR = {
   equals: 'r=inst.equals(other)|0;',
   isSubsetOf: 'r=inst.isSubsetOf(0x0f0f0f0f)|0;',
   equalsValue: 'r=inst.equalsValue(0x0f0f0f0f)|0;',
+  // S5 Tier-2. select takes a literal k; the statics are reached through
+  // inst.constructor (one site, one map) with the word as their argument.
+  select: 'r=inst.select(3);',
+  nextSubset: 'r=inst.constructor.nextSubset(w,0x0f0f0f0f);',
+  nextCombination: 'r=inst.constructor.nextCombination(w);',
   // --- the floor (empty loop: just read the word) ---
   _floor: 'r=w;',
   // --- the five foils (MUST fail flatness) ---

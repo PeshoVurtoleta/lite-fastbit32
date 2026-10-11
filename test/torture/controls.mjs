@@ -118,6 +118,74 @@ function fb1024AcqHighword(C) {
     };
 }
 
+// ---- S5 Tier-2 controls (T0 + T5 must both go red) --------------------------
+function selectNoSentinel(FB) {
+    // The shipped select WITHOUT the `| q` sign / count term: k >= count() and
+    // k < 0 return the descent's leftover position instead of -1. T0 (oracle at
+    // k = -1..33, select(count()-1) === highest() on an empty word) and T5
+    // (select(count()) === -1) MUST fail.
+    return class extends FB {
+        select(k) {
+            const v = this.value, q = k | 0;
+            const c2 = v - ((v >>> 1) & 0x55555555);
+            const c4 = (c2 & 0x33333333) + ((c2 >>> 2) & 0x33333333);
+            const c8 = (c4 + (c4 >>> 4)) & 0x0F0F0F0F;
+            const c16 = (c8 + (c8 >>> 8)) & 0x00FF00FF;
+            let r = q, t = c16 & 31, m = (t - r - 1) >> 31, s = m & 16; r -= m & t;
+            t = (c8 >>> s) & 15; m = (t - r - 1) >> 31; s += m & 8; r -= m & t;
+            t = (c4 >>> s) & 7;  m = (t - r - 1) >> 31; s += m & 4; r -= m & t;
+            t = (c2 >>> s) & 3;  m = (t - r - 1) >> 31; s += m & 2; r -= m & t;
+            t = (v >>> s) & 1;   m = (t - r - 1) >> 31; s += m & 1;
+            return s;
+        }
+    };
+}
+
+function selectDescentOff(FB) {
+    // The off-by-one descent: `(t - r) >> 31` (go high when t < r) instead of
+    // `(t - r - 1) >> 31` (go high when t <= r), so a half holding exactly r
+    // bits is entered instead of skipped. Sentinel kept. T0 (oracle, both
+    // inverse laws) and T5 (select(bit) vs the oracle) MUST fail.
+    return class extends FB {
+        select(k) {
+            const v = this.value, q = k | 0;
+            const c2 = v - ((v >>> 1) & 0x55555555);
+            const c4 = (c2 & 0x33333333) + ((c2 >>> 2) & 0x33333333);
+            const c8 = (c4 + (c4 >>> 4)) & 0x0F0F0F0F;
+            const c16 = (c8 + (c8 >>> 8)) & 0x00FF00FF;
+            let r = q, t = c16 & 31, m = (t - r) >> 31, s = m & 16; r -= m & t;
+            t = (c8 >>> s) & 15; m = (t - r) >> 31; s += m & 8; r -= m & t;
+            t = (c4 >>> s) & 7;  m = (t - r) >> 31; s += m & 4; r -= m & t;
+            t = (c2 >>> s) & 3;  m = (t - r) >> 31; s += m & 2; r -= m & t;
+            t = (v >>> s) & 1;   m = (t - r) >> 31; s += m & 1;
+            return s | (((((c16 + (c16 >>> 16)) & 63) + ~q) | q) >> 31);
+        }
+    };
+}
+
+function nextSubsetNoMask(FB) {
+    // nextSubset without the `& mask`: `(sub - 1) | 0` counts down through
+    // every integer, not the submasks. T0 (bounded walk: oracle, submask,
+    // 2^popcount values) and T5 (oracle on a random submask) MUST fail.
+    return class extends FB {
+        static nextSubset(sub, mask) { return (sub - 1) | 0; }
+    };
+}
+
+function nextCombNoSentinel(FB) {
+    // The brief's Gosper formula without the end mask `& ((r | -r) >> 31)`: the
+    // r ^ v carry out of bit 31 is lost, so the top block of k >= 3 bits maps to
+    // a low block (k = 3 -> 1) instead of 0, and f(-1) = 0x3FFFFFFF. T0 (walk
+    // ends at 0 after C(32, k) words; pinned f(-1), f(0xE0000000)) and T5 (top
+    // block vs the oracle) MUST fail.
+    return class extends FB {
+        static nextCombination(v) {
+            const c = v & -v, r = (v + c) | 0;
+            return (((r ^ v) >>> 2) >>> (31 - Math.clz32(c))) | r;
+        }
+    };
+}
+
 function dedupMapper(Mapper) {
     return class extends Mapper {
         constructor(names) {
@@ -147,6 +215,10 @@ export const CONTROLS = {
     'fb1024-nofull': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024NoFull(ctx.FB1024); } },
     'fb1024-clear-low16': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024ClearLow16(ctx.FB1024); } },
     'fb1024-acq-highword': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024AcqHighword(ctx.FB1024); } },
+    'select-nosentinel': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = selectNoSentinel(ctx.FB); } },
+    'select-descent-off': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = selectDescentOff(ctx.FB); } },
+    'nextsubset-nomask': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextSubsetNoMask(ctx.FB); } },
+    'nextcomb-nosentinel': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextCombNoSentinel(ctx.FB); } },
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },
     'oracle-flip': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.oracle = flipOracle(ctx.oracle); } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },

@@ -205,6 +205,10 @@ and unsigned forms where relevant:
 
 ### Tier 2 -- strong candidates (ROADMAP S5, greenlit one at a time)
 
+Status: select / nextSubset / nextCombination are shipped in the working tree
+for 1.5.0. reverse / rotl / rotr and FastBit1024.select are rejected (ROADMAP
+S5 ledger). lite-pick is not a consumer today (ROADMAP S5 consumer check).
+
 | Member | Sketch | When it pays |
 | --- | --- | --- |
 | `select(k)` | position of the k-th set bit; branchless via a 5-step popcount descent (16/8/4/2/1) | inverse of `rank`; random pick of the k-th free slot (lite-pick P2C over an N <= 32 eligibility word) |
@@ -573,7 +577,10 @@ layout. Truly sparse sets are **Roaring** bitmaps (Chambi, Lemire, Kaser, Godin 
 3. **`FastBit64`.** Same package (two fields, same idioms, still one object) or out of scope in favour of
    lite-o1 `BitSet`? The answer decides whether ECS users with 33+ components have a zero-alloc path that is not
    array-backed. Section 11.4: the array-backed path exists (BitSet) but lacks a subset test; `FastBit64` is still
-   the only loop-free 33-64 option.
+   the only loop-free 33-64 option. **Answered 2026-10-11 (ROADMAP SC-4 SETTLED, S9):** same package, a flat
+   `lo`/`hi` object on shared word kernels -- not two FastBit32 behind an orchestrator. Measured with
+   `benchmark/experiments/fb64-shapes.mjs` (10k entities, hasAll over all): flat ~1.0 ns and 50 B/entity, composed
+   ~1.9 ns and 115 B, FastBit1024(64) ~4.4 ns and 403 B. A 64 x 64 structure is a README recipe only.
 4. **lite-ecs migration.** FB-01 is fixed in fastbit32 by S1, but lite-ecs pins
    `^1.0.0`; any lite-ecs user on a lockfile keeps the bug until they update. Does lite-ecs get a floor bump to `^1.2.1`
    in its own session?

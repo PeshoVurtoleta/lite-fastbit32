@@ -296,6 +296,25 @@ export class FastBit32 {
     rank(bit: number): number;
 
     /**
+     * Index of the `k`-th active bit counted from the bottom (0-based): the
+     * inverse of `rank` (`select(rank(b)) === b` for an active `b`, and
+     * `rank(select(k)) === k`). O(1) branchless SWAR descent, 0 B/op.
+     *
+     * Domain: `k` is an integer in `0..count()-1`. For EVERY int32 outside that
+     * range the answer is `-1` (so an empty word answers `-1` for any `k`).
+     * `k` is coerced by `k | 0` and NOT validated (`undefined` is `0`,
+     * `1.5` is `1`, `'3'` is `3`); pinned until S6.
+     *
+     * @example
+     * // Uniform random live flag; -1 on an empty set comes for free.
+     * const bit = f.select((Math.random() * f.count()) | 0);
+     *
+     * @param k - Zero-based position among the active bits.
+     * @returns Bit index (0-31), or `-1` when `k` is outside `0..count()-1`.
+     */
+    select(k: number): number;
+
+    /**
      * Same set as `other`. Signedness-agnostic (`(a ^ b) === 0`): a ctor-built
      * (unsigned) and a mutator-built (signed) instance of the same bits are equal.
      *
@@ -349,6 +368,56 @@ export class FastBit32 {
      *   (non-numbers, `NaN`, fractions, strings and Symbols included).
      */
     static rangeMask(start: number, end: number): number;
+
+    /**
+     * Next submask of `mask` below `sub`: `(sub - 1) & mask`, as a SIGNED int32.
+     * Visits every submask of `mask` exactly once in strictly decreasing
+     * (unsigned) order, starting from `mask` and ending at `0`. O(1). 0 B/op
+     * on Node; on a pointer-compressed engine (31-bit Smi) a result outside
+     * [-2^30, 2^30) boxes (12 B) when returned through a non-inlined call
+     * (FB-12, S7).
+     * `nextSubset(0, mask)` wraps to `mask | 0` (signed), e.g.
+     * `nextSubset(0, 0xF0000000)` is -268435456: test for `0` after visiting.
+     * `sub` should be a submask of `mask`; otherwise the answer is still
+     * `(sub - 1) & mask` (pinned, NOT validated: `nextSubset(5, 10) === 0`).
+     * Pinned until S6.
+     *
+     * @example
+     * // Visit every submask of `mask`, including mask and 0.
+     * for (let s = mask; ; s = FastBit32.nextSubset(s, mask)) {
+     *     visit(s);
+     *     if (s === 0) break;
+     * }
+     *
+     * @param sub - Current submask (int32 or uint32).
+     * @param mask - The superset (int32 or uint32).
+     * @returns The next submask as a signed int32.
+     */
+    static nextSubset(sub: number, mask: number): number;
+
+    /**
+     * Next larger 32-bit word with the same popcount as `v` (Gosper's hack),
+     * as a SIGNED int32. Sentinel: returns `0` after the last combination
+     * (`v` is already the top block, e.g. `0xE0000000 | 0`), and for `v === 0`.
+     * `-1` is the k = 32 combination (`nextCombination(-1) === 0`), NEVER the
+     * end marker: loop on `v !== 0`. O(1). 0 B/op on Node; on a
+     * pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30)
+     * boxes (12 B) through a non-inlined call (FB-12, S7). Not validated
+     * (pinned until S6; `nextCombination(undefined) === 0`). Numbers only: a
+     * string, array or Date makes `v + c` concatenate
+     * (`nextCombination('3') === 31`, not 5).
+     *
+     * @example
+     * // Every k-subset of 32 bits, 1 <= k <= 32, in increasing unsigned order.
+     * for (let v = FastBit32.rangeMask(0, k - 1); v !== 0;
+     *      v = FastBit32.nextCombination(v)) {
+     *     visit(v);
+     * }
+     *
+     * @param v - A non-zero word (int32 or uint32).
+     * @returns The next same-popcount word as a signed int32, or `0` at the end.
+     */
+    static nextCombination(v: number): number;
 
     // -- Debug & Init Helpers (allocate -- NOT hot-path safe) --
 

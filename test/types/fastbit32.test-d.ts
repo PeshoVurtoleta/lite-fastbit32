@@ -79,6 +79,15 @@ void nsb; void psb; void rk; void eq; void eqv; void setChain; void sub; void rm
 // @ts-expect-error -- equals() takes a FastBit32, not a raw word.
 fb.equals(5);
 
+// --- S5 (1.5.0) ------------------------------------------------------------
+const sel: number = fb.select(0);
+const nsub: number = FastBit32.nextSubset(0xFF, 0xFF);
+const ncomb: number = FastBit32.nextCombination(FastBit32.rangeMask(0, 2));
+void sel; void nsub; void ncomb;
+
+// @ts-expect-error -- nextSubset() takes (sub, mask); one argument is an arity error.
+FastBit32.nextSubset(5);
+
 // --- BitMapper -------------------------------------------------------------
 const mapper = new BitMapper(['Position', 'Velocity']);
 const bit: number = mapper.get('Position');

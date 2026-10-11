@@ -144,6 +144,53 @@ export function oEquals(a, b) {
     return true;
 }
 
+// ---- S5 Tier-2 oracles (true definitions over the bit array) ---------------
+// The k-th set bit, ascending, 0-based; -1 when there is no k-th set bit
+// (k < 0, k >= popcount, or a non-integer k). Plain scan: no popcount descent.
+export function oSelect(v, k) {
+    let n = 0;
+    for (let i = 0; i < 32; i++) {
+        if (ubit(v, i)) {
+            if (n === k) return i;
+            n++;
+        }
+    }
+    return -1;
+}
+
+// The next submask of `mask` below `sub` (sub a submask of mask), as uint32.
+// Compress sub through the mask's bit positions into an n-bit counter j,
+// step j - 1 modulo 2^n, expand back. Per-bit and arithmetic only.
+export function oNextSubset(sub, mask) {
+    const pos = [];
+    for (let i = 0; i < 32; i++) if (ubit(mask, i)) pos.push(i);
+    let j = 0;
+    for (let p = 0; p < pos.length; p++) if (ubit(sub, pos[p])) j += 2 ** p;
+    const span = 2 ** pos.length;
+    const nj = j === 0 ? span - 1 : j - 1;
+    let r = 0;
+    for (let p = 0; p < pos.length; p++) if (Math.floor(nj / 2 ** p) % 2 === 1) r += 2 ** pos[p];
+    return r;
+}
+
+// The next word with the same popcount, greater as uint32, or 0 when none
+// exists (the top block, 0, and the full word). Find the lowest "01" pair
+// (bit i set, bit i+1 clear), move bit i up to i+1, and pack the set bits
+// below i to the bottom. Per-bit and arithmetic only.
+export function oNextCombination(v) {
+    const b = toBits(v, new Uint8Array(32));
+    let i = -1;
+    for (let p = 0; p < 31; p++) if (b[p] === 1 && b[p + 1] === 0) { i = p; break; }
+    if (i === -1) return 0;
+    let below = 0;
+    for (let p = 0; p < i; p++) below += b[p];
+    let r = 0;
+    for (let p = i + 2; p < 32; p++) if (b[p] === 1) r += 2 ** p;
+    r += 2 ** (i + 1);
+    for (let p = 0; p < below; p++) r += 2 ** p;
+    return r;
+}
+
 // ---- FastBit1024 truth model (S4b) ------------------------------------------
 // A Uint8Array(cap) of bits and naive scans; shares no code or idiom with the
 // class (no summaries, no clz32). Ported from benchmark/experiments/fb1024-check.mjs.

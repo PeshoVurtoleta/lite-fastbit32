@@ -3,6 +3,56 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.5.0] - 2026-10-11
+
+### Added
+
+S5 (ROADMAP S5, settle calls a-d). Additions only: `FastBit32.js` is +54/-0
+and 154832 golden vectors are identical to 1.4.0.
+
+- `FastBit32#select(k)`: the k-th set bit (0-based, ascending), the inverse of
+  `rank`. -1 for every int32 `k` outside `0..count()-1` and on an empty word.
+  Non-int32 input is read as `k | 0` (pinned until S6). O(1), branchless
+  5-step popcount descent.
+- `FastBit32.nextSubset(sub, mask)`: `(sub - 1) & mask` as a signed int32.
+  From `mask` down it yields exactly 2^count(mask) submasks, 0 last, bit 31
+  included. `nextSubset(0, mask)` wraps to `mask | 0` (not a sentinel).
+- `FastBit32.nextCombination(v)`: next word with the same popcount, strictly
+  greater as uint32 (Gosper's hack, no division), as a signed int32. Ends at 0
+  after the top-k-bits word; `f(0) === 0` and `f(-1) === 0`; never -1 (-1 is
+  the k = 32 combination). Walks C(32, k) words from `rangeMask(0, k - 1)`.
+- Typings for all three in `FastBit32.d.ts`; README and llms.txt recipes.
+- Rejected on the record: `FastBit1024#select` (settle a), `reverse`, `rotl`,
+  `rotr` (ledger; reopen when a consumer appears).
+- Bundle (esbuild 0.28.2 --bundle --format=esm --minify | gzip -9), before ->
+  now: whole module 2072 -> 2254 B; `{ FastBit32 }` 879 -> 1059 B;
+  `{ FastBit1024 }` 1006 -> 1006 B; every export except FastBit1024, VERSION
+  included, 1302 -> 1485 B.
+- Witness HOT (two fast runs, node v26.8.2, Apple M4 Pro, load ~4-5, net
+  ns/op, flat across density and position): `select` ~3.25-3.35 ns (ratio
+  <= 1.02), `nextSubset` ~0.10-0.21 ns (<= 1.17), `nextCombination`
+  ~0.35-0.43 ns (<= 1.16). `select` is an order of magnitude more than the
+  other constant ops (~3.3 ns vs ~0.1-0.4 ns; a 5-step dependent descent) and
+  still flat.
+- 0 B/op on Node, all 6 key-matrix lanes (T6 S5 lane, gated < 0.1 B/op; the
+  bop-box control goes red at ~16 B/op). On a pointer-compressed engine
+  (31-bit Smi) a static's result outside [-2^30, 2^30) boxes (12 B) when
+  returned through a non-inlined call (d8, --no-turbo-inlining, 2M calls,
+  1 MB semi-space: 23 scavenges each for nextSubset(0, 0x7FFFFFFF) and
+  nextCombination(0x40000000), ~12 B/call; 0 for a 0x3FFFFFFF result; 0 when
+  the call is inlined); browser measurement in S7 (FB-12). `select` returns
+  only -1..31: unaffected.
+- Gates: T0 inverse laws, oracle k = -1..33 and static walks; T2 rows per build
+  form; T5 fuzz subjects; T6 S5 lane; T7 soak; 3 witness HOT rows (the NOISE
+  median is now over 44 rows); 4 T9 controls (select-nosentinel,
+  select-descent-off, nextsubset-nomask, nextcomb-nosentinel);
+  `test/S5Members.test.mjs` (14 tests in 4 suites, independent reference);
+  Pinned S5 (7 tests); `test/S5QA.test.mjs` (40 tests in 7 suites: int32 k
+  edges, mask = -1 structure, an independent colex oracle for every k, the
+  doc recipes run from the doc text, settle (a), and a parity gate against
+  the 1.4.0 source via `git show`). `npm test`: 345 tests, 344 pass, 1 todo
+  (the existing Witness gateFlat finding).
+
 ## [1.4.0] - 2026-10-11
 
 ### Added

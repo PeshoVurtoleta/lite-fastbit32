@@ -64,6 +64,8 @@ export async function run(ctx) {
                 inst.add(n & 31).toggle((n >> 1) & 31).remove(n & 7);
                 inst.count();
                 inst.hasAll(mapper.getMask([names[n & 15]]));
+                // S5 Tier-2 members in the churn, sunk (no dead call)
+                ctx.h.SINK[0] = inst.select(n & 31) ^ FB.nextSubset(inst.value & 0xFF, inst.value) ^ FB.nextCombination(inst.value);
                 tracker.track(inst, moduleNoop, (seg * PER_SEG + c) * 64 + n, { audit: true });
                 if (stash) STASH.push(inst);
             }

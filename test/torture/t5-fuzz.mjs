@@ -7,7 +7,9 @@
 // wrong oracle -> mismatches -> this tier fails; the hasall-old control
 // reinstalls the 1.2.0 body -> the self-mask hasAll check diverges -> fails.
 // S4: nextSetBit/prevSetBit/rank/isSubsetOf/equalsValue and a bounded cursor
-// walk (== toArray, ascending and descending) are subjects too.
+// walk (== toArray, ascending and descending) are subjects too. S5: select
+// (random k and count(), both representations), nextSubset and nextCombination
+// (word, unsigned twin, top block) against the oracle.
 
 export function run(ctx) {
     const FB = ctx.FB;
@@ -83,6 +85,28 @@ export function run(ctx) {
                 checks.push(['cursor==toArray(u)', uw, want]);
                 checks.push(['equals(u,s)', ub.equals(fb), true]);
                 checks.push(['rank(u)', ub.rank(bit), o.oRank(ew, bit)]);
+                // S5 Tier-2 subjects: select at a random k and at count() (-1),
+                // both representations; nextSubset on a submask of the random
+                // mask (both input forms); nextCombination on the word, its
+                // unsigned twin, and the top block of bit + 1 bits (sentinel 0).
+                // The statics return a signed int32, so the oracle's uint32 is
+                // compared as `| 0`.
+                checks.push(
+                    ['select(bit)', fb.select(bit), o.oSelect(ew, bit)],
+                    ['select(count)', fb.select(fb.count()), -1],
+                    ['select(bit)(u)', ub.select(bit), o.oSelect(ew, bit)],
+                    ['select(count)(u)', ub.select(ub.count()), -1]
+                );
+                const sub = (ew & mask) >>> 0;
+                const tb = -1 << (31 - bit);
+                checks.push(
+                    ['nextSubset', FB.nextSubset(sub, mask), o.oNextSubset(sub, mask) | 0],
+                    ['nextSubset(s)', FB.nextSubset(sub | 0, mask | 0), o.oNextSubset(sub, mask) | 0],
+                    ['nextCombination', FB.nextCombination(fb.value), o.oNextCombination(ew) | 0],
+                    ['nextCombination(u)', FB.nextCombination(ub.value), o.oNextCombination(ew) | 0],
+                    ['nextCombination(top)', FB.nextCombination(tb), o.oNextCombination(tb) | 0],
+                    ['nextCombination(top u)', FB.nextCombination(tb >>> 0), o.oNextCombination(tb) | 0]
+                );
             }
             for (const [name, got, want] of checks) {
                 if (got !== want && firstFail < 0) { firstFail = i; fails.push('T5: ' + name + ' op ' + i + ' got ' + got + ' want ' + want); }

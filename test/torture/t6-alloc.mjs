@@ -27,6 +27,9 @@
 //     call site is measured (sharedHasAll + sharedForEach), gated < 0.1. Every
 //     comparison is NaN-fails-closed (`valid < 3 || !(perOp < 0.1)`).
 //
+//   S5 Tier-2 lane (1.5.0): select + the two statics on every key-matrix lane,
+//     gated < 0.1 B/op like the S4 lane; the bop-box control turns it red.
+//
 //   Closure scavenge lane: the ROADMAP FB-11 shape forEach(b => a += b + i)
 //     through the real forEach. Module-scope callback churns 0; a per-op closure
 //     (foreach-closure control) churns dozens. Gate <= 2.
@@ -206,6 +209,47 @@ export async function run(ctx) {
         }
     }
     measures.s4ByLane = s4ByLane;
+
+    // ---- S5 Tier-2 lane: select, static nextSubset, static nextCombination --
+    // Every key-matrix lane (signed AND unsigned). `inst` is READ-ONLY (value
+    // re-checked unchanged). select(i % 33) sweeps k = 0..32 (32 is past every
+    // count but the full word's: the -1 sentinel path). The static walk state
+    // lives in an Int32Array(2) so nothing boxes: S5W[0] walks the submasks of
+    // the lane word (nextSubset(0, m) wraps to m, so it cycles), S5W[1] walks
+    // the 3-of-32 combinations from 7 and restarts at 7 on the 0 sentinel
+    // (bit-31 words included). nextCombination(inst.value) feeds the raw lane
+    // word (an unsigned double on the unsigned lanes). Gated < 0.1 B/op, >= 3
+    // valid windows, NaN fails closed. The MEASURE line is printed here.
+    const s5ByLane = [];
+    const S5W = new Int32Array(2);
+    for (let li = 0; li < h.LANE_VALUES.length; li++) {
+        const signed = h.LANE_SIGNED[li] === 1;
+        const want = signed ? h.LANE_INT32[li] : h.LANE_VALUES[li];
+        const inst = signed ? new FB(0).union(h.LANE_INT32[li]) : new FB(h.LANE_VALUES[li]);
+        S5W[0] = 0;
+        S5W[1] = 7;
+        const op = (i) => {
+            h.SINK[0] = inst.select(i % 33);
+            S5W[0] = FB.nextSubset(S5W[0], inst.value);
+            const nc = FB.nextCombination(S5W[1]);
+            S5W[1] = nc === 0 ? 7 : nc;
+            h.SINK[1] = S5W[0] ^ nc;
+            h.SINK[3] = FB.nextCombination(inst.value);
+            if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+        };
+        const m = await h.measureBop(op, baseline);
+        if (!Object.is(inst.value, want)) {
+            fails.push('T6 S5: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');
+        }
+        s5ByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, window0: m.window0, valid: m.valid, signed });
+        if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 S5: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        }
+    }
+    measures.s5ByLane = s5ByLane;
+    for (const lane of s5ByLane) {
+        console.error('MEASURE S5 select/nextSubset/nextCombination lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
+    }
 
     // ---- S4b FastBit1024 lane: acquire+release, has, nextClearBit, lowest,
     // highest, the nextSetBit cursor loop, hasAll/hasAny. Two pool shapes: the

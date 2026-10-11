@@ -1,7 +1,9 @@
 // test/torture/t0-laws.mjs -- metamorphic algebra over a fuzz corpus, in both
 // representations (ctor-built unsigned and add-built signed). Section-5 laws
 // plus the S4 Tier-1 rows (cursor, rank, equals, isSubsetOf, set/copy,
-// rangeMask); select is S5. The hasAll <=> popcount-identity
+// rangeMask) and the S5 Tier-2 rows (select vs the oracle and both inverse
+// laws per representation; bounded nextSubset / nextCombination walks, see
+// s5StaticWalks). The hasAll <=> popcount-identity
 // law runs over the full word (bit 31 included) now that FB-01 is fixed. The
 // lowest-noguard control (returns 63 on an empty word) fails the lowest/highest
 // laws here.
@@ -9,7 +11,8 @@
 import {
     oCount, oCountMasked, oLowest, oHighest, oNextClearBit, oHighestClearBit,
     oIsEmpty, oIsFull, oUnion, oIntersect, oDifference, oToArray, ubit,
-    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf
+    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf,
+    oSelect, oNextSubset, oNextCombination, oRangeMask
 } from './oracle.mjs';
 
 // S4 cursor walks, BOUNDED at 33 steps so a wrapping cursor (the
@@ -134,6 +137,16 @@ export function run(ctx) {
             if (inst.equalsValue(xm)) F('equalsValue one-bit diff(' + tag + ') w=' + w);
             // set / copy store the same set
             if (!new FB().set(w).equals(inst) || !new FB(7).copy(inst).equals(inst)) F('set/copy(' + tag + ') w=' + w);
+            // ---- S5 select: the oracle at k = -1..33, both inverse laws, the ends
+            for (let k = -1; k <= 33; k++) {
+                if (inst.select(k) !== oSelect(w, k)) { F('select oracle(' + tag + ') w=' + w + ' k=' + k + ' got ' + inst.select(k) + ' want ' + oSelect(w, k)); break; }
+            }
+            for (let k = 0; k < arr.length; k++) {
+                if (inst.select(inst.rank(arr[k])) !== arr[k]) { F('select(rank(b))===b(' + tag + ') w=' + w + ' b=' + arr[k]); break; }
+                if (inst.rank(inst.select(k)) !== k) { F('rank(select(k))===k(' + tag + ') w=' + w + ' k=' + k); break; }
+            }
+            if (inst.select(0) !== inst.lowest()) F('select(0)===lowest()(' + tag + ') w=' + w);
+            if (inst.select(inst.count() - 1) !== inst.highest()) F('select(count()-1)===highest()(' + tag + ') w=' + w);
         }
         // rangeMask/countRange law: countMasked(rangeMask(s,e)) === countRange(s,e)
         {
@@ -151,7 +164,86 @@ export function run(ctx) {
     void green;
     // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
     try { fb1024Laws(ctx, F); } catch (e) { F('FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
+    try { s5StaticWalks(ctx, F); } catch (e) { F('S5 static walks threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green };
+}
+
+// ---- S5 statics: bounded walks, called as FB.<static> so a control reaches them.
+// A2 nextSubset: from mask down, visit, stop after 0. Masks {0, -2^31,
+// 0x80000001, 0xF000000F, 0x0000FFFF, 0xFFFF0000} plus 64 random masks of
+// popcount <= 12 (a PRIVATE xorshift stream seeded from ctx.seed, so the
+// harness RNG sequence the other rows read is unchanged). Each step: the oracle
+// value, a submask, strictly decreasing as uint32, an int32 (Object.is(x, x|0)),
+// the same output for the uint32 forms of both inputs; exactly 2^popcount
+// values, 0 last. A3 nextCombination: k = 1..4, 28..32 from the low block;
+// each step the oracle value, popcount k, strictly increasing as uint32, an
+// int32, the same output for the uint32 input; exactly C(32, k) words, the last
+// the top block `-1 << (32 - k)`, then the 0 sentinel. Both walks are bounded
+// at count + 1 steps so a control without a mask or a sentinel yields a wrong
+// count instead of hanging the tier.
+// The uint32 reading of an int32 by arithmetic (no bitwise compare, law 8).
+function u32(x) { return x < 0 ? x + 4294967296 : x; }
+function s5StaticWalks(ctx, F) {
+    const FB = ctx.FB;
+    const SX = new Int32Array(1);
+    SX[0] = (ctx.seed ^ 0x5bd1e995) | 0 || 0x2545f491;
+    const rnd = (n) => { let x = SX[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; SX[0] = x; return (x >>> 0) % n; };
+    const masks = [0, -(2 ** 31), 0x80000001 | 0, 0xF000000F | 0, 0x0000FFFF, 0xFFFF0000 | 0];
+    for (let i = 0; i < 64; i++) {
+        const p = rnd(13);
+        let mk = 0;
+        for (let n = 0; n < p;) { const b = rnd(32); if (!ubit(mk, b)) { mk = (mk | (1 << b)) | 0; n++; } }
+        masks.push(mk);
+    }
+    for (let mi = 0; mi < masks.length; mi++) {
+        const mask = masks[mi];
+        const um = mask >>> 0;
+        const want = 2 ** oCount(mask);
+        let x = mask;
+        let n = 1;
+        let bad = null;
+        while (n <= want) {
+            const nx = FB.nextSubset(x, mask);
+            if (!Object.is(nx, nx | 0)) { bad = 'not an int32 ' + nx; break; }
+            if (((nx ^ oNextSubset(x, mask)) >>> 0) !== 0) { bad = 'oracle x=' + x + ' got ' + nx + ' want ' + oNextSubset(x, mask); break; }
+            if (!Object.is(FB.nextSubset(x >>> 0, um), nx)) { bad = 'uint32 inputs differ x=' + x; break; }
+            if (x === 0) break;
+            if ((nx & ~mask) !== 0) { bad = 'not a submask ' + nx; break; }
+            if (!(u32(nx) < u32(x))) { bad = 'not strictly decreasing ' + x + ' -> ' + nx; break; }
+            x = nx;
+            n++;
+        }
+        if (bad === null && (n !== want || x !== 0)) bad = 'visited ' + n + ' values ending at ' + x + ', want ' + want + ' ending at 0';
+        if (bad !== null) F('nextSubset walk mask=' + mask + ': ' + bad);
+    }
+    const KS = [1, 2, 3, 4, 28, 29, 30, 31, 32];
+    for (let ki = 0; ki < KS.length; ki++) {
+        const k = KS[ki];
+        let want = 1;
+        for (let i = 0; i < k; i++) want = want * (32 - i) / (i + 1);
+        let v = oRangeMask(0, k - 1) | 0;
+        let n = 1;
+        let bad = null;
+        while (n <= want) {
+            const nv = FB.nextCombination(v);
+            if (!Object.is(nv, nv | 0)) { bad = 'not an int32 ' + nv; break; }
+            if (((nv ^ oNextCombination(v)) >>> 0) !== 0) { bad = 'oracle v=' + v + ' got ' + nv + ' want ' + oNextCombination(v); break; }
+            if (!Object.is(FB.nextCombination(v >>> 0), nv)) { bad = 'uint32 input differs v=' + v; break; }
+            if (nv === 0) break;
+            if (oCount(nv) !== k) { bad = 'popcount ' + oCount(nv) + ' at ' + nv; break; }
+            if (!(u32(nv) > u32(v))) { bad = 'not strictly increasing ' + v + ' -> ' + nv; break; }
+            v = nv;
+            n++;
+        }
+        if (bad === null && (n !== want || ((v ^ (-1 << (32 - k))) | 0) !== 0)) bad = 'visited ' + n + ' words ending at ' + v + ', want ' + want + ' ending at ' + (-1 << (32 - k));
+        if (bad !== null) F('nextCombination walk k=' + k + ': ' + bad);
+    }
+    // pinned points: f(0) = 0, f(-1) = 0, the k = 3 top block -> 0, and a carry into bit 31
+    const pins = [[0, 0], [-1, 0], [0xE0000000 | 0, 0], [0x7FFFFFFF, 0xBFFFFFFF | 0]];
+    for (let i = 0; i < pins.length; i++) {
+        const got = FB.nextCombination(pins[i][0]);
+        if (!Object.is(got, pins[i][1])) F('nextCombination(' + pins[i][0] + ') got ' + got + ' want ' + pins[i][1]);
+    }
 }
 
 // ---- S4b FastBit1024: invariants I1-I4 after EVERY op + metamorphic laws ----

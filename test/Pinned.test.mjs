@@ -128,3 +128,47 @@ describe('Pinned S4 out-of-domain answers (SC-3 open; FB-02 class)', () => {
         assert.strictEqual(new FastBit32(5).set(2 ** 32 + 1).value, 1);
     });
 });
+
+// S5 (1.5.0): select / nextSubset / nextCombination are unvalidated (SC-3 open).
+// Out-of-domain answers pinned; select returns -1 outside 0..count()-1 (settle b).
+describe('Pinned S5 out-of-domain answers (SC-3 open)', () => {
+    it('select on a full word: k outside 0..31 is -1', () => {
+        const full = new FastBit32(-1);
+        assert.strictEqual(full.select(32), -1);
+        assert.strictEqual(full.select(-1), -1);
+        assert.strictEqual(full.select(-(2 ** 31)), -1);
+    });
+
+    it('select coerces k through | 0', () => {
+        const full = new FastBit32(-1);
+        assert.strictEqual(full.select(undefined), 0);
+        assert.strictEqual(full.select(1.5), 1);
+        assert.strictEqual(full.select('3'), 3);
+    });
+
+    it('select k | 0 pins on 0b1010 (undefined/NaN/-0.5 -> 0, 1.5 -> 1)', () => {
+        // Bits set: 1 and 3. k | 0 maps undefined, NaN, -0.5 to 0 -> bit 1; 1.5 to 1 -> bit 3.
+        // Kills the mutant `q = k | 0` -> `q = k`.
+        const w = new FastBit32(0b1010);
+        assert.strictEqual(w.select(undefined), 1);
+        assert.strictEqual(w.select(NaN), 1);
+        assert.strictEqual(w.select(-0.5), 1);
+        assert.strictEqual(w.select(1.5), 3);
+    });
+
+    it('select at the int32-max end of k is -1', () => {
+        assert.strictEqual(new FastBit32(-1).select(2 ** 31 - 1), -1);
+    });
+
+    it('select on an empty word is -1 even for undefined', () => {
+        assert.strictEqual(new FastBit32().select(undefined), -1);
+    });
+
+    it('nextSubset with sub outside mask (out of domain)', () => {
+        assert.strictEqual(FastBit32.nextSubset(5, 10), 0);   // (5 - 1) & 10
+    });
+
+    it('nextCombination(undefined) is 0 (the end sentinel)', () => {
+        assert.strictEqual(FastBit32.nextCombination(undefined), 0);
+    });
+});

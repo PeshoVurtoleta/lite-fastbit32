@@ -17,9 +17,15 @@
  * that FAILS CLOSED on every index: add/remove/toggle/has, acquire/release,
  * size, capacity, isEmpty/isFull, lowest/highest, nextClearBit, nextSetBit,
  * hasAll/hasAny, forEach, clear. No coupling to FastBit32.
+ * - 1.5.0 (Tier 2): select(k) [k 0..count()-1, else -1], static
+ * nextSubset(sub, mask) and static nextCombination(v) [end sentinel 0], both
+ * returning a signed int32. Branchless, no validation (pinned until S6). 0 B/op
+ * on Node; on a pointer-compressed engine (31-bit Smi) a static's result
+ * outside [-2^30, 2^30) boxes (12 B) when returned through a non-inlined call
+ * (FB-12, S7).
  */
 
-export const VERSION = '1.4.0';
+export const VERSION = '1.5.0';
 
 export class FastBit32 {
     constructor(initial = 0) {
@@ -282,6 +288,54 @@ export class FastBit32 {
                 (typeof end === 'number' ? String(end) : typeof end));
         }
         return (0xFFFFFFFF >>> (31 - (end - start))) << start;
+    }
+
+    // -- v1.5.0 Tier-2 --
+
+    /**
+     * The k-th set bit (0-based, ascending): select(0) === lowest(),
+     * select(count() - 1) === highest(). Branchless 5-step popcount descent.
+     * Domain: integers 0 <= k < count(). Sentinel: -1 for every int32 outside
+     * that range (negative k, k >= count(), any k on an empty word).
+     * Non-int32 input is read as `k | 0` (pinned until S6): select(x) ===
+     * select(x | 0). Laws: select(rank(b)) === b for a set bit b;
+     * rank(select(k)) === k for 0 <= k < count().
+     */
+    select(k) {
+        const v = this.value, q = k | 0;
+        const c2 = v - ((v >>> 1) & 0x55555555);
+        const c4 = (c2 & 0x33333333) + ((c2 >>> 2) & 0x33333333);
+        const c8 = (c4 + (c4 >>> 4)) & 0x0F0F0F0F;
+        const c16 = (c8 + (c8 >>> 8)) & 0x00FF00FF;
+        let r = q, t = c16 & 31, m = (t - r - 1) >> 31, s = m & 16; r -= m & t;
+        t = (c8 >>> s) & 15; m = (t - r - 1) >> 31; s += m & 8; r -= m & t;
+        t = (c4 >>> s) & 7;  m = (t - r - 1) >> 31; s += m & 4; r -= m & t;
+        t = (c2 >>> s) & 3;  m = (t - r - 1) >> 31; s += m & 2; r -= m & t;
+        t = (v >>> s) & 1;   m = (t - r - 1) >> 31; s += m & 1;
+        return s | (((((c16 + (c16 >>> 16)) & 63) + ~q) | q) >> 31);
+    }
+
+    /**
+     * The next submask of `mask` below `sub`, as a signed int32: `(sub - 1) & mask`.
+     * Domain: `sub` a submask of `mask`. Walk from `mask` down: visit, then stop
+     * after 0 -- exactly 2^count(mask) distinct submasks, 0 last, bit 31
+     * included. nextSubset(0, mask) wraps to `mask` (it is not a sentinel).
+     * Out of domain (sub not a submask) the result is still `(sub - 1) & mask`.
+     */
+    static nextSubset(sub, mask) { return (sub - 1) & mask; }
+
+    /**
+     * The next word with the same popcount, strictly greater as uint32
+     * (Gosper's hack, no division), as a signed int32. Walk every k-of-32 set
+     * from `rangeMask(0, k - 1)` while the result is non-zero: exactly C(32, k)
+     * words. Sentinel: 0 after the last combination (the top k bits set);
+     * f(0) === 0 and f(-1) === 0. Never -1 (that is the k = 32 combination).
+     * Numbers only: a string, array or Date makes `v + c` concatenate
+     * (nextCombination('3') === 31); pinned until S6.
+     */
+    static nextCombination(v) {
+        const c = v & -v, r = (v + c) | 0;
+        return ((((r ^ v) >>> 2) >>> (31 - Math.clz32(c))) | r) & ((r | -r) >> 31);
     }
 
     // -- Debug & Init Helpers (allocate -- NOT hot-path safe) --

@@ -37,9 +37,9 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size** (min+gz) | **879 B** FastBit32 alone; 2072 B whole module | ~8KB | ~6KB |
+| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 2254 B whole module | ~8KB | ~6KB |
 
-> Bundle sizes, measured 2026-10-11: an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2072 B. `{ FastBit32 }` alone: 879 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1302 B, the same as the whole 1.3.0 module.
+> Bundle sizes, measured 2026-10-11: an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2254 B. `{ FastBit32 }` alone: 1059 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1485 B (1302 B in 1.4.0).
 
 > FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0).
 
@@ -177,6 +177,45 @@ function update(dt) {
 ```
 
 `nextSetBit(32)` returns `-1`, so `b + 1` on bit 31 ends the walk.
+
+</details>
+
+<details>
+<summary><strong>Pick a random live flag, walk submasks, walk k-of-32 sets (1.5.0)</strong></summary>
+
+`select(k)` is the k-th set bit (0-based, ascending), so a uniform pick is one
+call. On an empty set `count()` is 0, so the index is 0 and `select(0)` is `-1`
+by itself: no separate empty check.
+
+```javascript
+import { FastBit32 } from '@zakkster/lite-fastbit32';
+
+const f = new FastBit32().add(3).add(17).add(31);
+const pick = f.select((Math.random() * f.count()) | 0); // 3, 17 or 31; -1 if empty
+```
+
+Every submask of `m`, from `m` down to `0` (exactly 2^count(m) of them).
+`nextSubset(0, m)` wraps to `m`, so visit first, then stop on `0`:
+
+```javascript
+const m = (1 << 1) | (1 << 4) | (1 << 9);
+for (let s = m; ; s = FastBit32.nextSubset(s, m)) {
+    visit(s);               // 8 submasks, 0 last
+    if (s === 0) break;
+}
+```
+
+Every k-of-32 set (C(32, k) words, increasing as unsigned) for `k >= 1`.
+`nextCombination` ends at `0`, never `-1` (`-1` is the k = 32 combination).
+`(1 << k) - 1` is wrong at k = 32 (`1 << 32` is `1`), so seed with `rangeMask`:
+
+```javascript
+for (let v = FastBit32.rangeMask(0, k - 1); v !== 0; v = FastBit32.nextCombination(v)) {
+    visit(v);
+}
+```
+
+`select` takes a bit index and returns -1..31 (0 B/op). The two statics take and return signed int32 words: 0 B/op on Node (T6); on a pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30) boxes (12 B) when returned through a non-inlined call (FB-12, S7).
 
 </details>
 
@@ -443,6 +482,9 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 | `.equalsValue(x)` | `boolean` | Same set as a raw word (signedness-agnostic). Not validated: `undefined` / `null` / `NaN` compare as `0`. |
 | `.isSubsetOf(mask)` | `boolean` | Every active bit is also in `mask` (the dual of `hasAll`). |
 | `FastBit32.rangeMask(start, end)` | `number` | Inclusive `[start, end]` mask as a signed int32. Cold, validated: throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
+| `.select(k)` | `number` | (1.5.0) The k-th set bit, 0-based ascending: `select(0) === lowest()`, `select(count() - 1) === highest()`. `-1` for any int32 `k` outside `0..count()-1` (and on an empty set). Inverse of `rank`. O(1) branchless SWAR descent, 0 B/op. Not validated: a non-int32 `k` is read as `k \| 0` (pinned until S6). |
+| `FastBit32.nextSubset(sub, mask)` | `number` | (1.5.0) `(sub - 1) & mask` as a signed int32 (0 B/op on Node; a result outside [-2^30, 2^30) boxes, 12 B, on pointer-compressed engines through a non-inlined call: FB-12, S7). Walk from `mask` down: exactly 2^count(mask) submasks, `0` last. `nextSubset(0, mask)` wraps to `mask | 0` (signed): visit, then stop on `0`. Not validated. |
+| `FastBit32.nextCombination(v)` | `number` | (1.5.0) Next word with the same popcount, strictly greater as uint32 (Gosper's hack, no division), as a signed int32. Ends at `0` (after the top-k-bits word; also `f(0)` and `f(-1)`), never `-1`. Not validated. |
 
 ### Iteration
 

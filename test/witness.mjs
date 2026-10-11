@@ -21,7 +21,7 @@
  * NO ABSOLUTE-ns CONSTANT GATES. Every bound below is either a dimensionless
  * ratio or a multiple of THIS run's own measured noise:
  *   NOISE(lane) = median cell-to-cell spread (max - min net) over the lane's
- *                 real-op rows (19 flat ops x 2 sweeps = 38 rows; 13 x 2 = 26 before S4). This is the
+ *                 real-op rows (22 flat ops x 2 sweeps = 44 rows; 38 before S5, 26 before S4). This is the
  *                 scatter a flat op shows across cells on this host in this run.
  *                 The pass-to-pass dispersion of a repeated cell is printed too,
  *                 but it is NOT the comparator: it ran 0.015-0.033 ns HOT while
@@ -47,7 +47,7 @@
  * The self-referential NOISE fails open only inside a BOUNDED window. The foils
  * are judged in the same units, but foilSubEps has a fixed ~0.7 ns step: NOISE
  * can inflate ~1.5-2x (to ~0.1 ns HOT) before that foil reads flat and fails the
- * run, and NOISE (a median over 38 rows) only inflates if >= 19 real-op rows
+ * run, and NOISE (a median over 44 rows) only inflates if >= 22 real-op rows
  * regress together. Inside that window a common regression of up to ~0.1 ns per
  * op could pass, and a single op is then allowed SPREAD_K x NOISE = 6 N ~ 0.6 ns
  * of spread. NOISE must also be finite, > 0 and <= NOISE_FLOOR_MAX x the lane's
@@ -181,6 +181,8 @@ const CONST_OPS = [
   'hasNone', 'isEmpty', 'isFull',
   // S4 Tier-1 (1.3.0): literal-argument sites, see run-one.mjs SCALAR.
   'nextSetBit', 'prevSetBit', 'rank', 'equals', 'isSubsetOf', 'equalsValue',
+  // S5 Tier-2 (1.5.0): literal-argument sites, see run-one.mjs SCALAR.
+  'select', 'nextSubset', 'nextCombination',
   // Not witness subjects: set/copy (one store, no word computation) and
   // BitMapper.bit/size (a Map lookup / getter, independent of the word).
   // Their 0 B/op proof is the T6 S4 lane.
@@ -300,7 +302,7 @@ export function laneNoise(lane, results) {
     `${f3(median(d))} ns), floor ${f3(floorMed)} ns, noise/floor=${f3(n / floorMed)} max=${NOISE_FLOOR_MAX[lane]} ${ok ? 'ok' : 'FAIL'}; ` +
     `EPS=${EPS_K[lane]}N=${f3(EPS_K[lane] * n)} ns`);
   if (!ok) {
-    fails.push(`NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 19 real-op rows regressed together`);
+    fails.push(`NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 22 real-op rows regressed together`);
     if (!CALIBRATE) HOST_BAD[lane] = true;
   }
   NOISE[lane] = n;

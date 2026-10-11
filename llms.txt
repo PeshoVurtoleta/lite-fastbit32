@@ -1,10 +1,10 @@
-# @zakkster/lite-fastbit32 v1.4.0
+# @zakkster/lite-fastbit32 v1.5.0
 
 > Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless.
 
 ## Overview
 
-FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle (an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2072 B whole module, 879 B FastBit32 alone, 1006 B FastBit1024 alone.
+FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle (an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2254 B whole module, 1059 B FastBit32 alone, 1006 B FastBit1024 alone.
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
@@ -24,7 +24,7 @@ import {
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
 
-// VERSION is the package version string ('1.4.0'), synced with package.json.
+// VERSION is the package version string ('1.5.0'), synced with package.json.
 ```
 
 ## Constructor
@@ -104,6 +104,9 @@ Raw-index ops (`nextSetBit`, `prevSetBit`, `rank`, like `add`/`has`) are NOT val
 | `.equalsValue(x)` | `boolean` | (1.3.0) Same set as the raw word `x`, signedness-agnostic. `undefined`/`null`/`NaN` behave like 0 (FB-02 class, closed in S6). |
 | `.isSubsetOf(mask)` | `boolean` | (1.3.0) Every active bit is in `mask`: `(value & ~mask) === 0`. Dual of `hasAll`. |
 | `FastBit32.rangeMask(start, end)` | `number` | (1.3.0) Static, COLD, validated. Inclusive `[start, end]` mask as a signed int32 (the `countRange` pattern). Throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
+| `.select(k)` | `number` | (1.5.0) The k-th set bit, 0-based ascending (`select(0) === lowest()`, `select(count() - 1) === highest()`), or `-1` for any int32 `k` outside `0..count()-1` and on an empty set. Inverse of `rank`. O(1) branchless, 0 B/op. Not validated: non-int32 `k` is read as `k \| 0` (pinned until S6). |
+| `FastBit32.nextSubset(sub, mask)` | `number` | (1.5.0) Static. `(sub - 1) & mask`, signed int32. From `mask` down: exactly 2^count(mask) submasks, 0 last. `nextSubset(0, mask)` wraps to `mask | 0` (signed). 0 B/op on Node (T6); on a pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30) boxes (12 B) through a non-inlined call (FB-12, S7). Not validated. |
+| `FastBit32.nextCombination(v)` | `number` | (1.5.0) Static. Next word with the same popcount, strictly greater as uint32 (Gosper), signed int32. Ends at `0` (also `f(0)`, `f(-1)`), never `-1`. 0 B/op on Node (T6); on a pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30) boxes (12 B) through a non-inlined call (FB-12, S7). Not validated. |
 | `.serialize()` | `number` | Export raw uint32 for JSON/binary storage. |
 | `FastBit32.deserialize(n)` | `FastBit32` | Static. Restore from serialized uint32. |
 
@@ -236,6 +239,8 @@ for (let s = slots.nextSetBit(0); s !== -1; s = slots.nextSetBit(s + 1)) {
 
 Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty loop): `acquire()+release()` pair ~3.2 ns, `nextClearBit` ~0.5 ns, `lowest` ~0.34-0.37 ns, `highest` ~0.40-0.47 ns, `has` ~0.91-0.98 ns; each flat across "free (or set) slot in word 0..31". 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in that lane); perf-gate 0 scavenges at N and 8N for acquire+release.
 
+Measured, 1.5.0 (two fast witness runs, node v26.8.2, Apple M4 Pro, load ~4-5, net ns/op, HOT, flat across density and position): `select` ~3.25-3.35 ns (flatness ratio <= 1.02), `nextSubset` ~0.10-0.21 ns (<= 1.17), `nextCombination` ~0.35-0.43 ns (<= 1.16). `select` is an order of magnitude more than the other constant ops (~3.3 ns vs ~0.1-0.4 ns; a 5-step dependent descent) and still flat. 0 B/op on all three on Node (torture T6 S5 lane, gated < 0.1 B/op). On a pointer-compressed engine (31-bit Smi) the two statics box (12 B) a result outside [-2^30, 2^30) when returned through a non-inlined call (d8 probe; browser measurement in S7, FB-12); `select` returns only -1..31 and stays 0 B/op.
+
 ## Critical Caveats
 
 1. **Silent modulo-32 wraparound.** JavaScript bitwise shifts apply `% 32` implicitly. `add(32)` is identical to `add(0)`. `add(40)` is identical to `add(8)`. There is no bounds checking.
@@ -247,6 +252,24 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty
 4. **32-bit limit.** Only bits 0-31 are addressable. Up to 1024 bits: `FastBit1024` (fixed geometry, fails closed). For larger bitfields, use `@zakkster/lite-bits`.
 
 ## Correct Usage Patterns
+
+### Random pick, submasks, k-of-32 combinations (1.5.0)
+
+```javascript
+// Random live flag; -1 on an empty set by itself (count() is 0, select(0) is -1).
+const bit = f.select((Math.random() * f.count()) | 0);
+
+// Every submask of m, m down to 0 (2^count(m) of them): visit, then break on 0.
+for (let s = m; ; s = FastBit32.nextSubset(s, m)) {
+    visit(s);
+    if (s === 0) break;
+}
+
+// Every k-of-32 set, k >= 1 (C(32, k) words, increasing as unsigned).
+for (let v = FastBit32.rangeMask(0, k - 1); v !== 0; v = FastBit32.nextCombination(v)) {
+    visit(v);
+}
+```
 
 ### ECS Component Mask Query
 
@@ -360,6 +383,19 @@ const flags = new FastBit32()
 ## Common Mistakes
 
 ```javascript
+// WRONG: nextCombination ends at 0, never -1 (-1 is the k = 32 combination)
+while (v !== -1) v = FastBit32.nextCombination(v); // never ends the way you expect
+// RIGHT: loop on v !== 0
+
+// WRONG: nextSubset(0, m) is not a sentinel -- it wraps to m, so this loop never
+// ends (and for m = -1 the body never runs at all)
+for (let s = m; s !== -1; s = FastBit32.nextSubset(s, m)) visit(s);
+// RIGHT: visit, then break on 0 (see the recipe above)
+
+// WRONG: (1 << 32) - 1 is 0, not 32 ones
+const all = (1 << 32) - 1;
+// RIGHT: FastBit32.rangeMask(0, k - 1)
+
 // WRONG: Bit index out of range -- silently wraps to bit 0
 flags.add(32);
 

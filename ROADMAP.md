@@ -21,8 +21,8 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | **S2a DONE 2026-10-10** (reviewer APPROVED round 4, qa PASS; uncommitted). S2b (competitor matrix) planned, needed before S8 |
 | **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.3.0 (folded with S4; 1.2.2 never released) | internal, output-identical | **RELEASED 1.3.0 2026-10-11** (with S4) |
 | **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | **RELEASED 1.3.0 2026-10-11** (with S3) |
-| **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | 1.4.0 | additive, new export | in progress |
-| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | planned |
+| **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | 1.4.0 | additive, new export | **RELEASED 1.4.0 2026-10-11** |
+| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | DONE 2026-10-11 (select/nextSubset/nextCombination; reviewers APPROVED, qa PASS; uncommitted, awaiting /release 1.5.0; FastBit1024.select and reverse/rotl/rotr rejected) |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
@@ -295,6 +295,11 @@ entities x 12 random bits, hasAll(signature) over all, one process per shape):
 | flat FastBit64 (lo/hi fields) | 50 | 1.05 ns | 0.82 ns |
 | 2 x FastBit32 + orchestrator | 115 | 2.24 ns | 1.01 ns |
 | FastBit1024(64) (exists, 1.4.0) | 403 | 4.1 ns | 2.0 ns |
+
+Probe: `benchmark/experiments/fb64-shapes.mjs` (research only). Re-run after the
+1.4.0 release (load 3.3-3.6, two processes per shape): flat 0.96-1.00 / 0.75-0.95
+ns, composed 1.80-1.95 / 0.98-1.03 ns, FastBit1024(64) 4.41-4.46 / 1.89-1.92 ns
+(hasAll / lowest); same B/entity. The ratios hold.
 
 Scheduled as **S9, the last chapter** (after S8): it follows the 2.0.0 input
 law (S6) and costs little to build and measure. A 64 x 64 = 4096 structure is
@@ -1137,7 +1142,7 @@ DONE WHEN
   llms.txt cover the new export; README states the two input laws.
 ```
 
-**S4b progress (2026-10-11, coder, uncommitted).** `FastBit1024` shipped in the working tree (additions only;
+**S4b progress (2026-10-11; RELEASED as 1.4.0 the same day).** `FastBit1024` shipped in the working tree (additions only;
 existing bodies byte-identical). Gates added: T0/T1/T2/T3/T5 rows, T6 lane, perf-gate scenario, witness `slot`
 mode (5 HOT-gated rows (amended, see SC-5 a), a `has` check-cost info row, the `foilWordScan` foil), T9 controls `fb1024-sparse` and
 `fb1024-nofull` (red), and test/FastBit1024.test.mjs. acquire+release 5.4 -> 3.2 ns (RESEARCH 13 "Shipped
@@ -1170,11 +1175,11 @@ record). Awaiting review round 3.
 ```markdown
 ---
 package: "@zakkster/lite-fastbit32"
-version_target: 1.4.0
-status: planned (queue)
+version_target: 1.5.0
+status: greenlit 2026-10-11 (maintainer): select, nextSubset, nextCombination
 gc_maxMajor: 0
 alloc_bytes_per_op: 0
-depends_on: [S4]
+depends_on: [S4b released as 1.4.0]
 ---
 
 # lite-fastbit32 -- select, subsets, combinations -- or a rejection ledger
@@ -1183,18 +1188,84 @@ PURPOSE
   RESEARCH Tier 2. Each member must name a real use (a suite consumer or a
   documented recipe) BEFORE coding, or it is rejected into the ledger.
 
-QUEUE (greenlight each separately)
-  1. select(k) -- k-th set bit, branchless 5-step popcount descent. Use:
-     lite-pick N <= 32 random eligible pick. Law: select(rank(b)) === b.
-  2. FastBit32.nextSubset(sub, mask) -- `(sub - 1) & mask`. Use: subset DP,
-     combo checks. Law: enumerates exactly 2^count(mask) submasks.
-  3. FastBit32.nextCombination(v) -- Gosper. Law: popcount preserved, strictly
-     increasing, enumerates C(32, k).
-  4. reverse() / rotl(n) / rotr(n) -- only if a consumer appears.
+CONSUMER CHECK (2026-10-11, orchestrator): no suite package needs any member.
+  The suite dependents (LiteTools, LiteDepth, LiteEcs, LiteTweenPro,
+  LiteFXPro) use add/has/remove/forEach/hasAll/countMasked only. lite-pick,
+  named below as select's consumer, holds eligibility in a Uint8Array, not a
+  mask. The maintainer greenlit the first three anyway (documented-recipe use).
 
-PER MEMBER
-  oracle-verified body; T0 law; T5 subject; T6 lane; perf scenario; witness
-  entry; d.ts; README recipe; CHANGELOG line. Or a ledger line saying why not.
+QUEUE
+  1. GREENLIT. select(k) -- k-th set bit (0-based), branchless 5-step popcount
+     descent; -1 when k >= count(). Use (recipe): uniform random live flag,
+     `select((rand * count()) | 0)`. Laws: select(rank(b)) === b for a set b;
+     rank(select(k)) === k for 0 <= k < count(). FastBit32 input law: k outside
+     0..31 is unspecified until S6 (pin it, like rank) [superseded by settle
+     (b): -1 for any int32 k outside 0..count()-1]. Planner decides whether
+     FastBit1024 gets select(k) too (O(non-empty words), fails closed: k must be
+     an integer 0 <= k < size, else RangeError -- or -1 past size; settle it).
+  2. GREENLIT. static FastBit32.nextSubset(sub, mask) -- `(sub - 1) & mask`.
+     Use (recipe): subset DP, enumerate every submask of mask. Law: from mask
+     down to 0 it yields exactly 2^count(mask) distinct submasks (0 last),
+     bit 31 included (int32 wrap of `-2^31 - 1` is correct under `&`).
+  3. GREENLIT. static FastBit32.nextCombination(v) -- Gosper's hack, no
+     division: `c = v & -v; r = v + c; ((r ^ v) >>> 2 >>> ctz(c)) | r`.
+     Use (recipe): enumerate every k-of-32 flag set. Laws: popcount preserved;
+     strictly increasing as unsigned; enumerates exactly C(32, k). The end of
+     the sequence (the top k bits set, where r overflows bit 31) must be a
+     defined sentinel (planner settles: 0, never a valid k >= 1 combination,
+     or -1); v = 0 and v = -1 (k = 32) too.
+  4. REJECTED (ledger). reverse() / rotl(n) / rotr(n): no consumer, no recipe.
+     Reopen only when a consumer appears.
+
+SETTLED 2026-10-11 (maintainer, on the S5 planner's calls):
+  (a) FastBit1024.select(k): NO for 1.5.0 -- ledger; reopen when a consumer
+      appears (it would be the only loop-bearing op outside the iterators,
+      clear, hasAll and hasAny, with no flat witness row).
+  (b) FastBit32.select(k): `q = k | 0` plus the `| q` sign term -- -1 for
+      every int32 outside 0..count()-1, select(x) === select(x | 0) otherwise.
+      Pinned until S6 (Pinned.test.mjs).
+  (c) nextCombination end sentinel: 0 (-1 is the k = 32 combination). The
+      brief's formula ends at 0 only for k <= 2 (the r ^ v carry out of bit 31
+      is lost; k = 3 top block -> 1). Fixed form, branchless:
+      `(((r ^ v) >>> 2 >>> (31 - clz32(c))) | r) & ((r | -r) >> 31)`.
+      f(0) = 0, f(-1) = 0. Orchestrator check: walks for k = 1..4, 28..32
+      visit exactly C(32, k) words, popcount k, strictly increasing unsigned.
+  (d) nextSubset / nextCombination return a signed int32 (like rangeMask).
+
+S5 progress (2026-10-11, uncommitted)
+  Shipped in the working tree for 1.5.0: FastBit32#select, static nextSubset,
+  static nextCombination (FastBit32.js +54/-0; 154832 golden vectors identical
+  to 1.4.0). d.ts, README + llms recipes, CHANGELOG [Unreleased] written.
+  Bundle (esbuild 0.28.2, gzip -9): whole 2072 -> 2254 B, { FastBit32 } 879 ->
+  1059 B, { FastBit1024 } 1006 -> 1006 B, all-but-FastBit1024 1302 -> 1485 B.
+  Witness HOT (two fast runs, node v26.8.2, M4 Pro, load ~4-5, net ns/op): select
+  ~3.25-3.35 (ratio <= 1.02), nextSubset ~0.10-0.21 (<= 1.17), nextCombination
+  ~0.35-0.43 (<= 1.16); select is an order of magnitude more than the
+  others (~3.3 ns vs ~0.1-0.4 ns) and still flat. T6 S5 lane 0 B/op on Node,
+  all 6 key-matrix lanes (gated < 0.1; bop-box control red at ~16).
+  RISK (d8 probe, jsvu, pointer compression on, 1 MB semi-space, 2M calls):
+  a static result outside [-2^30, 2^30) boxes (12 B) through an optimized,
+  non-inlined call (--no-turbo-inlining: 23 scavenges each for
+  nextSubset(0, 0x7FFFFFFF) and nextCombination(0x40000000), ~12 B/call;
+  0x3FFFFFFF result 0; inlined 0). A never-optimized (interpreted) callee
+  also boxes its intermediates (~8 boxes/call for nextCombination(0x40000000):
+  184 scavenges). select returns -1..31, unaffected.
+  Node Smis are 32-bit, so T6 reads 0. S7 backlog: measure a d8/browser row
+  for the statics (FB-12).
+  Gates: T0 laws, T2 rows, T5 subjects, T6 lane, T7 soak, 3 witness HOT rows
+  (NOISE median over 44 rows), 4 T9 controls, test/S5Members.test.mjs (14 tests,
+  4 suites), Pinned S5 (7), test/S5QA.test.mjs (qa: 40 tests, 7 suites, incl.
+  a 1.4.0 parity gate via `git show`). npm test: 345 tests, 344 pass, 1 todo
+  (existing gateFlat). qa PASS 2026-10-11.
+  Ledger: FastBit1024.select REJECTED for 1.5.0 (settle a); reverse / rotl /
+  rotr REJECTED (no consumer, no recipe). Reopen only when a consumer appears.
+
+PER MEMBER (lean build, see section 1b)
+  oracle-verified body (exhaustive where cheap: all 2^count submasks for
+  sampled masks, every combination for k <= 4 and k >= 28, structured +
+  random words for select); T0 law; T5 subject; T6 lane 0 B/op; witness HOT
+  entry; d.ts; README + llms recipe; CHANGELOG line. No per-member perf-gate
+  scenario: T6 proves 0 B/op and the witness proves flat. Or a ledger line.
 
 DONE WHEN
   every queued member is shipped or rejected on the record
@@ -1268,11 +1339,30 @@ ASSERTIONS
     FastBit32's permissive fail-open (hasAll(undefined) === true, FB-02 class
     since 1.2.1) is pinned and documented
   - revert-check: the new T1/T4 gates fail on 1.4.0
+  - S5 qa F1 (2026-10-11): FastBit32.nextCombination(v) reads `v + c`, so a
+    string / array / Date concatenates (nextCombination('3') === 31, numeric
+    answer 5; valueOf read 4 times). select uses `k | 0`, nextSubset subtracts.
+    Settle with SC-3: coerce once (`v | 0`, one op) or fail closed on the
+    checked twin. Pinned in test/S5QA.test.mjs ("FINDING pin").
   - perf gate + T6 0 B/op on the default class; the mixed-site lane is recorded
+
+PACKAGING (maintainer direction, 2026-10-11): a v2-only changelog ships, the
+  1.x history stays in the repo only.
+  - CHANGELOG.md (in files[]) starts fresh at [2.0.0] and opens with one line
+    linking the 1.x history on GitHub. Keeping the name means the suite law
+    ("CHANGELOG.md per package"), /release (rewrites the CHANGELOG.md head),
+    README:544 and Hygiene.test.mjs all keep working unchanged.
+  - The 1.0.0..1.5.x entries move verbatim to CHANGELOG-1.x.md, NOT in files[].
+  - Hygiene.test.mjs: ASCII-check CHANGELOG-1.x.md too, and assert it is
+    absent from files[] and from `npm pack --dry-run`.
+  - Scope of the saving: the npm tarball only (CHANGELOG.md is ~24 kB raw,
+    ~11 kB gzip at 1.5.0, before 2.0.0's own entry). It does not change the
+    JS bundle a consumer ships; esbuild never reads the changelog.
 
 DONE WHEN
   SC-2 and SC-3 SETTLED; one stored form; every cold door fails closed; hot
-  bodies unchanged; MIGRATION written
+  bodies unchanged; MIGRATION written; the v2-only CHANGELOG.md ships and
+  CHANGELOG-1.x.md stays out of the tarball
 ```
 
 ===============================================================================
@@ -1303,6 +1393,8 @@ TASKS
     requires component 31.
   - `#measure` mode: the S2 position sweep in the browser, printed. Record the
     Chrome numbers in RESEARCH open question 1 and close it.
+    Also a d8/browser B/op row for nextSubset / nextCombination (FB-12, S5
+    boxing risk: results outside [-2^30, 2^30) box 12 B on pointer compression).
   - `#profile` mode: lite-layout-profiler, dormant otherwise.
   - demo/Demo.test.mjs (`npm run demo`): kernels are 0 B/op (perf-gate),
     and the ECS panel's matcher agrees with the oracle at component 31.

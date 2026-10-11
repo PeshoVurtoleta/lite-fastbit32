@@ -7,7 +7,8 @@
 
 import {
     oHasAll, oHasAny, oHasNone, oCountMasked, oUnion, oIntersect, oDifference, ubit,
-    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf, oEquals
+    oNextSetBit, oPrevSetBit, oRank, oIsSubsetOf, oEquals,
+    oSelect, oCount, oNextSubset, oNextCombination
 } from './oracle.mjs';
 
 const CURSOR_FROM = [0, 1, 15, 16, 29, 30, 31];
@@ -60,6 +61,16 @@ export function run(ctx) {
             }
             if (!new FB().set(w).equals(inst)) fails.push('T2: set lane ' + names[vi] + ' form ' + f);
             if (!new FB().copy(inst).equals(inst)) fails.push('T2: copy lane ' + names[vi] + ' form ' + f);
+            // S5 per build form: select at the cursor points, at count() (-1)
+            // and at -1; the statics on the form's raw .value (uint32 double or
+            // int32) must return the oracle's word as a signed int32.
+            for (const k of CURSOR_FROM) {
+                if (inst.select(k) !== oSelect(w, k)) fails.push('T2: select(' + k + ') lane ' + names[vi] + ' form ' + f);
+            }
+            if (inst.select(oCount(w)) !== -1) fails.push('T2: select(count()) lane ' + names[vi] + ' form ' + f);
+            if (inst.select(-1) !== -1) fails.push('T2: select(-1) lane ' + names[vi] + ' form ' + f);
+            if (!Object.is(FB.nextSubset(inst.value, inst.value), oNextSubset(w, w) | 0)) fails.push('T2: nextSubset(v, v) lane ' + names[vi] + ' form ' + f);
+            if (!Object.is(FB.nextCombination(inst.value), oNextCombination(w) | 0)) fails.push('T2: nextCombination lane ' + names[vi] + ' form ' + f);
         }
 
         for (let mi = 0; mi < lanes.length; mi++) {
