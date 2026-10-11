@@ -40,6 +40,7 @@
 
 import {
   FastBit32,
+  FastBit1024,
   forEachArray,
   forEachObject,
   forEachMapped,
@@ -159,7 +160,7 @@ const SCALAR = {
 // 1.34 ns at outer=1024), so a short loop never left the cache it claimed to flood.
 const STREAM_STMT = 'acc=(acc+STREAM[si])|0; si=(si+4099)&SMASK;';
 
-function makeScalarLoop(stmt, pressure) {
+function makeScalarLoop(stmt, pressure, store = 'inst.value=w;') {
   const stream = pressure ? STREAM_STMT : '';
   // eslint-disable-next-line no-new-func
   return new Function(
@@ -167,7 +168,7 @@ function makeScalarLoop(stmt, pressure) {
     'let si=SI[0], acc=0;\n' +
     'for(let o=0;o<outer;o++){\n' +
     '  for(let i=0;i<corpus.length;i++){\n' +
-    '    const w=corpus[i]; inst.value=w;\n' +
+    '    const w=corpus[i]; ' + store + '\n' +
     '    let r;\n' +
     '    ' + stmt + '\n' +
     '    acc^=r|0;\n' +
@@ -176,6 +177,35 @@ function makeScalarLoop(stmt, pressure) {
     '}\n' +
     'SINK[0]=acc; SI[0]=si;\n'
   );
+}
+
+// --- FastBit1024 (S4b): mode 'slot', param p = word 0..31 --------------------
+// ONE FastBit1024 and ONE corpus per process, RE-SHAPED per param before every
+// timed pass (outside the timed loops): separate instances per param measured
+// their heap placement, not the data (round-2 review: same data in 32 instances
+// spread 2.50-6.54 ns; one instance per process 2.26-2.66 ns). `w` (the corpus
+// entry) is the slot 32p + 17. Pool shape (acquire, nextClearBit, has,
+// hasUnchecked, foilWordScan): every bit set except slot w. Set shape (lowest,
+// highest): only slot w set. The loop never changes the state (acquire is
+// paired with its release). hasUnchecked is has() with the fail-closed check
+// removed, inlined: printed beside has to price the check (info row).
+// foilWordScan is the slot-mode must-fail control: a linear scan for the first
+// non-full word, O(p), gated RED in HOT.
+const SLOT = {
+  acquire: 'r=inst.acquire(); inst.release(r);',
+  nextClearBit: 'r=inst.nextClearBit();',
+  has: 'r=inst.has(w)|0;',
+  hasUnchecked: 'r=((inst._data[w>>>5]&(1<<(w&31)))!==0)|0;',
+  lowest: 'r=inst.lowest();',
+  highest: 'r=inst.highest();',
+  foilWordScan: 'r=0; while(inst._data[r]===-1) r++;',
+  _floor: 'r=w;',
+};
+function reshapeSlot(s, op, p) {
+  const free = (p << 5) + 17;
+  s.clear();
+  if (op === 'lowest' || op === 'highest') s.add(free);
+  else for (let i = 0; i < 1024; i++) if (i !== free) s.add(i);
 }
 
 // --- iteration (slope) statement table --------------------------------------
@@ -295,6 +325,34 @@ function main() {
         setK(params[pi]);
         bestPair(() => call(loop), () => call(floorLoop), reps);
         const o = BEST[0] * 1e6 / N, f = BEST[1] * 1e6 / N;
+        if (o < opMin[pi]) opMin[pi] = o;
+        if (f < flMin[pi]) flMin[pi] = f;
+        rn.push(o - f);
+      }
+      roundNets.push(rn);
+    }
+    finish(spec, opMin, flMin, roundNets);
+    return;
+  }
+
+  if (mode === 'slot') {
+    const CORPUS = spec.corpus || 2048;
+    const outer = spec.outer || 512;
+    const stmt = SLOT[op];
+    if (typeof stmt !== 'string') throw new Error('run-one: unknown FastBit1024 op ' + op);
+    const loop = makeScalarLoop(stmt, pressure, '');
+    const floorLoop = makeScalarLoop(SLOT._floor, pressure, '');
+    const totalOps = CORPUS * outer;
+    const inst = new FastBit1024();
+    const corpus = new Int32Array(CORPUS);
+    for (let ri = 0; ri < rounds; ri++) {
+      const rn = [];
+      for (let pi = 0; pi < P; pi++) {
+        reshapeSlot(inst, op, params[pi]);
+        corpus.fill((params[pi] << 5) + 17);
+        const call = (L) => L(inst, corpus, EMPTY_SETS, EMPTY_LUT, outer, SINK, STREAM, SMASK, SI, null);
+        bestPair(() => call(loop), () => call(floorLoop), reps);
+        const o = BEST[0] * 1e6 / totalOps, f = BEST[1] * 1e6 / totalOps;
         if (o < opMin[pi]) opMin[pi] = o;
         if (f < flMin[pi]) flMin[pi] = f;
         rn.push(o - f);

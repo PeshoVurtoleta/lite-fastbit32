@@ -1,19 +1,22 @@
-# @zakkster/lite-fastbit32 v1.3.0
+# @zakkster/lite-fastbit32 v1.4.0
 
-> Zero-GC, monomorphic, branchless 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code.
+> Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless.
 
 ## Overview
 
-FastBit32 is a single-class library that wraps a plain unsigned 32-bit integer with a fluent, chainable API for bitwise flag operations. It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations. Zero branches.
+FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle (an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2072 B whole module, 879 B FastBit32 alone, 1006 B FastBit1024 alone.
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
-**When NOT to use FastBit32:** You need more than 32 flags (use `@zakkster/lite-bits`), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
+**When NOT to use FastBit32:** You need more than 32 flags (up to 1024: `FastBit1024` below, fail-closed; more: `@zakkster/lite-bits`), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
 
 ## Import
 
 ```javascript
 import { FastBit32, BitMapper, VERSION } from '@zakkster/lite-fastbit32';
+
+// 1.4.0: the 32 x 32 two-level bitmap (pools and id sets up to 1024; fails closed)
+import { FastBit1024 } from '@zakkster/lite-fastbit32';
 
 // Standalone iteration helpers
 import {
@@ -21,7 +24,7 @@ import {
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
 
-// VERSION is the package version string ('1.3.0'), synced with package.json.
+// VERSION is the package version string ('1.4.0'), synced with package.json.
 ```
 
 ## Constructor
@@ -186,6 +189,53 @@ forEachMapped(mask, mapper, (name, bit) => {
 });
 ```
 
+## FastBit1024 -- 32 x 32 two-level bitmap (1.4.0)
+
+A fixed-geometry bitmap of up to 1024 bits for slot pools and dense id sets. Storage: `Int32Array(32)` plus two 32-bit summaries (`_active`: word non-empty, `_full`: word all ones) and an exact count, kept by every mutator. No coupling to FastBit32 (tree-shakes alone).
+
+**Input law: FastBit1024 FAILS CLOSED on every index; FastBit32's hot ops trust the caller (SC-3, open, decided in S6).** An index must be an integer `0 <= i < capacity` (`nextSetBit`: `0 <= from <= capacity`). Anything else throws `RangeError` (undefined, null, NaN, 1.5, '3', true, -1, capacity, 2^32, {}); a Symbol, a BigInt or a null-prototype object throws `TypeError` from the index arithmetic. `-0` is slot 0. A rejected call writes nothing; the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw. `has(undefined)` throws: it never answers for slot 0. Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`/`hasAny` check `instanceof FastBit1024`: a FastBit1024 from a second installed copy of the package throws `TypeError`.
+
+```javascript
+new FastBit1024(capacity?: number)   // integer 1..1024; undefined -> 1024; else RangeError
+```
+
+| Member | Returns | Cost | Notes |
+|---|---|---|---|
+| `add(bit)` / `remove(bit)` / `toggle(bit)` | `this` | O(1) | RangeError on a bad index |
+| `has(bit)` | `boolean` | O(1) | RangeError on a bad index (the check costs ~0.8 ns, measured) |
+| `acquire()` | slot or `-1` | O(1) | the LOWEST free slot; -1 when full |
+| `release(slot)` | `this` | O(1) | RangeError on a bad index AND on a free slot (double release) |
+| `size` / `capacity` | `number` | O(1) | read-only getters |
+| `isEmpty()` / `isFull()` | `boolean` | O(1) | isFull: every bit below capacity set |
+| `lowest()` / `highest()` | index or `-1` | O(1) | two `clz32`, no loop |
+| `nextClearBit()` | index or `-1` | O(1) | lowest clear bit below capacity |
+| `nextSetBit(from)` | index or `-1` | O(1) | from in 0..capacity; capacity -> -1 |
+| `hasAll(other)` / `hasAny(other)` | `boolean` | O(non-empty words of other) | other must be a FastBit1024, else TypeError (the brand is `instanceof`, so an `Object.create(FastBit1024.prototype)` forgery passes it and is unsupported: no defined answer, and neither method writes to either instance); capacities may differ (exact) |
+| `forEach(cb)` | `this` | O(k + non-empty words) | ascending; hoist cb; each word is read once (snapshot): to mutate during the walk use the nextSetBit cursor |
+| `clear()` | `this` | O(non-empty words) | |
+
+```javascript
+import { FastBit1024 } from '@zakkster/lite-fastbit32';
+
+const slots = new FastBit1024(500);           // slots 0..499
+const bullets = new Float64Array(500 * 4);    // x, y, vx, vy per slot
+
+function spawn() {
+    const s = slots.acquire();                // lowest free slot, or -1
+    if (s === -1) return -1;                  // pool exhausted
+    bullets[s * 4] = 0;
+    return s;
+}
+function despawn(s) { slots.release(s); }     // throws on a double release
+
+// closure-free walk over live slots (0 B/op)
+for (let s = slots.nextSetBit(0); s !== -1; s = slots.nextSetBit(s + 1)) {
+    bullets[s * 4] += bullets[s * 4 + 2];
+}
+```
+
+Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty loop): `acquire()+release()` pair ~3.2 ns, `nextClearBit` ~0.5 ns, `lowest` ~0.34-0.37 ns, `highest` ~0.40-0.47 ns, `has` ~0.91-0.98 ns; each flat across "free (or set) slot in word 0..31". 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in that lane); perf-gate 0 scavenges at N and 8N for acquire+release.
+
 ## Critical Caveats
 
 1. **Silent modulo-32 wraparound.** JavaScript bitwise shifts apply `% 32` implicitly. `add(32)` is identical to `add(0)`. `add(40)` is identical to `add(8)`. There is no bounds checking.
@@ -194,7 +244,7 @@ forEachMapped(mask, mapper, (name, bit) => {
 
 3. **No input validation.** Floats are truncated. Negative bit indices are coerced. NaN becomes 0. FastBit32 trusts the caller for maximum performance.
 
-4. **32-bit limit.** Only bits 0-31 are addressable. For larger bitfields, use `@zakkster/lite-bits`.
+4. **32-bit limit.** Only bits 0-31 are addressable. Up to 1024 bits: `FastBit1024` (fixed geometry, fails closed). For larger bitfields, use `@zakkster/lite-bits`.
 
 ## Correct Usage Patterns
 
@@ -334,11 +384,12 @@ copy.add(10);
 flags.has(10); // false -- clone is independent
 ```
 
-## Performance Characteristics
+## Performance Characteristics (FastBit32)
 
 - All single-bit operations: one bitwise instruction, zero branches.
 - `count()`: 5 bitwise operations (Hacker's Delight parallel popcount), zero loops.
 - `lowest()` / `highest()` / `nextClearBit()` / `highestClearBit()`: 2-5 operations using `31 - Math.clz32(...)`, zero loops, zero branches (`clz32(0)` is 32, so the `-1` sentinel comes for free).
+- FastBit1024 is not branchless: it fails closed (a range check and a throw site per index op) and `acquire()` takes the lowest free slot in O(1), about 3.0-3.2 ns per acquire+release pair (numbers above).
 - `forEach` and all standalone helpers: O(k) where k = active bits, not 32.
 - All methods except `clone()` and `deserialize()`: zero allocations.
 - V8 monomorphic: single hidden class for the lifetime of the object.

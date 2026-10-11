@@ -8,6 +8,7 @@ import {
     VERSION,
     FastBit32,
     BitMapper,
+    FastBit1024,
     forEachArray,
     forEachObject,
     forEachMapped,
@@ -103,3 +104,29 @@ forEachMappedObject(fb, mapper, { Position: 1, Velocity: 2 }, (value: number, ke
 forEachMaskPair(fb, fb.clone(), (b: number) => { void b; });
 forEachMaskDiff(fb, fb.clone(), (b: number) => { void b; });
 forEachMaskUnion(fb, fb.clone(), (b: number) => { void b; });
+
+// --- FastBit1024 (1.4.0) -----------------------------------------------------
+const pool = new FastBit1024(500);
+const poolDefault = new FastBit1024();
+const slot: number = pool.acquire();
+const pc: FastBit1024 = pool.release(slot).add(1).remove(1).toggle(2).clear();
+const held: boolean = pool.has(3);
+const psize: number = pool.size;
+const pcap: number = pool.capacity;
+const pe: boolean = pool.isEmpty();
+const pf: boolean = pool.isFull();
+const plo: number = pool.lowest();
+const phi: number = pool.highest();
+const pncb: number = pool.nextClearBit();
+const pnsb: number = pool.nextSetBit(0);
+const pall: boolean = pool.hasAll(poolDefault);
+const pany: boolean = pool.hasAny(poolDefault);
+const peach: FastBit1024 = pool.forEach((b: number) => { void b; });
+void pc; void held; void psize; void pcap; void pe; void pf; void plo; void phi;
+void pncb; void pnsb; void pall; void pany; void peach;
+
+// @ts-expect-error -- hasAll takes another FastBit1024, not a raw mask.
+pool.hasAll(5);
+
+// @ts-expect-error -- capacity is a read-only getter.
+pool.capacity = 64;

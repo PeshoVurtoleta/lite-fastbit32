@@ -331,3 +331,30 @@ the box is elided in both. Not investigated (candidates: field constness --
 unsigned prints `const data field`, signed `data field` -- and per-process code
 layout). The browser
 pointer-compression half is the demo's `#measure` mode (S7).
+
+## FastBit1024 slot rows (S4b, 2026-10-11)
+
+`test/witness/run-one.mjs` mode `slot`: param p = the word (0..31) holding the one free slot 32p + 17 (pool shape:
+acquire, nextClearBit, has) or the one set slot (lowest, highest). ONE instance and one corpus per process,
+re-shaped per param outside the timed loop. Separate instances per param measured heap placement: the same data
+in 32 instances spread 2.50-6.54 ns, and reversing the allocation order moved the slow cells.
+
+- Teeth: `foilWordScan` (`r=0; while(inst._data[r]===-1) r++;`, O(p)) is gated RED in HOT under the lane config
+  and under both SLOT_SLOW configs (165-221 N measured).
+- SLOT_SLOW (acquire and has only): median of 5 passes of best-of-8 reps at outer / 4 (acquire) or outer / 2 (has).
+  This is an estimator change, not a threshold change. The foil and a deliberate word step read the same with and
+  without it.
+- PRESSURE lane: the FastBit1024 rows print as INFO, never gated (maintainer decision). Same-word control, all 32
+  cells on word 5, at the shipped estimator:
+  - PRESSURE `has` failed 4.5 N in 1 of 4 runs and `acquire` in 2 of 4;
+  - the real sweep failed has 4/5 and acquire 2/5;
+  - median of words 0-15 == median of words 16-31;
+  - pass 0 of has reads ~0.6 ns vs ~1.25 ns later.
+
+  The evidence is the same-word control (identical data spreads as much as the real sweep), so the spread is the
+  lane's. The 128 B state is off-heap and V8 does not guarantee its alignment (on the M4 Pro, 128 B cache lines,
+  240/240 sampled backing stores were 128 B aligned: one line; on a 64 B-line host, two or three -- two if 64 B aligned, as observed here; not measured there). A miss is
+  possible; a word-dependent one was not observed.
+- HOT `nextClearBit` on a loaded host (load ~3.3): same-word control spreads 0.014-0.228 ns over 8 runs vs
+  0.029-0.299 ns for the sweep, with whole passes shifting together. This is host noise, not the word. The 6 N
+  gate (~0.18 ns at NOISE 0.03) can flake on a busy host; the full witness needs a quiet one.

@@ -115,5 +115,123 @@ export function run(ctx) {
 
     if (firstFail >= 0) fails.push('T5: replay -> ' + h.replayLine(ctx.seed, firstFail));
 
+    // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
+    try { fb1024Fuzz(ctx, fails); } catch (e) { fails.push('T5 ' + 'FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green: 0 };
+}
+
+// ---- S4b FastBit1024 oracle fuzz (ported from benchmark/experiments/fb1024-check.mjs) --
+// Trials over capacities {1, 2, 31, 32, 33, 63, 64, 65, 500, 991, 992, 993, 1023,
+// 1024} plus random ones. Each trial PRE-FILLS by acquire to a random level
+// (every 4th trial: to capacity, then one acquire must be -1), then runs a mixed
+// op stream: the op comes from the harness RNG, the key from a SECOND xorshift
+// stream. The clear decision is drawn FIRST, every op, from the key stream:
+// clear() fires 1 in 50 ops below capacity 128 and 1 in 2000 at >= 128, so
+// large pools stay near-full. Every 16th op (and the last) checks 8 queries +
+// forEach + the cursor walk against O1024, and I1-I4; then hasAll/hasAny against
+// a random other of the SAME or a DIFFERENT capacity. Coverage is COUNTED and
+// fails closed when a minimum is unmet: acquire === -1 at cap >= 128, acquires
+// in words >= 16, a full word >= 16 (read from the ORACLE, not the class),
+// releases of bit 31 of a word, and clears at cap >= 512 while a word >= 16 holds
+// a bit (the clear-low16 control's teeth). Strict: 3000 trials; TORTURE_FAST=1: 400. The fb1024-sparse (first
+// EMPTY word) and fb1024-nofull controls MUST fail here.
+const CLEARBIG_MIN = 20;
+const FB1024_CAPS = [1, 2, 31, 32, 33, 63, 64, 65, 500, 991, 992, 993, 1023, 1024];
+// Minimums sit ~3x below the TORTURE_FAST counts measured over 5 seeds (see
+// CHANGELOG [Unreleased]; strict runs read ~7x those).
+const FB1024_MIN = { fullBig: 50, acqHigh: 10000, fullHigh: 1000, rel31: 1000, clearBig: CLEARBIG_MIN };
+function fb1024Fuzz(ctx, fails) {
+    const C = ctx.FB1024;
+    const O = ctx.oracle.O1024;
+    const h = ctx.h;
+    const trials = process.env.TORTURE_FAST === '1' ? 400 : 3000;
+    const KEY = new Int32Array(1);
+    KEY[0] = (h.nextU32() | 0) || 0x2545f491;
+    const key = (n) => { let x = KEY[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; KEY[0] = x; return (x >>> 0) % n; };
+    const cov = { fullBig: 0, acqHigh: 0, fullHigh: 0, rel31: 0, clearBig: 0 };
+    let bad = 0;
+    const F = (m) => { if (bad++ < 5) fails.push('T5 FB1024: ' + m); };
+    const LIST = [];
+    const cb = (b) => { LIST.push(b); };
+    const acq = (s, o, cap) => {
+        const got = s.acquire();
+        const want = o.clearLow();
+        if (got !== want) F('acquire cap ' + cap + ' got ' + got + ' want ' + want);
+        if (want !== -1) { o.b[want] = 1; if ((want >>> 5) >= 16) cov.acqHigh++; }
+        else if (cap >= 128 && got === -1) cov.fullBig++;
+    };
+    for (let trial = 0; trial < trials && bad === 0; trial++) {
+        const cap = trial < (trials * 2 / 3) ? FB1024_CAPS[trial % FB1024_CAPS.length] : 1 + key(1024);
+        const s = new C(cap);
+        const o = new O(cap);
+        const level = (trial & 3) === 0 ? cap : key(cap + 1);
+        for (let k = 0; k < level; k++) acq(s, o, cap);
+        if (level === cap) acq(s, o, cap);                 // must be -1
+        const clearOdds = cap >= 128 ? 2000 : 50;
+        const steps = 50 + h.randBelow(3000);
+        for (let k = 0; k < steps && bad === 0; k++) {
+            const i = key(cap);
+            const r = h.randBelow(100);
+            if (key(clearOdds) === 0) {
+                if (cap >= 512 && o.next(512) !== -1) cov.clearBig++;
+                s.clear(); o.b.fill(0);
+            } else if (r < 20) { s.add(i); o.b[i] = 1; }
+            else if (r < 32) { s.remove(i); o.b[i] = 0; }
+            else if (r < 40) { s.toggle(i); o.b[i] ^= 1; }
+            else if (r < 70) acq(s, o, cap);
+            else {
+                const x = o.next(i);
+                if (x !== -1) { s.release(x); o.b[x] = 0; if ((x & 31) === 31) cov.rel31++; }
+                else if (o.b[i] === 0) {
+                    let threw = false;
+                    try { s.release(i); } catch { threw = true; }
+                    if (!threw) F('release of free slot ' + i + ' did not throw cap ' + cap);
+                }
+            }
+            if ((k & 15) !== 0 && k !== steps - 1) continue;
+            if (o.fullWordFrom(16)) cov.fullHigh++;
+            const f = key(cap + 1);
+            const cnt = o.count();
+            if (s.lowest() !== o.lowest()) F('lowest cap ' + cap + ' got ' + s.lowest() + ' want ' + o.lowest());
+            if (s.highest() !== o.highest()) F('highest cap ' + cap + ' got ' + s.highest() + ' want ' + o.highest());
+            if (s.nextClearBit() !== o.clearLow()) F('nextClearBit cap ' + cap + ' got ' + s.nextClearBit() + ' want ' + o.clearLow());
+            if (s.size !== cnt) F('size cap ' + cap + ' got ' + s.size + ' want ' + cnt);
+            if (s.isEmpty() !== (cnt === 0)) F('isEmpty cap ' + cap);
+            if (s.isFull() !== (cnt === cap)) F('isFull cap ' + cap);
+            if (s.has(i) !== (o.b[i] === 1)) F('has(' + i + ') cap ' + cap);
+            if (s.nextSetBit(f) !== o.next(f)) F('nextSetBit(' + f + ') cap ' + cap + ' got ' + s.nextSetBit(f) + ' want ' + o.next(f));
+            const want = o.list().join();
+            LIST.length = 0;
+            s.forEach(cb);
+            if (LIST.join() !== want) F('forEach cap ' + cap);
+            const walk = [];
+            for (let b = s.nextSetBit(0), n = 0; b !== -1 && n <= cap; b = s.nextSetBit(b + 1), n++) walk.push(b);
+            if (walk.join() !== want) F('cursor walk cap ' + cap);
+            const inv = ctx.oracle.fb1024Invariants(s);
+            if (inv !== null) F(inv + ' cap ' + cap);
+        }
+        // relations: a random other of the same capacity, or (every 3rd trial) a different one
+        const ocap = (trial % 3) === 2 ? 1 + key(1024) : cap;
+        const t = new C(ocap);
+        const ot = new Uint8Array(ocap);
+        const mode = key(4);
+        for (let k = 0; k < 20; k++) {
+            const i = key(ocap);
+            if (mode === 0 ? (i < cap && o.b[i] === 1) : true) { t.add(i); ot[i] = 1; }
+        }
+        let all = true;
+        let any = false;
+        for (let b = 0; b < ocap; b++) {
+            const here = b < cap && o.b[b] === 1;
+            if (ot[b] === 1 && !here) all = false;
+            if (ot[b] === 1 && here) any = true;
+        }
+        if (s.hasAll(t) !== all) F('hasAll cap ' + cap + ' other cap ' + ocap);
+        if (s.hasAny(t) !== any) F('hasAny cap ' + cap + ' other cap ' + ocap);
+    }
+    if (bad > 0) { fails.push('T5 FB1024: ' + bad + ' mismatch(es); replay -> ' + h.replayLine(ctx.seed, 0)); return; }
+    for (const k of Object.keys(FB1024_MIN)) {
+        if (!(cov[k] >= FB1024_MIN[k])) fails.push('T5 FB1024 coverage: ' + k + ' = ' + cov[k] + ' < ' + FB1024_MIN[k] + ' (fail closed: the fuzz did not reach near-full pools)');
+    }
+    ctx.measures.fb1024Coverage = cov;
 }

@@ -143,3 +143,56 @@ export function oEquals(a, b) {
     for (let i = 0; i < 32; i++) if (ubit(a, i) !== ubit(b, i)) return false;
     return true;
 }
+
+// ---- FastBit1024 truth model (S4b) ------------------------------------------
+// A Uint8Array(cap) of bits and naive scans; shares no code or idiom with the
+// class (no summaries, no clz32). Ported from benchmark/experiments/fb1024-check.mjs.
+export class O1024 {
+    constructor(cap) { this.cap = cap; this.b = new Uint8Array(cap); }
+    lowest() { for (let i = 0; i < this.cap; i++) if (this.b[i]) return i; return -1; }
+    highest() { for (let i = this.cap - 1; i >= 0; i--) if (this.b[i]) return i; return -1; }
+    clearLow() { for (let i = 0; i < this.cap; i++) if (!this.b[i]) return i; return -1; }
+    next(f) { for (let i = f; i < this.cap; i++) if (this.b[i]) return i; return -1; }
+    count() { let c = 0; for (let i = 0; i < this.cap; i++) c += this.b[i]; return c; }
+    list() { const out = []; for (let i = 0; i < this.cap; i++) if (this.b[i]) out.push(i); return out; }
+    // true iff some 32-bit word w >= w0 lies wholly below cap with all 32 bits set
+    fullWordFrom(w0) {
+        for (let w = w0; w < 32 && (w << 5) + 32 <= this.cap; w++) {
+            let all = true;
+            for (let b = 0; b < 32; b++) if (!this.b[(w << 5) + b]) { all = false; break; }
+            if (all) return true;
+        }
+        return false;
+    }
+}
+
+// I1-I4 on a FastBit1024 (reads its fields). Returns null or the first breach.
+// Bits are read per position with `>>> b & 1`, never through a summary.
+export function fb1024Invariants(s) {
+    let n = 0;
+    for (let w = 0; w < 32; w++) {
+        const d = s._data[w];
+        if ((((s._active >>> w) & 1) === 1) !== (d !== 0)) return 'I1 active word ' + w;
+        if ((((s._full >>> w) & 1) === 1) !== (d === -1)) return 'I2 full word ' + w;
+        for (let b = 0; b < 32; b++) {
+            if (((d >>> b) & 1) === 1) { n++; if ((w << 5) + b >= s._cap) return 'I4 bit ' + ((w << 5) + b) + ' >= cap ' + s._cap; }
+        }
+    }
+    if (n !== s._n) return 'I3 n=' + s._n + ' want ' + n;
+    return null;
+}
+
+// Full observable + internal state as one string (byte-identity checks).
+export function fb1024Snapshot(s) {
+    return s._cap + '|' + s._active + '|' + s._full + '|' + s._n + '|' + Array.prototype.join.call(s._data, ',');
+}
+
+// The T3 bad-index matrix (capacity-relative rows are built by the caller).
+export function fb1024BadInputs(cap) {
+    return [
+        ['undefined', undefined], ['null', null], ['NaN', NaN], ['1.5', 1.5], ["'3'", '3'],
+        ['true', true], ['-1', -1], ['cap', cap], ['1024', 1024], ['2^32', 2 ** 32],
+        ['Symbol', Symbol('x')], ['BigInt', 3n], ['{}', {}], ['null-proto', Object.create(null)],
+        ['Infinity', Infinity], ['-2^31', -(2 ** 31)]
+    ];
+}

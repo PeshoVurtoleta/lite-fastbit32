@@ -189,6 +189,23 @@ const ITER_OPS = [
   'forEach', 'forEachArray', 'forEachObject', 'forEachMapped',
   'forEachMappedObject', 'forEachMaskPair', 'forEachMaskDiff', 'forEachMaskUnion',
 ];
+// S4b FastBit1024: flat across "the free (or set) slot is in word 0..31", ONE
+// instance per process re-shaped per param (run-one.mjs). Gated with the lane's
+// NOISE/EPS at the normal lane config (they are NOT part of the NOISE median: no
+// recalibration). hasUnchecked is an info row that prices has()'s check;
+// foilWordScan (O(p) first-non-full-word scan) is the slot-mode teeth, RED in HOT.
+const FB1024_OPS = ['acquire', 'nextClearBit', 'lowest', 'highest', 'has'];
+const SLOT_FULL = Array.from({ length: 32 }, (_, i) => i);
+const SLOT_FAST = [0, 1, 15, 16, 30, 31];
+// ESTIMATOR CHANGE for two rows (not a threshold change; reviewer-accepted,
+// round 3): acquire (~3.2 ns) and has (~0.9 ns) run 10x / 3x longer per rep than
+// the cheap ops at the lane outer, so one host disturbance covers more of each
+// rep. For these two rows only: outer / div per rep, best of 8 reps, median of 5
+// passes. Evidence that it does not blunt the gate: the slot foil (an O(word)
+// scan) is gated RED under the lane config AND under both SLOT_SLOW configs
+// below, and a deliberate word step measures the same with and without it
+// (round-3 review). Gates, NOISE and EPS are unchanged.
+const SLOT_SLOW = { acquire: { div: 4, reps: 8, rounds: 5 }, has: { div: 2, reps: 8, rounds: 5 } };
 const HOT_FOILS = ['foilKernighan', 'foilEarlyExit', 'foilNaiveLowest', 'foilSet', 'foilSubEps'];
 
 const range = (n) => Array.from({ length: n }, (_, i) => i);
@@ -448,6 +465,50 @@ function run() {
     // 5. same-corpus control: the harness's own null must be flat at d0/d32 too.
     for (const [mode, params] of [['density', dens], ['position', pos]]) {
       gateFlat(spawn({ subject: 'ctlRead', op: 'ctlRead', lane, mode, params }), `ctlRead (${mode}) [control]`);
+    }
+    // 5b. FastBit1024 rows (S4b): flat across the word holding the slot.
+    // GATED in HOT only. PRESSURE prints them as INFO (maintainer decision,
+    // 2026-10-11): on a SAME-WORD control (all 32 cells hold word 5) at the
+    // shipped estimator, PRESSURE has failed the 4.5 N spread gate in 1 of 4 runs
+    // and acquire in 2 of 4; the real sweep failed has 4/5 and acquire 2/5. No word
+    // pattern (median of words 0-15 == median of 16-31); pass 0 of has reads ~0.6
+    // ns vs ~1.25 later. The evidence is the same-word control: identical data in
+    // every cell spreads as much as the real sweep, so the PRESSURE spread is the
+    // lane, not the op. (The 128 B Int32Array is off-heap and V8 does not guarantee
+    // its alignment: on the M4 Pro, 128 B lines, 240/240 sampled stores were 128 B
+    // aligned -- one line; two or three on a 64 B-line host (two if 64 B aligned,
+    // as observed here; not measured there). A miss is possible; a word-dependent
+    // one was not observed.)
+    // (benchmark/METHODOLOGY.md, RESEARCH 13.)
+    const slots = FAST ? SLOT_FAST : SLOT_FULL;
+    const fbHas = {};
+    for (const op of [...FB1024_OPS, 'hasUnchecked']) {
+      const sl = SLOT_SLOW[op];
+      const r = spawn(sl ? { subject: 'fb1024', op, lane, mode: 'slot', params: slots, outer: CFG[lane].outer / sl.div, reps: sl.reps, rounds: sl.rounds }
+        : { subject: 'fb1024', op, lane, mode: 'slot', params: slots });
+      if (op === 'hasUnchecked') {
+        fbHas.unchecked = median(r.net);
+        note(`  (info) FastBit1024 has() check cost ${lane}: has ${f3(fbHas.has)} ns - unchecked read ${f3(fbHas.unchecked)} ns = ${f3(fbHas.has - fbHas.unchecked)} ns (median over words)`);
+      } else {
+        let m;
+        if (lane === 'HOT') m = gateFlat(r, `FastBit1024.${op} (slot word)`);
+        else {
+          m = metrics(r.net, EPS[lane]);
+          note(`  INFO ${lane.padEnd(8)} ${('FastBit1024.' + op + ' (slot word)').padEnd(26)} spread=${f3(m.spread)}ns=${f2(m.spread / NOISE[lane])}N (not gated: PRESSURE FB1024 rows are info-only) ` +
+            `cells=[${r.net.map(f2).join(',')}]`);
+        }
+        note(`      FastBit1024.${op} ${lane} median net ${f3(median(r.net))} ns [${f3(m.min)},${f3(m.max)}]`);
+        if (op === 'has') fbHas.has = median(r.net);
+      }
+    }
+    // slot-mode teeth: an O(p) scan for the first non-full word MUST read non-flat.
+    if (lane === 'HOT') {
+      // gated under the lane config AND under each SLOT_SLOW estimator it protects
+      for (const [tag, cfg] of [['lane', null], ['acquire-est', SLOT_SLOW.acquire], ['has-est', SLOT_SLOW.has]]) {
+        const fw = spawn(cfg ? { subject: 'fb1024', op: 'foilWordScan', lane, mode: 'slot', params: slots, outer: CFG[lane].outer / cfg.div, reps: cfg.reps, rounds: cfg.rounds }
+          : { subject: 'fb1024', op: 'foilWordScan', lane, mode: 'slot', params: slots });
+        gateRed(fw, `foilWordScan (${tag})`, (m) => `FOIL foilWordScan [HOT slot, ${tag}] ratio ${f2(m.ratio)} spread ${f2(m.spread / NOISE.HOT)}N -- the slot rows have no teeth`);
+      }
     }
     // 6. foils.
     if (lane === 'HOT') {

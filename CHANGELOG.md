@@ -3,6 +3,80 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.4.0] - 2026-10-11
+
+### Added
+
+S4b (ROADMAP S4b, SC-5 settled A, RESEARCH 13). Additions only: every existing
+`FastBit32.js` body (FastBit32, BitMapper, the free iterators) is byte-identical;
+the header comment gains one surface paragraph.
+
+- `FastBit1024`, a named export of `FastBit32.js`: a fixed 32 x 32 two-level
+  bitmap (`Int32Array(32)` + `_active`/`_full` word summaries + exact count),
+  capacity an integer 1..1024 (`undefined` -> 1024). No import or runtime
+  coupling to `FastBit32`; `sideEffects: false` is unchanged.
+- Surface: `add/remove/toggle/has(bit)`, `acquire()` (the LOWEST free slot, -1
+  when full), `release(slot)`, `size`, `capacity`, `isEmpty()`, `isFull()`,
+  `lowest()`, `highest()`, `nextClearBit()`, `nextSetBit(from)` (from
+  0..capacity), `hasAll(other)`/`hasAny(other)` (another FastBit1024; capacities
+  may differ, the answer is exact), `forEach(cb)`, `clear()`.
+- Fails closed on every index, `has` included: `RangeError` unless the index is
+  an integer `0 <= i < capacity`; Symbol, BigInt and null-prototype objects throw
+  `TypeError` from `&`. `release` of a free slot throws `RangeError`.
+  `hasAll`/`hasAny` throw `TypeError` on anything but a FastBit1024 (null, `{}`,
+  a FastBit32). A rejected call writes nothing (the argument's own conversion
+  still runs once, before the throw). FastBit32's input law is unchanged.
+- State lives in underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`):
+  internal; writing them voids invariants I1-I4. `forEach` reads each word once
+  (a snapshot); to mutate during a walk, use the `nextSetBit` cursor.
+- Measured (node v26.8.2, Apple M4 Pro, full witness, load average 3.43 -> 3.65,
+  net ns/op, min-max over the word 0..31 holding the free or set slot). HOT,
+  gated, every row flat: `acquire` + `release` pair 2.96-3.16, `nextClearBit`
+  0.48-0.54, `lowest` 0.34-0.37, `highest` 0.40-0.47, `has` 0.91-0.98 (unchecked
+  read 0.17: the fail-closed check costs ~0.78 ns; 0.72-0.90 over 9 runs).
+  PRESSURE is printed as info only, not gated: `acquire` 2.67-2.85, `has`
+  0.84-1.37 (8.26 N). The same spread appears with every cell on one word, so it
+  is the lane, not the data (RESEARCH 13).
+  The draft's pair cost 5.4 ns: the `clz32(x) >>> 5` zero test took it to
+  ~4.9 ns (still calling `nextClearBit()`), inlining the scan into `acquire`
+  to 3.0-3.2 ns (an `Int32Array` free stack with no checks: 2.2-2.3 ns).
+- Bundle (an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm
+  --minify | gzip -9): whole module 2072 B (1302 B at 1.3.0); FastBit32 alone
+  879 B; FastBit1024 alone 1006 B; every export except FastBit1024 1302 B.
+- Gates: T0 invariants I1-I4 after every op + laws, with pre-fill to capacity;
+  T1 capacities 1, 31, 32, 33, 1023, 1024 (empty, full pool, drained pool,
+  fill-1024/free-{1023, 31, 0}); T2 nine word values in each of the 32 words
+  (-1 and -2^31 included); T3 the bad-input matrix on every index method,
+  `release`, the ctor and `hasAll`/`hasAny` (exact error class per row); T5 the
+  ported oracle fuzz (3000 trials, pre-fill, keys from a second stream) with
+  counted, gated near-full coverage (floors: fullBig >= 50, acqHigh >= 10000,
+  fullHigh >= 1000, rel31 >= 1000, clearBig >= 20; T0: acqHigh >=
+  100, clearBig >= 3; e.g. one verify run: 1071 acquires returning -1 at cap >=
+  128, 207965 acquires in words >= 16, 18571 checkpoints with a full oracle
+  word >= 16, 27340 releases of bit 31, 861 clears at cap >= 512 with a high word
+  set; T0: 16 such clears); T6 0.000 B/op on both pool shapes; a
+  perf-gate acquire+release scenario (0 scavenges at N and 8N); five witness
+  rows (HOT gated, PRESSURE info), one instance per process, plus the slot foil
+  `foilWordScan` gated red under the lane config and both acquire/has
+  estimator configs (165-221 N); T9 controls `fb1024-sparse` (first EMPTY word;
+  red on T1, T5), `fb1024-nofull` (no `_full` summary; red on T0, T5),
+  `fb1024-clear-low16` (clear() zeroes words 0-15 only; red on T0, T5) and
+  `fb1024-acq-highword` (second-lowest clear bit in high words; red on T0, T5).
+- `test/S4bQA.test.mjs` (21 cases, an independent model): every capacity
+  1..1024, all 1024 single bits and all 1024 single holes (bit 31 and word 31
+  included), the full bad-input matrix with byte-identical state,
+  throw-before-write in the ctor, the second-copy brand, and the README /
+  llms.txt / d.ts examples executed from the doc text. 14 scratch mutants, all
+  red.
+- d.ts, llms.txt and README document the class and the two input laws, and
+  name the `instanceof` brand's limit (a prototype forgery passes it).
+
+### Fixed
+
+- README and llms.txt package claims corrected: "One class", "single-class",
+  "Zero branches" and "< 1KB" are replaced by the two classes, branchless
+  FastBit32 bit/mask ops, and the measured bundle sizes.
+
 ## [1.3.0] - 2026-10-11
 
 Two sessions in one release (1.2.2 was never published). S3 is internal and
@@ -195,8 +269,8 @@ scavenged (read after an awaited settle). Every comparison is NaN-fails-closed.
   (a mutator would coerce them to int32), read ~0.000, and their value is
   re-checked unchanged. EVERY lane (signed and unsigned) is gated < 0.1 B/op
   (clean lanes read within +/-0.02; the threshold does not change under any
-  control). The shared megamorphic call site (sharedHasAll + sharedForEach,
-  >= 5 receiver shapes) is measured at 0.000, gated < 0.1.
+  control). The shared megamorphic call site (sharedHasAll + sharedForEach, at
+  least 5 receiver shapes) is measured at 0.000, gated < 0.1.
 - T6 highestClearBit lane: 0.000 B/op on the bit-31-SET lanes (`-1`, `-2^31`,
   gated < 0.1); ~32 B/op on the bit-31-CLEAR lanes (`0`, `1<<30`), registered
   EXPECTED-RED (see below).

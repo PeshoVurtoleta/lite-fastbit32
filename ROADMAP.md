@@ -19,13 +19,14 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S0** | node:test port + torture T0-T9 + perf-gate + hygiene | (folds into 1.2.1) | harness, no behaviour change | DONE 2026-10-06 (uncommitted) |
 | **S1** | **URGENT** `hasAll` sign-bit fix (FB-01) + sign-bit doc truth | 1.2.1 | bug fix | DONE 2026-10-06 (reviewer APPROVED, qa PASS; uncommitted, awaiting /release 1.2.1) |
 | **S2** | Benchmark + constant-time witness (measure before deciding) | -- (no lib change) | measurement | **S2a DONE 2026-10-10** (reviewer APPROVED round 4, qa PASS; uncommitted). S2b (competitor matrix) planned, needed before S8 |
-| **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.3.0 (folded with S4; 1.2.2 never released) | internal, output-identical | **DONE 2026-10-10** (lean: coder-medium 1 pass, reviewer APPROVED round 1; ships in 1.3.0 with S4, maintainer 2026-10-11) |
-| **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | **DONE 2026-10-11** (coder-medium 1 pass, reviewer APPROVED round 1, qa coverage gaps closed; uncommitted, awaiting /release 1.3.0) |
-| **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | next minor after S4 | additive, new export | planned |
-| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.4.0 | additive, gated | planned |
+| **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.3.0 (folded with S4; 1.2.2 never released) | internal, output-identical | **RELEASED 1.3.0 2026-10-11** (with S4) |
+| **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | **RELEASED 1.3.0 2026-10-11** (with S3) |
+| **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | 1.4.0 | additive, new export | in progress |
+| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | planned |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
+| **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 2.1.0 | additive, new export | planned (last chapter) |
 
 ---
 
@@ -92,11 +93,15 @@ method ships typed-but-untortured.
 ## 1b. Process for this package (maintainer, 2026-10-10; local, not suite law)
 
 Proportionate proof: the code takes minutes, so proving it must not take hours.
-- Behaviour change (FastBit32.js): coder -> reviewer -> qa on the EXISTING
-  torture + witness. At most 2 review rounds; round 2 only verifies round-1
-  blockers; everything else goes to a backlog.
-- Tests / benchmarks / tooling / docs: coder -> one review pass, no qa.
-  Blockers only for a wrong answer or a fail-open gate.
+- REVIEW IS NOT CAPPED (maintainer, 2026-10-11: "the reviewer is very
+  important, let it take its time. Quality matters most."). The reviewer gets
+  the turns and rounds it needs; no turn budget, no blockers-only gag. What
+  stays lean is the BUILD side: the cost was gate-on-gate infrastructure and
+  threshold calibration, not review.
+- Behaviour change (FastBit32.js): coder -> reviewer (as many rounds as it
+  takes) -> qa, on the EXISTING torture + witness.
+- Tests / benchmarks / tooling / docs: coder -> reviewer; qa when the
+  reviewer asks for it.
 - Research: draft + oracle fuzz + one timing, documented (the FastBit1024 model).
 - No new gate infrastructure and no threshold calibration inside a feature
   session. The full witness runs once before a release on a quiet host;
@@ -272,10 +277,31 @@ reports). So C's permissive hot ops are defensible here and only here; any futur
 multi-word or summarized helper fails closed on every mutator (lite-o1 `BitSet`,
 ADR 0019 call 4), and must not cite this SC as precedent.
 
-### SC-4 -- `FastBit64` (OPEN, not scheduled)
+### SC-4 -- `FastBit64` (SETTLED 2026-10-11, maintainer: build it, last chapter)
 
-This is a boundary question with lite-o1 `BitSet` (RESEARCH open question 3). No
-session touches it until it is settled.
+**SETTLED: a flat `FastBit64`** -- ONE object, two int32 fields (`lo`, `hi`),
+every body written on shared single-word kernels (the RESEARCH section 4 Tier-3
+"word kernel": `ctz32`, `popcnt32`, ... as free functions V8 inlines). NOT two
+FastBit32 instances behind an orchestrator: the orchestrator is not light (every
+cross-word op -- lowest/highest, nextClearBit, the nextSetBit cursor across bit
+31->32, rank, ranges, hasAll on a 64-bit mask -- must be written in it anyway)
+and it costs an extra dependent load per op.
+
+Measured (2026-10-11, node v26.8.2 arm64, load ~4.6 so read as ratios; 10k
+entities x 12 random bits, hasAll(signature) over all, one process per shape):
+
+| Shape | B/entity | hasAll | lowest |
+| --- | --- | --- | --- |
+| flat FastBit64 (lo/hi fields) | 50 | 1.05 ns | 0.82 ns |
+| 2 x FastBit32 + orchestrator | 115 | 2.24 ns | 1.01 ns |
+| FastBit1024(64) (exists, 1.4.0) | 403 | 4.1 ns | 2.0 ns |
+
+Scheduled as **S9, the last chapter** (after S8): it follows the 2.0.0 input
+law (S6) and costs little to build and measure. A 64 x 64 = 4096 structure is
+NOT a class: it ships only as a README/GUIDE recipe in S9 (64 FastBit64 words +
+`active`/`full` FastBit64 summaries, the FastBit1024 shape one size up). Beyond
+that is lite-o1 `BitSet` (3 levels, fan-out 32); its missing `firstClear` is
+the RESEARCH 11.4 handoff, decided in lite-o1. 32 x 32 x 32 is not built here.
 
 ### SC-5 -- `FastBit1024` in this package (SETTLED 2026-10-10, maintainer)
 
@@ -286,20 +312,32 @@ session touches it until it is settled.
 **SETTLED: A.** Reasons: the section 4 boundary excludes multi-word bitsets of
 *arbitrary capacity*; a fixed 32 x 32 geometry is not that. It is built only
 from this package's word idioms, every op stays loop-free, and the section 2
-witness applies unchanged (draft measured flat: `nextClearBit` ~0.5 ns with the
+witness applies (amended, see a; draft measured flat: `nextClearBit` ~0.5 ns with the
 free slot in word 0 or behind 31 full words, vs 0.50 / 8.66 ns for the
 SparseBit1024 draft; RESEARCH 11.2, 13). Binding consequences:
 1. **`FastBit1024` fails closed on every index from day one** (RESEARCH 11.3 b,
    SC-3 recorded argument): one `(i & 1023) !== i || i >= cap` check per call,
    cold `RangeError`, `release` of a free slot throws. The two classes in one
-   package therefore have DIFFERENT input laws until S6; the README says so in
+   package therefore have DIFFERENT input laws (SC-3 is open, decided in S6); the README says so in
    one sentence and links SC-3/SC-5.
+   **Amended 2026-10-11 (maintainer, during S4b review):**
+   a. The witness gates FastBit1024 in HOT only; its PRESSURE rows are
+      INFO-only (a same-word control showed host noise: identical data spreads
+      as much as the real sweep; no word-dependent miss was observed). acquire/has use the SLOT_SLOW estimator,
+      justified by foil equivalence (METHODOLOGY).
+   b. `nextSetBit(from)` checks `(from & 2047) !== from || from > cap`
+      (domain 0..capacity); every other index uses the one-check form above.
+   c. `hasAll`/`hasAny` throw TypeError on a non-FastBit1024 argument,
+      including an instance from a second installed copy (instanceof brand).
+   d. Symbol / BigInt / null-proto inputs throw TypeError from `&` before the
+      RangeError path (cold, before any write); every bad capacity, Symbol/BigInt
+      included, throws RangeError from the ctor. Fields are `_cap/_n/_active/_full/_data`, internal.
 2. `Int32Array` storage; every bitwise compare is to `0` (law 8).
 3. Four invariants kept by every mutator (active, full, exact count, nothing
    stored at or above capacity); torture T0 checks all four after every op.
 4. Not a general bitset: no resize, no capacity above 1024, no `and/or/xor`
    with arbitrary sizes. Anything bigger is lite-o1 `BitSet`.
-5. SC-4 (`FastBit64`) stays OPEN and separate: for 33-64 component
+5. SC-4 (`FastBit64`) is separate (SETTLED 2026-10-11 as S9): for 33-64 component
    signatures, two plain fields still beat any array-backed class.
 Draft + oracle checker: `benchmark/experiments/fb1024-draft.mjs`,
 `fb1024-check.mjs` (RESEARCH section 13).
@@ -309,11 +347,13 @@ Draft + oracle checker: `benchmark/experiments/fb1024-draft.mjs`,
 ## 4. Session order
 
 ```
-S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S5 --(1.4.0)--+
+S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 --(1.5.0)--+
                                  |                                                   |
                                  +--------------------> S7 (demo, uses S2 kernels) <--+
                                                                                      |
                                                      S6 --(2.0.0)--> S8 --(2.0.1) <--+
+                                                                          |
+                                                                          +--> S9 --(2.1.0) FastBit64
 ```
 
 - **S0 blocks everything.** Without the harness, nothing below can be proven.
@@ -1052,7 +1092,7 @@ DONE WHEN
 ```
 
 ===============================================================================
-# S4b -- next minor after S4 -- FastBit1024 (SC-5 SETTLED: A)
+# S4b -- 1.4.0 -- FastBit1024 (SC-5 SETTLED: A)
 ===============================================================================
 
 ```
@@ -1083,7 +1123,8 @@ GATES
   cap, 1024, 2^32, Symbol, BigInt, {}) throws AND leaves state unchanged;
   T5 oracle fuzz (port fb1024-check.mjs); T6 0 B/op acquire/release/has/
   nextSetBit; witness: acquire, nextClearBit, lowest, highest flat across
-  "free slot in word 0..31" shapes, both lanes; T9 controls: the SparseBit1024
+  "free slot in word 0..31" shapes, both lanes (amended: HOT gated,
+  PRESSURE info-only, see SC-5 a); T9 controls: the SparseBit1024
   draft policy (first EMPTY word) and a no-full-summary variant MUST fail T5.
   Perf: profile acquire+release (draft 5.2 ns, flat) vs lite-object-pool's
   free stack; report it, do not hide it.
@@ -1096,8 +1137,34 @@ DONE WHEN
   llms.txt cover the new export; README states the two input laws.
 ```
 
+**S4b progress (2026-10-11, coder, uncommitted).** `FastBit1024` shipped in the working tree (additions only;
+existing bodies byte-identical). Gates added: T0/T1/T2/T3/T5 rows, T6 lane, perf-gate scenario, witness `slot`
+mode (5 HOT-gated rows (amended, see SC-5 a), a `has` check-cost info row, the `foilWordScan` foil), T9 controls `fb1024-sparse` and
+`fb1024-nofull` (red), and test/FastBit1024.test.mjs. acquire+release 5.4 -> 3.2 ns (RESEARCH 13 "Shipped
+in 1.4.0"). Round 2 (reviewer REJECTED round 1, code correct) fixed:
+- the witness now uses one instance per process (separate instances measured heap placement), with the new foil;
+- `hasAll`/`hasAny` throw TypeError on a non-FastBit1024;
+- T5/T0 pre-fill and use a second key stream, with gated near-full coverage minimums;
+- fields renamed to `_cap/_n/_active/_full/_data`;
+- doc truth fixes (TypeError rows, two compares, the forEach snapshot, package-level claims, bundle sizes).
+
+Round 3 (reviewer REJECTED round 2, code correct):
+- maintainer decision: the FastBit1024 PRESSURE rows print as INFO (same-word evidence in RESEARCH 13 and
+  METHODOLOGY); HOT stays gated;
+- `foilWordScan` is gated under the lane config and both SLOT_SLOW configs;
+- the clear decision is drawn before the op switch in T0/T5, with clear-count minimums;
+- new T9 controls `fb1024-clear-low16` and `fb1024-acq-highword` (red);
+- T5 counts full high words from the oracle;
+- doc truth fixes: underscore names, the instanceof brand, the size method.
+
+Full witness at load 3.43 -> 3.65: FastBit1024 HOT gated and flat, PRESSURE info. The only FAIL is the unrelated
+SLOPE forEachArray residual (3.61 vs 3.5 x slope; known host load, HEAD fails it too). Finding: HOT
+`nextClearBit` can flake on a busy host. A same-word control spreads the same, so this is host noise, not the
+word (RESEARCH 13). Not done: site 12 (`benchmark/Matrix.mjs` does not exist yet, S2b) and an ADR (SC-5 is the
+record). Awaiting review round 3.
+
 ===============================================================================
-# S5 -- 1.4.0 -- Tier-2 members, greenlit one at a time
+# S5 -- 1.5.0 -- Tier-2 members, greenlit one at a time
 ===============================================================================
 
 ```markdown
@@ -1266,6 +1333,30 @@ PANEL 5 -- maintainer's mockup (2026-10-11): "1024-slot pool" (needs S4b FastBit
   handed out and every word going active at once (RESEARCH 11.2 D11/D12).
   Frame loop under the demo-audit law: 0 allocations per tick for the pool
   logic, counter on screen.
+  Improvements (main session, 2026-10-11 -- maintainer: "improve it any way";
+  APPROVED by the maintainer 2026-10-11):
+  - Policy race: the same seeded alloc/free stream driven into three pools
+    side by side -- FastBit1024 lowest-free, the SparseBit1024 first-empty-word
+    draft, and a LIFO free stack (lite-object-pool's policy). Same stream, so
+    the difference on screen is the policy alone.
+  - High-water mark card: `highest() + 1` -- the instance count a GPU draw or
+    a network snapshot must cover. Lowest-free keeps it low; plot it over time
+    per policy (one small sparkline, preallocated ring buffer).
+  - Step mode (Pause -> Step): animate one acquire as the two clz32 hops --
+    flash the `full` strip, mark its lowest zero (the word), then that word's
+    lowest zero (the bit), then the cell. This is the whole data structure in
+    four frames.
+  - Cursor sweep: a button that walks `nextSetBit` across the grid, lighting
+    cells in order and skipping empty words via `active` -- shows why
+    iteration costs O(k + non-empty words), not O(1024).
+  - Live cost readout: ns per acquire+release from a batched timing every
+    second (never per frame), next to the "0 allocations" counter.
+  - Reproducible runs: a seed field (xorshift32) and the state in the URL hash,
+    so a bug report is a link.
+  - Keyboard + a11y: arrow keys move a focus cell, Space toggles;
+    `prefers-reduced-motion` drops the animations, keeps the numbers.
+  - Fragmentation: show the formula on hover (see above) so the number
+    teaches instead of decorates.
 
 DONE WHEN
   demo runs; Demo.test green; FB-12 answered with numbers

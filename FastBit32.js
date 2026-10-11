@@ -13,9 +13,13 @@
  * rank(bit) [bit 0..31], equals, equalsValue, set, copy, isSubsetOf, static
  * rangeMask(start, end) [validated, throws RangeError], BitMapper bit(name) and
  * size. Raw-index ops are permissive outside their domain (pinned until S6).
+ * - 1.4.0: FastBit1024, a fixed 32 x 32 two-level bitmap (capacity 1..1024)
+ * that FAILS CLOSED on every index: add/remove/toggle/has, acquire/release,
+ * size, capacity, isEmpty/isFull, lowest/highest, nextClearBit, nextSetBit,
+ * hasAll/hasAny, forEach, clear. No coupling to FastBit32.
  */
 
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 export class FastBit32 {
     constructor(initial = 0) {
@@ -445,5 +449,211 @@ export function forEachMaskUnion(maskA, maskB, callback) {
         const bit = 31 - Math.clz32(v & -v);
         callback(bit);
         v &= v - 1;
+    }
+}
+// -- FastBit1024 --
+// A fixed 32 x 32 two-level bitmap: 1024 bits (or fewer, `capacity` 1..1024),
+// for slot pools and dense id sets. No import or runtime coupling to FastBit32.
+// Unlike FastBit32 (whose hot ops trust the caller; SC-3 is open, decided in
+// S6), every FastBit1024 method that takes an index FAILS CLOSED (SC-5): a bad
+// index throws RangeError (a Symbol/BigInt throws TypeError on `&`) and writes
+// nothing; the argument's own conversion runs once, before the throw. Every op
+// is loop-free except forEach/hasAll/hasAny/clear (O(non-empty words)).
+//
+// State lives in underscore fields (_cap, _active, _full, _n, _data): they are
+// internal, and writing them voids the invariants below.
+// Invariants (every mutator keeps all four, so no reader repairs anything):
+//   I1  _active bit w set  iff  _data[w] !== 0    (lowest/highest/nextSetBit/forEach)
+//   I2  _full   bit w set  iff  _data[w] === -1   (nextClearBit/acquire)
+//   I3  _n === popcount of every _data word        (size/isFull are O(1))
+//   I4  no bit >= capacity is ever stored          (mutators reject it)
+// Storage is Int32Array, so every word read is a signed int32 and every bitwise
+// compare is to 0 (law 8). `clz32(x) >>> 5` is 1 iff x === 0: the summary
+// updates are branch-free and never leave int32.
+
+function fb1024Show(v) {
+    return typeof v === 'number' ? String(v) : typeof v;
+}
+
+function fb1024BadOther(other) {
+    throw new TypeError('FastBit1024: expected a FastBit1024, got ' + (other === null ? 'null' : typeof other));
+}
+
+function fb1024BadIndex(bit, limit) {
+    throw new RangeError('FastBit1024: bit index must be an integer 0..' + (limit - 1) + ', got ' + fb1024Show(bit));
+}
+
+export class FastBit1024 {
+    constructor(capacity = 1024) {
+        if (typeof capacity !== 'number' || (capacity & 2047) !== capacity || capacity < 1 || capacity > 1024) {
+            throw new RangeError('FastBit1024: capacity must be an integer 1..1024, got ' + fb1024Show(capacity));
+        }
+        this._cap = capacity;
+        this._active = 0;
+        this._full = 0;
+        this._n = 0;
+        this._data = new Int32Array(32);
+    }
+
+    add(bit) {
+        if ((bit & 1023) !== bit || bit >= this._cap) fb1024BadIndex(bit, this._cap);
+        const w = bit >>> 5, b = bit & 31, data = this._data, old = data[w], d = old | (1 << b);
+        data[w] = d;
+        this._n += ((old >>> b) & 1) ^ 1;
+        this._active |= 1 << w;
+        this._full |= (Math.clz32(~d) >>> 5) << w;
+        return this;
+    }
+
+    remove(bit) {
+        if ((bit & 1023) !== bit || bit >= this._cap) fb1024BadIndex(bit, this._cap);
+        const w = bit >>> 5, b = bit & 31, data = this._data, old = data[w], d = old & ~(1 << b);
+        data[w] = d;
+        this._n -= (old >>> b) & 1;
+        this._full &= ~(1 << w);
+        this._active &= ~((Math.clz32(d) >>> 5) << w);
+        return this;
+    }
+
+    toggle(bit) {
+        if ((bit & 1023) !== bit || bit >= this._cap) fb1024BadIndex(bit, this._cap);
+        return ((this._data[bit >>> 5] >>> (bit & 31)) & 1) === 0 ? this.add(bit) : this.remove(bit);
+    }
+
+    has(bit) {
+        if ((bit & 1023) !== bit || bit >= this._cap) fb1024BadIndex(bit, this._cap);
+        return (this._data[bit >>> 5] & (1 << (bit & 31))) !== 0;
+    }
+
+    /**
+     * O(1) pool take: the LOWEST free slot, now held; -1 when full. The scan is
+     * inlined (one word read reused for the write): ~3.0-3.2 ns per
+     * acquire+release pair vs ~4.9 ns when it called nextClearBit() with the
+     * same zero test (5.4 ns for the original draft; RESEARCH 13).
+     */
+    acquire() {
+        const f = ~this._full;
+        if (f === 0) return -1;
+        const w = 31 - Math.clz32(f & -f), data = this._data, old = data[w], c = ~old, m = c & -c;
+        const s = (w << 5) + (31 - Math.clz32(m));
+        if (s >= this._cap) return -1;
+        const d = old | m;
+        data[w] = d;
+        this._n++;
+        this._active |= 1 << w;
+        this._full |= (Math.clz32(~d) >>> 5) << w;
+        return s;
+    }
+
+    /** O(1) pool give-back. Throws RangeError on a bad index AND on a slot that is not held. */
+    release(slot) {
+        if ((slot & 1023) !== slot || slot >= this._cap) fb1024BadIndex(slot, this._cap);
+        const w = slot >>> 5, m = 1 << (slot & 31), data = this._data, old = data[w];
+        if ((old & m) === 0) throw new RangeError('FastBit1024: release of a free slot ' + slot);
+        const d = old & ~m;
+        data[w] = d;
+        this._n--;
+        this._full &= ~(1 << w);
+        this._active &= ~((Math.clz32(d) >>> 5) << w);
+        return this;
+    }
+
+    get size() { return this._n; }
+
+    get capacity() { return this._cap; }
+
+    isEmpty() { return this._active === 0; }
+
+    isFull() { return this._n === this._cap; }
+
+    lowest() {
+        const a = this._active;
+        if (a === 0) return -1;
+        const w = 31 - Math.clz32(a & -a), d = this._data[w];
+        return (w << 5) + (31 - Math.clz32(d & -d));
+    }
+
+    highest() {
+        const a = this._active;
+        if (a === 0) return -1;
+        const w = 31 - Math.clz32(a), d = this._data[w];
+        return (w << 5) + (31 - Math.clz32(d));
+    }
+
+    /** Lowest clear bit below capacity, or -1. I4: "lowest clear >= capacity" means none. */
+    nextClearBit() {
+        const f = ~this._full;
+        if (f === 0) return -1;
+        const w = 31 - Math.clz32(f & -f), c = ~this._data[w];
+        const s = (w << 5) + (31 - Math.clz32(c & -c));
+        return s < this._cap ? s : -1;
+    }
+
+    /**
+     * Lowest set bit >= from, or -1. Domain: from in 0..capacity (capacity
+     * returns -1, so `nextSetBit(b + 1)` ends the walk); anything else throws.
+     * `(w - 32) >> 31` zeroes the word mask at w = 32 (from = 1024).
+     */
+    nextSetBit(from) {
+        if ((from & 2047) !== from || from > this._cap) fb1024BadIndex(from, this._cap + 1);
+        const w = from >>> 5;
+        const d = w < 32 ? this._data[w] & (-1 << (from & 31)) : 0;
+        if (d !== 0) return (w << 5) + (31 - Math.clz32(d & -d));
+        const a = this._active & (-2 << w) & ((w - 32) >> 31);
+        if (a === 0) return -1;
+        const w2 = 31 - Math.clz32(a & -a), d2 = this._data[w2];
+        return (w2 << 5) + (31 - Math.clz32(d2 & -d2));
+    }
+
+    /**
+     * Every bit of `other` (a FastBit1024) is set here. O(non-empty words of
+     * other). Capacities may differ: words above a capacity are always 0.
+     * Anything that is not a FastBit1024 throws TypeError.
+     */
+    hasAll(other) {
+        if (!(other instanceof FastBit1024)) fb1024BadOther(other);
+        if ((other._active & ~this._active) !== 0) return false;
+        const od = other._data, td = this._data;
+        for (let a = other._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            if ((od[w] & ~td[w]) !== 0) return false;
+        }
+        return true;
+    }
+
+    /** Some bit of `other` (a FastBit1024) is set here. Capacities may differ. */
+    hasAny(other) {
+        if (!(other instanceof FastBit1024)) fb1024BadOther(other);
+        const od = other._data, td = this._data;
+        for (let a = other._active & this._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            if ((od[w] & td[w]) !== 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * O(k + non-empty words), ascending. Hoist the callback: a capturing closure
+     * allocates. Each word is read once, as a snapshot: a callback that removes
+     * a later bit of the same word is still called for it. To mutate during the
+     * walk, use the nextSetBit cursor.
+     */
+    forEach(callback) {
+        const data = this._data;
+        for (let a = this._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a), base = w << 5;
+            for (let d = data[w]; d !== 0; d &= d - 1) callback(base + (31 - Math.clz32(d & -d)));
+        }
+        return this;
+    }
+
+    /** O(non-empty words), not a 32-word fill. */
+    clear() {
+        const data = this._data;
+        for (let a = this._active; a !== 0; a &= a - 1) data[31 - Math.clz32(a & -a)] = 0;
+        this._active = 0;
+        this._full = 0;
+        this._n = 0;
+        return this;
     }
 }

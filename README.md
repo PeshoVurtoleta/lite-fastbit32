@@ -11,7 +11,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-Zero-GC, monomorphic, branchless 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code. Zero dependencies. One class. The fastest 32-bit flag engine in JavaScript.
+Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless. Zero dependencies. Two bit classes plus the `BitMapper` name mapper: `FastBit32` (one word) and, from 1.4.0, `FastBit1024` (32 x 32 words, fail-closed). The fastest 32-bit flag engine in JavaScript.
 
 ## 🚀 Built with Lite-FastBit32: Lite-Tween Pro
 
@@ -25,10 +25,10 @@ If you are building high-performance WebGL applications or JavaScript games, che
 
 | Feature               | lite-fastbit32 | FastBitSet | TypedFastBitSet |
 |-----------------------|----------------|------------|-----------------|
-| **Max bits**          | **32**         | Unlimited  | Unlimited       |
+| **Max bits**          | **32 (FastBit32); 1024 (FastBit1024)** | Unlimited  | Unlimited       |
 | **Zero-GC**           | **Yes**        | No         | No              |
 | **Monomorphic**       | **Yes**        | No         | No              |
-| **Branchless**        | **Yes**        | No         | No              |
+| **Branchless**        | **Yes (FastBit32 bit/mask ops)** | No         | No              |
 | **O(1) popcount**     | **Yes**        | No         | No              |
 | **O(1) lowest/highest** | **Yes**      | No         | No              |
 | **O(k) iteration**    | **Yes**        | No         | No              |
@@ -37,9 +37,11 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size**       | **< 1KB**      | ~8KB       | ~6KB            |
+| **Bundle size** (min+gz) | **879 B** FastBit32 alone; 2072 B whole module | ~8KB | ~6KB |
 
-> FastBit32 is an engine primitive, not a general-purpose bitfield.
+> Bundle sizes, measured 2026-10-11: an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2072 B. `{ FastBit32 }` alone: 879 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1302 B, the same as the whole 1.3.0 module.
+
+> FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0).
 
 ## Installation
 
@@ -337,6 +339,55 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 ```
 
 </details>
+
+---
+
+## FastBit1024: 32 x 32 pools up to 1024
+
+`FastBit1024` (1.4.0) is a fixed 32 x 32 two-level bitmap: an `Int32Array(32)` plus a "word non-empty" and a "word full" summary and an exact count, so every op except `forEach`, `hasAll`, `hasAny` and `clear` is loop-free. It is a separate export with no coupling to `FastBit32`.
+
+**Two input laws in one package:** FastBit32's hot ops trust the caller (SC-3, open, decided in S6), while FastBit1024 fails closed on every index (a `RangeError`, or a `TypeError` for a Symbol, a BigInt or a null-prototype object; a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw; see [SC-3](./ROADMAP.md#sc-3----the-input-law-for-raw-bit-indices-open-decided-in-s6) and [SC-5](./ROADMAP.md#sc-5----fastbit1024-in-this-package-settled-2026-10-10-maintainer)).
+
+| Member | Returns | Notes |
+|---|---|---|
+| `new FastBit1024(capacity = 1024)` | instance | integer 1..1024, else `RangeError` |
+| `add(bit)` / `remove(bit)` / `toggle(bit)` | `this` | `RangeError` unless `0 <= bit < capacity` (integer) |
+| `has(bit)` | `boolean` | same check: `has(undefined)` throws, never answers for slot 0 |
+| `acquire()` | slot or `-1` | the LOWEST free slot; `-1` when full |
+| `release(slot)` | `this` | `RangeError` on a bad index or a free slot (double release) |
+| `size`, `capacity` | `number` | read-only getters, O(1) |
+| `isEmpty()`, `isFull()` | `boolean` | O(1) |
+| `lowest()`, `highest()`, `nextClearBit()` | index or `-1` | O(1) |
+| `nextSetBit(from)` | index or `-1` | `from` in `0..capacity`; `capacity` ends the cursor |
+| `hasAll(other)`, `hasAny(other)` | `boolean` | `other` must be a FastBit1024 (anything else: `TypeError`; the brand is `instanceof`, so an `Object.create(FastBit1024.prototype)` forgery passes it and is unsupported: no defined answer, and neither method writes to either instance); capacities may differ, answer is exact |
+| `forEach(cb)`, `clear()` | `this` | O(k + non-empty words) / O(non-empty words). forEach reads each word once (a snapshot): to mutate during the walk, use the `nextSetBit` cursor |
+
+Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`/`hasAny` check `instanceof FastBit1024`, so a FastBit1024 from a second installed copy of the package throws `TypeError`.
+
+Pool recipe (lowest-slot reuse, double release caught):
+
+```js
+import { FastBit1024 } from '@zakkster/lite-fastbit32';
+
+const live = new FastBit1024(500);
+const x = new Float32Array(500), vx = new Float32Array(500);
+
+function spawn(px, pvx) {
+    const s = live.acquire();             // lowest free slot, -1 when full
+    if (s !== -1) { x[s] = px; vx[s] = pvx; }
+    return s;
+}
+
+function step(dt) {                       // closure-free walk, 0 B/op
+    for (let s = live.nextSetBit(0); s !== -1; s = live.nextSetBit(s + 1)) x[s] += vx[s] * dt;
+}
+
+const a = spawn(0, 1);
+live.release(a);
+// live.release(a);                       // RangeError: release of a free slot
+```
+
+Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op): `acquire()` + `release()` pair ~3.2, `nextClearBit()` ~0.5, `lowest()` ~0.34-0.37, `highest()` ~0.40-0.47, `has()` ~0.91-0.98 (of which ~0.78 is the fail-closed check), each flat whether the free (or set) slot is in word 0 or word 31. 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in the FastBit1024 T6 lane); the perf gate adds 0 scavenges for acquire+release.
 
 ---
 

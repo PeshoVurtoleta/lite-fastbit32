@@ -631,6 +631,45 @@ against lite-object-pool's free stack).
 path (it cannot corrupt state, but `has(undefined)` answering for slot 0 is FB-02 again); hasAll/hasAny across
 different capacities (the draft does not check; words above capacity are always 0, so the answer is still exact).
 
+**Shipped in 1.4.0 (S4b, 2026-10-11, node v26.8.2, Apple M4 Pro).** `FastBit1024` is a named export of
+`FastBit32.js`. The three open questions, answered:
+- *The ~5 ns pair.* Ablation, one process per variant: the draft pair 5.43/5.49 ns (free slot in word 0 / 31);
+  the `clz32(x) >>> 5` zero test in place of `nz(d + 1)`, still calling `nextClearBit()`, 4.87/4.85 (~4.9); plus the scan inlined into `acquire` (one
+  word read reused for the write, the mask taken from `c & -c`) 3.20/3.20. In short: 5.4 ns draft -> ~4.9 ns with the cheaper zero test while still calling `nextClearBit()` -> ~3.0-3.2 ns with the scan inlined. Dropping the count, the index check
+  or the double-release check each moved it by <= 0.05 ns. The rest is the loop-carried store-to-load chain
+  (acquire writes the word and `full`, release reads them back); an `Int32Array` free stack with no checks
+  measures 2.22/2.31 ns on the same harness. Shipped: 2.96-3.16 ns in the full witness (3.06-3.21 in an earlier run), flat over words 0..31.
+- *`has` fails closed.* It throws like every index op. Cost, measured: `has` 0.91-0.98 ns vs the unchecked
+  read 0.17 ns, check ~0.78 ns (full witness; 0.72-0.90 over 9 runs; an earlier run read 0.98-1.01 vs 0.15, ~0.86). Every variant of the check (cap only, mask only, `>>> 0`, inline
+  `throw`) cost the same 0.6-0.8 ns in a scratch ablation: the throw site, not the compare, is the price.
+- *Cross-capacity `hasAll`/`hasAny`.* Allowed and exact; T2, T5 and node:test cover it.
+- *The witness rows.* The first version built one instance per word, so it measured heap placement: the
+  same data in 32 instances spread 2.50-6.54 ns under PRESSURE, and reversing the allocation order moved the
+  slow cells (round-2 review). Shipped harness: ONE instance and one corpus per process, re-shaped per word
+  outside the timed loop, plus a must-fail foil (`foilWordScan`, an O(word) scan).
+- *The acquire/has estimator (SLOT_SLOW).* Median of 5 passes of best-of-8 reps, at a quarter (acquire) or half
+  (has) of the lane's loop length. This is an estimator change, not a threshold change. Its justification is that
+  it keeps the gate's teeth: `foilWordScan` reads the same under the lane config and under both SLOT_SLOW configs
+  (220.8 / 219.3 / 218.4 N in `witness:fast`, 166.5 / 165.1 / 165.8 N in the full run), and a deliberate word step
+  measures the same with and without it (round-3 review).
+- *PRESSURE is info-only for FastBit1024 (maintainer decision, 2026-10-11).* Same-word control: all 32 cells hold
+  word 5, at the shipped estimator. PRESSURE `has` failed the 4.5 N spread gate in 1 of 4 runs and `acquire` in
+  2 of 4. The real sweep failed has 4/5 and acquire 2/5. There is no word pattern: the median of words 0-15 equals
+  the median of 16-31, and pass 0 of has reads ~0.6 ns vs ~1.25 ns later. Identical data in every cell spreads as
+  much as the real sweep, so the spread belongs to the lane, not the op. (The 128 B state is off-heap and V8 does
+  not guarantee its alignment; on the M4 Pro, 128 B lines, 240/240 sampled stores were 128 B aligned -- one line;
+  two or three on a 64 B-line host (two if 64 B aligned, as observed here; not measured there). A miss is possible; a word-dependent one was not observed.)
+  HOT stays gated.
+- *HOT `nextClearBit` on a loaded host.* Same-word control (all 6 cells hold word 5), 8 runs each at load ~3.3:
+  spreads 0.014-0.228 ns vs the real sweep's 0.029-0.299 ns, with whole passes shifting together. This is host
+  noise, not the word. At NOISE ~0.03 ns the 6 N gate is 0.18 ns, so this row can flake on a busy host (one
+  `witness:fast` run read 7.0 N); it passed in every verify and full run here. Reported, not widened.
+Full witness (load 3.43 -> 3.65), net ns, min-max over words 0..31. HOT (gated, all flat): acquire+release
+2.96-3.16 (4.00 N), `nextClearBit` 0.48-0.54, `lowest` 0.34-0.37, `highest` 0.40-0.47, `has` 0.91-0.98 (check
+~0.78 ns; 0.72-0.90 over 9 runs). PRESSURE (info only): acquire 2.67-2.85 (3.69 N), `has` 0.84-1.37 (8.26 N),
+the scans 0.02-0.29.
+Every op 0 B/op (T6, both pool shapes); perf gate 0 scavenges at N and 8N.
+
 ---
 
 ## Appendix A -- the section 11 drafts as submitted (verbatim, 37dc47d)

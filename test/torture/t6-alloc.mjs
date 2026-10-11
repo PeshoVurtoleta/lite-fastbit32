@@ -207,6 +207,36 @@ export async function run(ctx) {
     }
     measures.s4ByLane = s4ByLane;
 
+    // ---- S4b FastBit1024 lane: acquire+release, has, nextClearBit, lowest,
+    // highest, the nextSetBit cursor loop, hasAll/hasAny. Two pool shapes: the
+    // one free slot in word 0 (slot 5) and in word 31 (slot 1000); every other
+    // word is full (bit 31 set in every word). The pool snapshot is re-checked
+    // unchanged after the measurement. Gated < 0.1 B/op, NaN fails closed.
+    const fb1024ByLane = [];
+    const C1024 = ctx.FB1024;
+    const sig1024 = new C1024().add(0).add(31).add(63).add(992).add(1023);
+    for (const freeSlot of [5, 1000]) {
+        const pool = new C1024();
+        for (let i = 0; i < 1024; i++) if (i !== freeSlot) pool.add(i);
+        const snap = ctx.oracle.fb1024Snapshot(pool);
+        const op = (i) => {
+            const x = pool.acquire();
+            pool.release(x);
+            let acc = x ^ (pool.has(i & 1023) ? 1 : 0) ^ pool.nextClearBit() ^ pool.lowest() ^ pool.highest();
+            for (let b = sig1024.nextSetBit(0), n = 0; b !== -1 && n <= 1024; b = sig1024.nextSetBit(b + 1), n++) acc = (acc + b) | 0; // bounded: a wrapping cursor must not hang T6
+            h.SINK[0] = acc ^ (pool.hasAll(sig1024) ? 2 : 0) ^ (pool.hasAny(sig1024) ? 4 : 0);
+            if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+        };
+        const m = await h.measureBop(op, baseline);
+        const name = 'free slot ' + freeSlot + ' (word ' + (freeSlot >>> 5) + ')';
+        if (ctx.oracle.fb1024Snapshot(pool) !== snap) fails.push('T6 FB1024: ' + name + ' pool state moved during measurement');
+        fb1024ByLane.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
+        if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 FB1024: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        }
+    }
+    measures.fb1024ByLane = fb1024ByLane;
+
     // ---- shared megamorphic site: actually measured, NaN fails closed -------
     const si = new FB(0).union(h.LANE_INT32[2]); // -1
     const shHasAll = (i) => { h.SINK[0] = h.sharedHasAll(si, MASK) ? 1 : 0; };

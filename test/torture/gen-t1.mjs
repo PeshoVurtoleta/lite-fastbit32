@@ -126,7 +126,77 @@ export function run(ctx) {
         try { got = apply(FB, row.op, lit); } catch (e) { got = 'THROW:' + e.message; }
         if (!Object.is(got, row.want)) fails.push('T1: ' + row.op + '(' + row.tag + ') got ' + String(got) + ' want ' + String(row.want));
     }
+    // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
+    try { runFb1024(ctx, fails); } catch (e) { fails.push('T1 ' + 'FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green: 0 };
+}
+
+// ---- S4b FastBit1024 degenerate rows (hand-written in gen-t1.mjs's template) --
+// Capacities 1, 31, 32, 33, 1023, 1024: the empty state, a full pool (acquire
+// hands out 0..cap-1 in order, then -1), a pool drained top-down (each release
+// is the new lowest free slot), and the fill-1024 / free-{1023, 31, 0}
+// extremes (bit 31 of every word, the last word, word 0). The fb1024-sparse
+// control (first EMPTY word) fails the fill order here.
+function runFb1024(ctx, fails) {
+    const C = ctx.FB1024;
+    const F = (m) => fails.push('T1 FB1024: ' + m);
+    const pin = (tag, got, want) => { if (!Object.is(got, want)) F(tag + ' got ' + String(got) + ' want ' + String(want)); };
+    for (const cap of [1, 31, 32, 33, 1023, 1024]) {
+        const s = new C(cap);
+        const t = 'cap ' + cap + ' ';
+        pin(t + 'empty lowest', s.lowest(), -1);
+        pin(t + 'empty highest', s.highest(), -1);
+        pin(t + 'empty nextClearBit', s.nextClearBit(), 0);
+        pin(t + 'empty nextSetBit(0)', s.nextSetBit(0), -1);
+        pin(t + 'empty nextSetBit(cap)', s.nextSetBit(cap), -1);
+        pin(t + 'empty size', s.size, 0);
+        pin(t + 'capacity', s.capacity, cap);
+        pin(t + 'empty isEmpty', s.isEmpty(), true);
+        pin(t + 'empty isFull', s.isFull(), false);
+        let order = true;
+        for (let i = 0; i < cap; i++) if (s.acquire() !== i) { order = false; break; }
+        pin(t + 'fill order 0..cap-1', order, true);
+        if (!order) continue;
+        pin(t + 'full acquire', s.acquire(), -1);
+        pin(t + 'full nextClearBit', s.nextClearBit(), -1);
+        pin(t + 'full isFull', s.isFull(), true);
+        pin(t + 'full size', s.size, cap);
+        pin(t + 'full lowest', s.lowest(), 0);
+        pin(t + 'full highest', s.highest(), cap - 1);
+        pin(t + 'full nextSetBit(cap-1)', s.nextSetBit(cap - 1), cap - 1);
+        pin(t + 'full nextSetBit(cap)', s.nextSetBit(cap), -1);
+        pin(t + 'full summary', s._full, cap === 1024 ? -1 : (cap >>> 5 === 0 ? 0 : (-1 >>> (32 - (cap >>> 5))) | 0));
+        let drain = true;
+        for (let i = cap - 1; i >= 0; i--) { s.release(i); if (s.nextClearBit() !== i) { drain = false; break; } }
+        pin(t + 'drain: each release is the lowest free slot', drain, true);
+        pin(t + 'drained isEmpty', s.isEmpty(), true);
+        pin(t + 'drained size', s.size, 0);
+        pin(t + 'drained active', s._active, 0);
+        pin(t + 'drained full', s._full, 0);
+        pin(t + 'drained lowest', s.lowest(), -1);
+        let threw = false;
+        try { s.release(0); } catch (e) { threw = e instanceof RangeError; }
+        pin(t + 'drained release(0) throws RangeError', threw, true);
+    }
+    const s = new C();
+    for (let i = 0; i < 1024; i++) s.acquire();
+    pin('fill-1024 full', s._full, -1);
+    pin('fill-1024 active', s._active, -1);
+    s.release(1023);
+    pin('free 1023 nextClearBit', s.nextClearBit(), 1023);
+    pin('free 1023 full', s._full, 0x7fffffff);
+    pin('free 1023 word 31', s._data[31], 0x7fffffff);
+    s.release(31);
+    pin('free 31 nextClearBit', s.nextClearBit(), 31);
+    pin('free 31 word 0', s._data[0], 0x7fffffff);
+    s.release(0);
+    pin('free 0 nextClearBit', s.nextClearBit(), 0);
+    pin('free 0 word 0', s._data[0], 0x7ffffffe);
+    pin('refill acquire 0', s.acquire(), 0);
+    pin('refill acquire 31', s.acquire(), 31);
+    pin('refill acquire 1023', s.acquire(), 1023);
+    pin('refill acquire -1', s.acquire(), -1);
+    pin('refill word 0', s._data[0], -1);
 }
 `;
 

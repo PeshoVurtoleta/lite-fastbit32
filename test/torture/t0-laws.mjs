@@ -149,5 +149,102 @@ export function run(ctx) {
     }
 
     void green;
+    // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
+    try { fb1024Laws(ctx, F); } catch (e) { F('FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green };
+}
+
+// ---- S4b FastBit1024: invariants I1-I4 after EVERY op + metamorphic laws ----
+// Per capacity (the T1 set plus a seeded random one): pre-fill by acquire (to
+// capacity at 1023 and at a random cap >= 128, then one acquire must be -1;
+// else to a random level), then 4000 random add/remove/toggle/acquire/release
+// ops. The clear decision is drawn FIRST, every op: clear() 1 in 500 at cap >= 128
+// (then a re-fill by acquire to a random level), 1 in 100 below. The op comes from the harness RNG, the key and the clear
+// decision from a second xorshift stream. Laws every 32nd op:
+// acquire() === the nextClearBit() read before it; size === forEach count;
+// cursor walk === forEach list; lowest === nextSetBit(0); highest === last
+// visited; nextSetBit(cap) === -1; isEmpty/isFull agree with size; hasAll(self);
+// hasAny(self) === !isEmpty. Coverage counted and gated: >= 1 acquire === -1 at
+// cap >= 128, >= 100 acquires in words >= 16, and >= 3 clears at cap >= 512
+// while a raw word >= 16 is non-zero (read from _data directly, not a method).
+// The fb1024-nofull (no _full summary) and fb1024-clear-low16 controls break I1/I2 here.
+function fb1024Laws(ctx, F) {
+    const C = ctx.FB1024;
+    const h = ctx.h;
+    const KEY = new Int32Array(1);
+    KEY[0] = (h.nextU32() | 0) || 0x2545f491;
+    const key = (n) => { let x = KEY[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; KEY[0] = x; return (x >>> 0) % n; };
+    const cb = (b) => { LIST.push(b); };
+    let LIST = [];
+    let fullBig = 0;
+    let acqHigh = 0;
+    let clearBig = 0;
+    const caps = [1, 31, 32, 33, 1023, 1024, 128 + h.randBelow(897)];
+    for (let ci = 0; ci < caps.length; ci++) {
+        const cap = caps[ci];
+        const s = new C(cap);
+        // pre-fill (and re-fill after a clear at cap >= 128) through acquire, each
+        // checked against the nextClearBit() read before it
+        const fill = (lv) => {
+            for (let k = 0; k < lv; k++) {
+                const want = s.nextClearBit();
+                const got = s.acquire();
+                if (got !== want) return 'FB1024 fill acquire ' + got + ' !== prior nextClearBit ' + want + ' cap ' + cap;
+                if (got !== -1 && (got >>> 5) >= 16) acqHigh++;
+            }
+            return null;
+        };
+        const level = (ci === 4 || ci === 6) ? cap : key(cap + 1);
+        const fe = fill(level);
+        if (fe !== null) { F(fe); return; }
+        if (level === cap) {
+            if (s.acquire() !== -1) { F('FB1024 acquire on a full pool != -1 cap ' + cap); return; }
+            if (cap >= 128) fullBig++;
+        }
+        const bad0 = ctx.oracle.fb1024Invariants(s);
+        if (bad0 !== null) { F('FB1024 ' + bad0 + ' after pre-fill cap ' + cap); return; }
+        const clearOdds = cap >= 128 ? 500 : 100;
+        for (let k = 0; k < 4000; k++) {
+            const r = h.randBelow(100);
+            const i = key(cap);
+            if (key(clearOdds) === 0) {
+                if (cap >= 512) { let hi = false; for (let w = 16; w < 32; w++) if (s._data[w] !== 0) hi = true; if (hi) clearBig++; }
+                s.clear();
+                if (cap >= 128) { const fe2 = fill(key(cap + 1)); if (fe2 !== null) { F(fe2); return; } }
+            } else if (r < 20) s.add(i);
+            else if (r < 30) s.remove(i);
+            else if (r < 40) s.toggle(i);
+            else if (r < 70) {
+                const want = s.nextClearBit();
+                const got = s.acquire();
+                if (got !== want) { F('FB1024 acquire ' + got + ' !== prior nextClearBit ' + want + ' cap ' + cap); return; }
+                if (got !== -1 && !s.has(got)) { F('FB1024 acquired slot ' + got + ' not held cap ' + cap); return; }
+                if (got === -1 && cap >= 128) fullBig++;
+                if (got !== -1 && (got >>> 5) >= 16) acqHigh++;
+            } else {
+                const x = s.nextSetBit(i);
+                if (x !== -1) s.release(x);
+            }
+            const bad = ctx.oracle.fb1024Invariants(s);
+            if (bad !== null) { F('FB1024 ' + bad + ' after op ' + k + ' cap ' + cap); return; }
+            if ((k & 31) !== 0) continue;
+            LIST = [];
+            s.forEach(cb);
+            const walk = [];
+            for (let b = s.nextSetBit(0), n = 0; b !== -1 && n <= cap; b = s.nextSetBit(b + 1), n++) walk.push(b);
+            const lw = LIST.join(), ww = walk.join();
+            if (lw !== ww) { F('FB1024 cursor walk != forEach cap ' + cap); return; }
+            if (s.size !== LIST.length) F('FB1024 size ' + s.size + ' != forEach count ' + LIST.length + ' cap ' + cap);
+            if (s.lowest() !== s.nextSetBit(0)) F('FB1024 lowest != nextSetBit(0) cap ' + cap);
+            if (s.highest() !== (LIST.length ? LIST[LIST.length - 1] : -1)) F('FB1024 highest != last visited cap ' + cap);
+            if (s.nextSetBit(cap) !== -1) F('FB1024 nextSetBit(cap) != -1 cap ' + cap);
+            if (s.isEmpty() !== (s.size === 0) || s.isFull() !== (s.size === cap)) F('FB1024 isEmpty/isFull vs size cap ' + cap);
+            if ((s.nextClearBit() === -1) !== s.isFull()) F('FB1024 nextClearBit -1 iff isFull cap ' + cap);
+            if (!s.hasAll(s) || s.hasAny(s) !== !s.isEmpty()) F('FB1024 hasAll/hasAny(self) cap ' + cap);
+        }
+    }
+    // fullBig is reported, not gated here: the forced pre-fill to capacity always
+    // counts it, so a T0 minimum could never fail. T5 gates it from the oracle.
+    if (!(acqHigh >= 100) || !(clearBig >= 3)) F('FB1024 coverage: acquires in words >= 16 ' + acqHigh + ' (need >= 100), clears at cap >= 512 with a high word set ' + clearBig + ' (need >= 3) -- fail closed');
+    ctx.measures.fb1024T0 = { fullBig, acqHigh, clearBig };
 }

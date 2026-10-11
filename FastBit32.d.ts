@@ -2,7 +2,8 @@
  * FastBit32 -- Zero-GC, Monomorphic 32-bit Flag Manager.
  *
  * Engineered for 60fps hot-path execution, ECS masking, and object pooling.
- * All operations are branchless bitwise ops on a single unsigned 32-bit integer.
+ * FastBit32's bit and mask ops are branchless bitwise ops on one 32-bit word;
+ * FastBit1024 (below) is a two-level 1024-bit pool.
  *
  * **Caveats:**
  * - JS bitwise shifts apply modulo 32 silently: `add(32)` == `add(0)`.
@@ -561,3 +562,137 @@ export function forEachMaskUnion(
     maskB: FastBit32,
     callback: (bit: number) => void
 ): void;
+/**
+ * FastBit1024 -- a fixed 32 x 32 two-level bitmap (1.4.0): 1024 bits, or fewer
+ * via `capacity`, for slot pools and dense id sets. Storage is an `Int32Array(32)`
+ * plus two 32-bit summaries (`_active`: word non-empty; `_full`: word all ones) and
+ * an exact count, kept up to date by every mutator. Every op is loop-free except
+ * `forEach`, `hasAll`, `hasAny` and `clear` (O(non-empty words)). No coupling to
+ * `FastBit32`.
+ *
+ * **Input law (SC-5; differs from FastBit32, whose hot ops trust the caller -- SC-3, open, decided in S6):** every method
+ * that takes an index FAILS CLOSED. An index must be an integer `0 <= i < capacity`
+ * (`nextSetBit`: `0 <= from <= capacity`); anything else throws `RangeError`
+ * (`undefined`, `null`, `NaN`, `1.5`, `'3'`, `true`, `-1`, `capacity`, `2^32`,
+ * `{}` ...). A `Symbol`, a `BigInt` or a null-prototype object throws `TypeError`
+ * from the index arithmetic itself. `-0` is slot 0. A rejected call writes
+ * nothing; the argument's own conversion (`valueOf` / `toString` /
+ * `Symbol.toPrimitive`) still runs once, before the throw.
+ *
+ * Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal;
+ * writing them voids invariants I1-I4.
+ *
+ * `hasAll`/`hasAny` check `other instanceof FastBit1024`: a FastBit1024 from a
+ * second installed copy of the package is a different class and throws TypeError.
+ *
+ * @example
+ * ```js
+ * import { FastBit1024 } from '@zakkster/lite-fastbit32';
+ *
+ * const pool = new FastBit1024(500);   // slots 0..499
+ * const a = pool.acquire();            // 0 (the LOWEST free slot)
+ * const b = pool.acquire();            // 1
+ * pool.release(a);                     // slot 0 is free again
+ * pool.acquire();                      // 0
+ * pool.release(a); pool.release(a);    // second call throws: double release
+ * ```
+ */
+export class FastBit1024 {
+    /**
+     * @param capacity - An integer 1..1024; `undefined` means 1024. Anything
+     *   else throws `RangeError` (no coercion: `'64'`, `64n`, `1.5`, `0`, `1025`).
+     * @throws {RangeError} On a capacity that is not an integer 1..1024.
+     */
+    constructor(capacity?: number);
+
+    /** Sets `bit`. O(1). @throws {RangeError} unless `0 <= bit < capacity` (integer). */
+    add(bit: number): this;
+
+    /** Clears `bit`. O(1). @throws {RangeError} unless `0 <= bit < capacity` (integer). */
+    remove(bit: number): this;
+
+    /** Flips `bit`. O(1). @throws {RangeError} unless `0 <= bit < capacity` (integer). */
+    toggle(bit: number): this;
+
+    /**
+     * True when `bit` is set. O(1). Fails closed like every index op (two
+     * compares; measured ~0.8 ns over the unchecked read):
+     * `has(undefined)` throws instead of answering for slot 0.
+     * @throws {RangeError} unless `0 <= bit < capacity` (integer).
+     */
+    has(bit: number): boolean;
+
+    /**
+     * Takes the LOWEST free slot and marks it held. O(1) (three `clz32`, no loop).
+     * @returns The slot, or -1 when every slot below capacity is held.
+     */
+    acquire(): number;
+
+    /**
+     * Frees a held slot. O(1).
+     * @throws {RangeError} unless `0 <= slot < capacity` (integer), AND when the
+     *   slot is not held (double release). Either way release writes nothing.
+     */
+    release(slot: number): this;
+
+    /** Number of set bits (exact, O(1)). */
+    readonly size: number;
+
+    /** The capacity given to the constructor (1..1024). */
+    readonly capacity: number;
+
+    /** True when no bit is set. O(1). */
+    isEmpty(): boolean;
+
+    /** True when every bit below capacity is set. O(1). */
+    isFull(): boolean;
+
+    /** Index of the lowest set bit, or -1 when empty. O(1). */
+    lowest(): number;
+
+    /** Index of the highest set bit, or -1 when empty. O(1). */
+    highest(): number;
+
+    /** Index of the lowest CLEAR bit below capacity, or -1 when full. O(1). */
+    nextClearBit(): number;
+
+    /**
+     * Index of the lowest set bit `>= from`, or -1. O(1). Domain:
+     * `0 <= from <= capacity` (`capacity` returns -1, so the closure-free cursor
+     * `for (let b = s.nextSetBit(0); b !== -1; b = s.nextSetBit(b + 1))` ends).
+     * @throws {RangeError} When `from` is outside `0..capacity` or not an integer.
+     */
+    nextSetBit(from: number): number;
+
+    /**
+     * True when every bit set in `other` is set here. O(non-empty words of
+     * `other`). Capacities may differ: words above a capacity are always 0, so
+     * the answer is exact.
+     * @throws {TypeError} When `other` is not a FastBit1024 (null, `{}`, a FastBit32 ...).
+     *   The brand is `instanceof`: an `Object.create(FastBit1024.prototype)`
+     *   forgery passes it and is unsupported (no defined answer;
+     *   neither method writes to either instance).
+     */
+    hasAll(other: FastBit1024): boolean;
+
+    /**
+     * True when some bit set in `other` is set here. Capacities may differ.
+     * @throws {TypeError} When `other` is not a FastBit1024.
+     *   The brand is `instanceof`: an `Object.create(FastBit1024.prototype)`
+     *   forgery passes it and is unsupported (no defined answer;
+     *   neither method writes to either instance).
+     */
+    hasAny(other: FastBit1024): boolean;
+
+    /**
+     * Calls `callback(bit)` for every set bit, ascending. O(k + non-empty words).
+     * Hoist the callback: a capturing closure allocates per call. Each word is
+     * read once, as a snapshot: a callback that removes a later bit of the same
+     * word is still called for it. To mutate during the walk, use the
+     * `nextSetBit` cursor.
+     */
+    forEach(callback: (bit: number) => void): this;
+
+    /** Clears every bit. O(non-empty words). */
+    clear(): this;
+}

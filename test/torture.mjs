@@ -166,6 +166,13 @@ if (m.s4ByLane) {
         console.error('MEASURE S4 cursor/rank/equals/equalsValue/isSubsetOf/set/copy/BitMapper.bit+size lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
     }
 }
+if (m.fb1024ByLane) {
+    for (const lane of m.fb1024ByLane) {
+        console.error('MEASURE FastBit1024 acquire+release/has/nextClearBit/lowest/highest/cursor/hasAll/hasAny lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
+    }
+}
+if (m.fb1024Coverage) console.error('MEASURE FastBit1024 T5 coverage ' + JSON.stringify(m.fb1024Coverage) + ' [gated: fullBig>=50 acqHigh>=10000 fullHigh>=1000 rel31>=1000 clearBig>=20]');
+if (m.fb1024T0) console.error('MEASURE FastBit1024 T0 coverage ' + JSON.stringify(m.fb1024T0) + ' [gated: acqHigh>=100 clearBig>=3; fullBig reported only, T5 gates it]');
 if (m.sharedHasAllBop !== undefined) console.error('MEASURE shared-site sharedHasAll = ' + Number(m.sharedHasAllBop).toFixed(3) + ' B/op, sharedForEach = ' + Number(m.sharedForEachBop).toFixed(3) + ' B/op [gated <0.1]');
 if (m.closureScavenges !== undefined) console.error('MEASURE forEach-closure lane scavenges over 2e6 = ' + m.closureScavenges + ' [gated <=2]');
 if (m.budgetBytesPerOp !== undefined) console.error('MEASURE budget bytesPerOp = ' + m.budgetBytesPerOp + ' (diagnostic); manual-gate verdict=' + m.budgetVerdict + ' major=' + m.budgetMajor + ' maxMs=' + Number(m.budgetMaxMs).toFixed(2));

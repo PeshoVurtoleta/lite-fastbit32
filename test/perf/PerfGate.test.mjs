@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { zgcSuite, measure, verdict } from '@zakkster/lite-perf-gate';
 import {
     VERSION,
-    FastBit32, BitMapper,
+    FastBit32, BitMapper, FastBit1024,
     forEachArray, forEachObject, forEachMapped, forEachMappedObject,
     forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '../../FastBit32.js';
@@ -169,6 +169,30 @@ const cursorLoop = {
     statsOf(s) { return { grows: grows(s) }; }
 };
 
+// S4b: FastBit1024 pool acquire+release (lowest free slot, fail-closed release)
+// on a 1024-slot pool with every word full except the one being cycled; the slot
+// walks all 32 words (BITS * 33 mod 1024), so every summary path is exercised.
+// grows = the pool's own-key count (5), fixed for its lifetime.
+const fb1024AcquireRelease = {
+    name: 'FastBit1024 acquire+release pair (+ has/nextClearBit)',
+    setup() {
+        const fb = new FastBit1024();
+        for (let i = 0; i < 1024; i++) fb.acquire();
+        return { fb, sink: 0 };
+    },
+    hot(s, n) {
+        const fb = s.fb; let sink = s.sink | 0;
+        for (let i = 0; i < n; i++) {
+            const slot = (i * 33) & 1023;
+            fb.release(slot);
+            const x = fb.acquire();
+            sink = (sink + x + (fb.has(slot) ? 1 : 0) + fb.nextClearBit()) | 0;
+        }
+        s.sink = sink | 0;
+    },
+    statsOf(s) { return { grows: grows(s) }; }
+};
+
 // The seven free iterators, each its own monomorphic scenario. All seven are
 // 0-alloc (gated below, including forEachMappedObject).
 function iterScenario(name, fn) {
@@ -222,7 +246,7 @@ function warmed(scn) {
     };
 }
 
-const GATED = [singleBit, maskOps, popcount, scan, forEachHoisted, cursorLoop,
+const GATED = [singleBit, maskOps, popcount, scan, forEachHoisted, cursorLoop, fb1024AcquireRelease,
     feArray, feObject, feMapped, feMappedObject, feMaskPair, feMaskDiff, feMaskUnion];
 
 zgcSuite({

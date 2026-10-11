@@ -2,7 +2,7 @@
 // never import the library themselves; they read ctx.FB / ctx.Mapper / ctx.iter.
 
 import {
-    FastBit32, BitMapper,
+    FastBit32, BitMapper, FastBit1024,
     forEachArray, forEachObject, forEachMapped, forEachMappedObject,
     forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '../../FastBit32.js';
@@ -13,6 +13,7 @@ export function buildBaseCtx(seed) {
     return {
         FB: FastBit32,
         Mapper: BitMapper,
+        FB1024: FastBit1024,
         iter: {
             forEachArray, forEachObject, forEachMapped, forEachMappedObject,
             forEachMaskPair, forEachMaskDiff, forEachMaskUnion

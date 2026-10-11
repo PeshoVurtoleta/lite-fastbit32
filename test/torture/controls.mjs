@@ -51,6 +51,73 @@ function isFullUnsigned(FB) {
     };
 }
 
+function fb1024Sparse(C) {
+    // The SparseBit1024 policy (RESEARCH Appendix A, 11.2): nextClearBit and
+    // acquire route through the first EMPTY word, `~_active & (_active + 1)`,
+    // instead of the first NOT-FULL word. Lowest-slot reuse is lost (a free slot
+    // in a partly used word is skipped). T1 (fill order) and T5 MUST fail.
+    return class extends C {
+        nextClearBit() {
+            const a = this._active;
+            const s = (31 - Math.clz32(~a & (a + 1))) << 5;
+            return s >= 0 && s < this._cap ? s : -1;
+        }
+        acquire() {
+            const s = this.nextClearBit();
+            if (s !== -1) this.add(s);
+            return s;
+        }
+    };
+}
+
+function fb1024NoFull(C) {
+    // One summary instead of two (RESEARCH 11.3 d): the `_full` summary is never
+    // set, so nextClearBit/acquire land on word 0 even when it is full. T0 (I2
+    // after every op) and T5 MUST fail.
+    return class extends C {
+        add(bit) { super.add(bit); this._full = 0; return this; }
+        acquire() { const s = super.acquire(); this._full = 0; return s; }
+    };
+}
+
+function fb1024ClearLow16(C) {
+    // The reviewer's clear-low16 mutant: clear() zeroes only words 0-15 but
+    // resets every summary, so bits in words 16-31 survive under _active = 0
+    // (I1 broken, has() answers true for a cleared slot). T0 and T5 MUST fail.
+    return class extends C {
+        clear() {
+            const data = this._data;
+            for (let a = this._active & 0xffff; a !== 0; a &= a - 1) data[31 - Math.clz32(a & -a)] = 0;
+            this._active = 0; this._full = 0; this._n = 0;
+            return this;
+        }
+    };
+}
+
+function fb1024AcqHighword(C) {
+    // The reviewer's acq-highword mutant: in a word >= 16 that is non-empty, has
+    // bit 0 clear and more than one clear bit, acquire takes the SECOND-lowest
+    // clear bit. Unit tests miss it; T0 (acquire === prior nextClearBit) and T5
+    // (oracle) MUST fail.
+    return class extends C {
+        acquire() {
+            const f = ~this._full;
+            if (f === 0) return -1;
+            const w = 31 - Math.clz32(f & -f), data = this._data, old = data[w], c = ~old;
+            const c2 = c & (c - 1);
+            const m = (w >= 16 && old !== 0 && (old & 1) === 0 && c2 !== 0) ? (c2 & -c2) : (c & -c);
+            const s = (w << 5) + (31 - Math.clz32(m));
+            if (s >= this._cap) return -1;
+            const d = old | m;
+            data[w] = d;
+            this._n++;
+            this._active |= 1 << w;
+            this._full |= (Math.clz32(~d) >>> 5) << w;
+            return s;
+        }
+    };
+}
+
 function dedupMapper(Mapper) {
     return class extends Mapper {
         constructor(names) {
@@ -76,6 +143,10 @@ export const CONTROLS = {
     'lowest-noguard': { tiers: ['T0', 'T1'], cheap: true, apply(ctx) { ctx.FB = lowestNoGuard(ctx.FB); } },
     'nextset-nowrap': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextSetNoWrap(ctx.FB); } },
     'isfull-unsigned': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB = isFullUnsigned(ctx.FB); } },
+    'fb1024-sparse': { tiers: ['T1', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Sparse(ctx.FB1024); } },
+    'fb1024-nofull': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024NoFull(ctx.FB1024); } },
+    'fb1024-clear-low16': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024ClearLow16(ctx.FB1024); } },
+    'fb1024-acq-highword': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024AcqHighword(ctx.FB1024); } },
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },
     'oracle-flip': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.oracle = flipOracle(ctx.oracle); } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },

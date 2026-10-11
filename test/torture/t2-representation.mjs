@@ -113,5 +113,64 @@ export function run(ctx) {
         }
     }
 
+    // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
+    try { fb1024Words(ctx, fails); } catch (e) { fails.push('T2 ' + 'FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green: 0 };
+}
+
+// ---- S4b FastBit1024: every word value in every word (law 8 teeth) ----------
+// Each of 32 words holds 0, 1, 1<<30, -1 (full word), -2^31 (bit 31 alone),
+// 2^31-1, -2 and two alternating patterns, built through add(); every query is
+// compared to the O1024 truth model, and hasAll/hasAny run against an `other`
+// holding the same word (bit 31 per word) and the same word plus one more bit.
+const FB1024_VALS = [0, 1, 1 << 30, -1, -(2 ** 31), 0x7fffffff, -2, 0x55555555, 0xAAAAAAAA | 0];
+function fb1024Words(ctx, fails) {
+    const C = ctx.FB1024;
+    const O = ctx.oracle.O1024;
+    const F = (m) => fails.push('T2 FB1024: ' + m);
+    for (let w = 0; w < 32; w++) {
+        for (const v of FB1024_VALS) {
+            const s = new C();
+            const o = new O(1024);
+            const other = new C();
+            for (let b = 0; b < 32; b++) {
+                if (((v >>> b) & 1) === 1) { s.add((w << 5) + b); other.add((w << 5) + b); o.b[(w << 5) + b] = 1; }
+            }
+            const tag = 'word ' + w + ' value ' + v;
+            if (((s._data[w] ^ v) | 0) !== 0) F(tag + ' stored ' + s._data[w]);
+            const bad = ctx.oracle.fb1024Invariants(s);
+            if (bad !== null) F(tag + ' ' + bad);
+            if (s.size !== o.count()) F(tag + ' size ' + s.size);
+            if (s.lowest() !== o.lowest()) F(tag + ' lowest ' + s.lowest());
+            if (s.highest() !== o.highest()) F(tag + ' highest ' + s.highest());
+            if (s.nextClearBit() !== o.clearLow()) F(tag + ' nextClearBit ' + s.nextClearBit());
+            for (let b = 0; b < 32; b++) {
+                const i = (w << 5) + b;
+                if (s.has(i) !== (o.b[i] === 1)) F(tag + ' has(' + i + ')');
+                if (s.nextSetBit(i) !== o.next(i)) F(tag + ' nextSetBit(' + i + ')');
+            }
+            if (!s.hasAll(other) || !other.hasAll(s)) F(tag + ' hasAll(same word)');
+            if (s.hasAny(other) !== (v !== 0)) F(tag + ' hasAny(same word)');
+            const clr = o.clearLow();
+            if (clr !== -1) {
+                other.add(clr);
+                if (s.hasAll(other)) F(tag + ' hasAll(+bit ' + clr + ') true');
+                if (!other.hasAll(s)) F(tag + ' superset hasAll false');
+            }
+            if (((v >>> 31) & 1) === 1) {
+                s.remove((w << 5) + 31);
+                if (((s._data[w] ^ (v & 0x7fffffff)) | 0) !== 0 || ((s._full >>> w) & 1) !== 0) F(tag + ' remove bit 31');
+                const bad2 = ctx.oracle.fb1024Invariants(s);
+                if (bad2 !== null) F(tag + ' after remove bit 31: ' + bad2);
+            }
+        }
+    }
+    // hasAll/hasAny across capacities (allowed: words above a capacity are 0)
+    const small = new C(33);
+    const big = new C(1024);
+    small.add(0).add(31).add(32);
+    big.add(0).add(31).add(32).add(1023);
+    if (!big.hasAll(small) || small.hasAll(big) || !small.hasAny(big) || !big.hasAny(small)) F('cross-capacity hasAll/hasAny (33 vs 1024)');
+    const bigOnlyHigh = new C(1024).add(1023);
+    if (small.hasAny(bigOnlyHigh) || small.hasAll(bigOnlyHigh) || !bigOnlyHigh.hasAll(new C(1))) F('cross-capacity word above capacity');
 }
