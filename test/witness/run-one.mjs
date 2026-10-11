@@ -368,7 +368,8 @@ function main() {
     return;
   }
 
-  // Scalar modes: density (param = d) or position (param coded, see above).
+  // Scalar modes: density (param = d), position (param coded, see above) or
+  // kwords (param = K distinct words of one density; the one-word control).
   const CORPUS = spec.corpus || 2048;
   const outer = spec.outer || 512;
   const rng = makeRng(spec.seed || 0x1234abcd);
@@ -398,6 +399,22 @@ function main() {
     } else if (mode === 'position') {
       const w = wordOfPosition(p);
       for (let i = 0; i < CORPUS; i++) corpus[i] = w;
+    } else if (mode === 'kwords') {
+      // CONTROL (PRESSURE one-word effect, driver step 6b): param = K DISTINCT
+      // random words of density spec.density (default 16), repeated to fill the
+      // corpus. K = 1 is a one-word stream like the d0/d32 corpora; K = CORPUS
+      // is the density sweep's shape.
+      const d = spec.density === undefined ? 16 : spec.density;
+      if (!(Number.isInteger(p) && p >= 1 && p <= CORPUS && Number.isInteger(d) && d >= 1 && d <= 31)) {
+        throw new Error('run-one: kwords needs 1 <= K <= ' + CORPUS + ' and density 1..31, got K=' + p + ' d=' + d);
+      }
+      const seen = new Set(), ws = [];
+      for (let tries = 0; ws.length < p; tries++) {
+        if (tries > 64 * p) throw new Error('run-one: cannot draw ' + p + ' distinct d' + d + ' words');
+        const w = wordOfDensity(rng, d);
+        if (!seen.has(w)) { seen.add(w); ws.push(w); }
+      }
+      for (let i = 0; i < CORPUS; i++) corpus[i] = ws[i % p];
     } else {
       throw new Error('run-one: unknown mode ' + mode);
     }

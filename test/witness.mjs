@@ -23,6 +23,8 @@
  *   NOISE(lane) = median cell-to-cell spread (max - min net) over the lane's
  *                 real-op rows (22 flat ops x 2 sweeps = 44 rows; 38 before S5, 26 before S4). This is the
  *                 scatter a flat op shows across cells on this host in this run.
+ *                 PRESSURE density rows count d1..d31 only (see PRESSURE
+ *                 DENSITY SUBSET below: d0/d32 are one-word corpora).
  *                 The pass-to-pass dispersion of a repeated cell is printed too,
  *                 but it is NOT the comparator: it ran 0.015-0.033 ns HOT while
  *                 single cells sat ~0.1 ns off their row for a whole process
@@ -66,7 +68,8 @@
  *   PRESSURE  16-bit LUT (flat when L1-hot, data-dependent under the stream):
  *             spread >= FOIL_SPREAD_K x NOISE AND its spread beats the worst
  *             real-op density spread of the lane by MARGIN_K_PRESSURE x NOISE.
- *             Kernighan is run and pinned red in PRESSURE too.
+ *             Kernighan is run and pinned red in PRESSURE too. Both foils, the
+ *             real-op density rows and SEP are judged over d1..d31 in PRESSURE.
  *   SLOPE     foilIterQuad (O(k^2): curvature), foilIterScan32 (fixed
  *             32-step scan: intercept) and foilIterStep (forEach + a 16-callback
  *             step at k >= 16: max residual).
@@ -91,6 +94,9 @@
  *   PRESSURE noise/floor is bimodal: quiet 0.033-0.060, under concurrent host
  *     load 0.095-0.118 (one loaded run drowned LUT16: 3.64 N, SEP 1.90 N) ->
  *     NOISE_FLOOR_MAX PRESSURE 0.08: a loaded host gets a HOST verdict.
+ *     (PRESSURE figures here: all-cell basis, 2026-10-10. Over d1..d31 since
+ *     2026-10-11: NOISE 0.040-0.066 ns, noise/floor 0.029-0.048 in 7 runs; the
+ *     0.08 cap was NOT recalibrated for the d1..d31 NOISE.)
  *     The full witness needs a quiet host.
  *   HOT real ops: spread <= 3.86 N, ratio (EPS 4N) <= 1.86.  foilSubEps spread
  *     9.34-19.96 N (ratio 2.83-4.92 -- not binding).  Other HOT foils >= 77.5 N.
@@ -99,10 +105,13 @@
  *     noise/floor HOT quiet max 0.243 -> NOISE_FLOOR_MAX HOT 0.27 (< flip 0.33).
  *   PRESSURE real ops: spread <= 3.50 N (countMasked density); cells down to
  *     -0.167 ns = -3.6 N (the reviewer saw -0.48 ns / 3.24 N at rounds 3).
- *     LUT16 density 8.82-18.91 N; SEP 6.89-15.40 N; Kernighan >= 84.6 N;
+ *     LUT16 density 8.82-18.91 N; SEP 6.89-15.40 N (all-cell basis, 2026-10-10;
+ *     over d1..d31 since 2026-10-11: LUT16 6.86-11.20 N, SEP 3.86-9.27 N in 7
+ *     runs; real ops <= 4.25 N, select density); Kernighan >= 84.6 N;
  *     foilSubEps 2.07-4.20 N (not resolvable: HOT-lane foil only).
  *     -> EPS_K 7 (negative bound, 1.9x the worst bias), SPREAD_K 4.5 (1.29x),
- *        FOIL_SPREAD_K 5.5 (LUT16 1.6x above), MARGIN_K 2 (SEP 3.4x above).
+ *        FOIL_SPREAD_K 5.5 (LUT16 1.6x above), MARGIN_K 2 (SEP 3.4x above);
+ *        d1..d31 since 2026-10-11: LUT16 1.25x, SEP 1.93x.
  *        No PRESSURE ratio gate: EPS clamps every real cell to 1.00.
  *   Self-check: two processes |a-b| <= 0.137 ns (tol 5 N = 0.19-0.37 ns);
  *     control |count - Kernighan| >= 0.535 ns.
@@ -143,6 +152,10 @@ const MARGIN_K_PRESSURE = 2;                // LUT16 spread - worst real spread 
 // quiet runs 0.033-0.060 (floor 1.32-1.38 ns), runs under concurrent load (load
 // avg ~4.4, another node process) 0.095-0.118 (floor 1.51-1.57 ns) -- there the
 // LUT16 hump drowned (3.64 N, SEP 1.90 N). 0.08 makes that a HOST verdict.
+// (All-cell basis, 2026-10-10. Since 2026-10-11 the PRESSURE NOISE is taken over
+// d1..d31 -- 0.040-0.066 ns, noise/floor 0.029-0.048 in 7 runs, 11-25% below the
+// all-cell NOISE of the same runs -- so the cap fires LATER than calibrated. It
+// was NOT recalibrated for the d1..d31 NOISE.)
 // HOT 0.27: quiet calibration max 0.243 (14 runs); foilSubEps (smallest step
 // 0.70 ns) reads flat once 7 N > 0.70 ns, i.e. N > 0.100 ns = noise/floor 0.33 at
 // the ~0.30 ns floor. The cap must fire BEFORE that flip: 0.243 < 0.27 < 0.33.
@@ -175,7 +188,7 @@ const EXPECTED_RED = {};
 const CALIBRATE = process.env.WITNESS_CALIBRATE === '1';
 const FAST = process.env.WITNESS_FAST === '1';
 
-const CONST_OPS = [
+export const CONST_OPS = [
   'count', 'countMasked', 'countRange', 'lowest', 'highest',
   'nextClearBit', 'highestClearBit', 'has', 'hasAll', 'hasAny',
   'hasNone', 'isEmpty', 'isFull',
@@ -209,6 +222,43 @@ const SLOT_FAST = [0, 1, 15, 16, 30, 31];
 // (round-3 review). Gates, NOISE and EPS are unchanged.
 const SLOT_SLOW = { acquire: { div: 4, reps: 8, rounds: 5 }, has: { div: 2, reps: 8, rounds: 5 } };
 const HOT_FOILS = ['foilKernighan', 'foilEarlyExit', 'foilNaiveLowest', 'foilSet', 'foilSubEps'];
+
+// --- PRESSURE DENSITY SUBSET (2026-10-11, maintainer-approved) ---------------
+// The d0 and d32 density corpora repeat ONE word in all 2048 slots (0 / -1);
+// every other density cell is 2048 distinct random words. Under the PRESSURE
+// stream this CPU (M4 Pro) runs a one-word stream cheaper, and the saving grows
+// with the op's dependent chain (select d16: K = 1 word ~1.94 ns vs K = 2..2048
+// ~2.14-2.22 ns in one process; 0 and -1 alternating cost the full price;
+// rank / countMasked / count 0.01-0.08 ns in the probe (rank d32 ~0.1 ns in the full witness); ctlRead none; HOT none). It is a
+// corpus effect, not the op's code: the full witness read PRESSURE select
+// (density) 5.2-6.2 N > 4.5 N on HEAD and new code alike. So in PRESSURE a
+// density row is judged over d1..d31; d0/d32 print as INFO and are still checked
+// for a negative cell (a broken floor subtraction is not a flatness claim). HOT,
+// every position sweep (each position cell is a one-word corpus, so the row is
+// consistent within itself) and the ctlRead control keep every cell.
+// The SAME subset feeds, by decision (benchmark/METHODOLOGY.md):
+//   NOISE  -- N is "the scatter a flat op shows across the cells it is judged
+//             on": the gate's numerator (a d1..d31 spread) and its unit must
+//             come from the same cells. Letting the explained, excluded corpus
+//             effect into the median would inflate N by an amount that is not
+//             host noise and loosen SPREAD_K x N for every real row. The trade:
+//             the d1..d31 N is 11-25% smaller (7 runs), so the NOISE_FLOOR_MAX
+//             cap fires LATER than calibrated (it was NOT recalibrated for it),
+//             and FOIL_SPREAD_K x N is smaller in ns (the foils are measured on
+//             the same subset; margins in METHODOLOGY).
+//   foils  -- foilLut16 and foilKernighan are gated RED over d1..d31, and SEP
+//             subtracts the worst real-op d1..d31 spread: the teeth must bite on
+//             the cells the real ops are judged on. LUT16's d0/d32 are one-word
+//             corpora too, and its hump is mid-density, so the subset costs it
+//             little; a foil judged on all 33 cells against real ops judged on 31
+//             would credit it with the very artifact the real rows are spared.
+//   (info) foilSubEps PRESSURE keeps all cells: it is not gated, and its whole
+//             step lives at d32.
+// Fail closed: a PRESSURE density row whose params are not integers in 0..32,
+// whose d1..d31 subset has < 2 DISTINCT densities, or whose net / disp / floor
+// are not arrays aligned to params, FAILS with no verdict (even under
+// WITNESS_CALIBRATE, like spawn's malformed-row check) and casts no NOISE vote.
+const ONE_WORD_WHY = 'one repeated word; this CPU runs it cheaper under the stream, see METHODOLOGY';
 
 const range = (n) => Array.from({ length: n }, (_, i) => i);
 const DENSITY_FULL = range(33);
@@ -290,7 +340,8 @@ export const EPS = { HOT: NaN, PRESSURE: NaN };
 
 export function laneNoise(lane, results) {
   const d = [], fl = [], spreads = [];
-  for (const r of results) {
+  for (const r0 of results) {
+    const r = subsetRow(r0);   // PRESSURE density: d1..d31 (PRESSURE DENSITY SUBSET)
     if (!r.valid) continue;
     for (const v of r.disp) d.push(v);
     for (const v of r.floor) fl.push(v);
@@ -315,7 +366,11 @@ export function gateFlat(res, name) {
   const m = metrics(res.net, EPS[lane]);
   const neg = negativeCells(res.net, EPS[lane]);
   const ratioGated = Number.isFinite(FLAT_RATIO[lane]);
-  const ok = CALIBRATE || (res.valid && !(ratioGated && m.ratio > FLAT_RATIO[lane]) && !(m.spread > SPREAD_K[lane] * N) && neg.length === 0);
+  // fail closed: an empty or one-cell row (no flatness measured; empty gives
+  // spread -Infinity, ratio NaN) or a non-finite metric / NOISE is never flat --
+  // every bound below is `!(x > limit)`.
+  const finite = res.net.length > 1 && Number.isFinite(m.spread) && Number.isFinite(m.ratio) && Number.isFinite(N);
+  const ok = CALIBRATE || (res.valid && finite && !(ratioGated && m.ratio > FLAT_RATIO[lane]) && !(m.spread > SPREAD_K[lane] * N) && neg.length === 0);
   note(`  FLAT ${lane.padEnd(8)} ${name.padEnd(26)} ratio=${f2(m.ratio)}${ratioGated ? '/' + FLAT_RATIO[lane] : '(info)'} spread=${f3(m.spread)}ns=${f2(m.spread / N)}N/${SPREAD_K[lane]}N ` +
     `[${f3(m.min)},${f3(m.max)}] ${ok ? 'ok' : hostTag(lane, 'FAIL')}`);
   printFlags(res);
@@ -335,6 +390,68 @@ export function gateRed(res, name, why) {
   note(`  RED  ${lane.padEnd(8)} ${name.padEnd(26)} ratio=${f2(m.ratio)}(info) spread=${f3(m.spread)}ns=${f2(m.spread / N)}N>=${FOIL_SPREAD_K[lane]}N ` +
     `${ok ? 'ok(non-flat)' : hostTag(lane, 'FAIL(came out flat)')}`);
   if (!ok) fail(lane, why(m));
+  return m;
+}
+
+// PRESSURE DENSITY SUBSET: which cells of a row are gated. A PRESSURE density
+// row gates d1..d31 and reports d0/d32 as `info`; every other row gates all.
+export function gateCells(lane, mode, params) {
+  const subset = lane === 'PRESSURE' && mode === 'density';
+  const gate = [], info = [];
+  let ok = Array.isArray(params);
+  if (ok) for (let i = 0; i < params.length; i++) {
+    const p = params[i];
+    if (!subset) gate.push(i);
+    else if (!(Number.isInteger(p) && p >= 0 && p <= 32)) ok = false;
+    else if (p === 0 || p === 32) info.push(i);
+    else gate.push(i);
+  }
+  // >= 2 DISTINCT densities: [0, 16, 16, 32] measures one density, not flatness.
+  if (subset && !(new Set(gate.map((i) => params[i])).size > 1)) ok = false;
+  return { subset, ok, gate, info };
+}
+
+// gateCells for a whole row: a subset row must ALSO carry net / disp / floor
+// arrays aligned to params, or cells past params.length would be dropped
+// silently (fail open). Non-subset rows keep the plain gate's behaviour.
+function rowCells(res) {
+  const c = gateCells(res.lane, res.mode, res.params);
+  if (c.subset && c.ok) {
+    const P = res.params.length;
+    for (const a of [res.net, res.disp, res.floor]) if (!(Array.isArray(a) && a.length === P)) c.ok = false;
+  }
+  return c;
+}
+
+// the row restricted to its gated cells (the row itself when nothing is cut).
+// A malformed, misaligned or too-small subset yields valid: false (fail closed).
+export function subsetRow(res) {
+  const c = rowCells(res);
+  if (!c.subset) return res;
+  const pick = (a) => (Array.isArray(a) ? c.gate.map((i) => a[i]) : []);
+  return { ...res, params: pick(res.params), net: pick(res.net), disp: pick(res.disp), floor: pick(res.floor), valid: res.valid === true && c.ok };
+}
+
+// gateFlat (why absent) or gateRed (why given) over the row's gated cells, plus
+// the INFO line for the cut cells. HOT / position rows: exactly gateFlat/gateRed.
+export function gateSubset(res, name, why) {
+  const red = typeof why === 'function';
+  const c = rowCells(res);
+  if (!c.subset) return red ? gateRed(res, name, why) : gateFlat(res, name);
+  const lane = res.lane;
+  if (!c.ok) {
+    note(`  ${red ? 'RED ' : 'FLAT'} ${lane.padEnd(8)} ${name.padEnd(26)} gate subset d1..d31 empty, malformed or misaligned (params ${JSON.stringify(res.params)}) ${hostTag(lane, 'FAIL')}`);
+    fail(lane, `${name} [${lane}]: density gate subset d1..d31 empty, malformed or misaligned -- no verdict (fail closed)`);
+    return { ratio: NaN, spread: NaN, min: NaN, max: NaN };
+  }
+  const m = red ? gateRed(subsetRow(res), name + ' [d1..31]', why) : gateFlat(subsetRow(res), name + ' [d1..31]');
+  if (c.info.length) {
+    const neg = red ? [] : c.info.filter((i) => !(res.net[i] > -EPS[lane]));
+    const negOk = CALIBRATE || neg.length === 0;   // as gateFlat: CALIBRATE gives no verdict
+    note(`  INFO ${lane.padEnd(8)} ${name.padEnd(26)} ${c.info.map((i) => 'd' + res.params[i] + '=' + f3(res.net[i])).join(' ')} ns ` +
+      `not gated for flatness: ${ONE_WORD_WHY}` + (red ? '' : (negOk ? ' (negative-cell check ok)' : ' -- negative cell ' + hostTag(lane, 'FAIL'))));
+    if (!negOk) fail(lane, `${name} [${lane}] negative cells @${neg.map((i) => 'd' + res.params[i]).join(',')} (<= -EPS) -- broken floor subtraction`);
+  }
   return m;
 }
 
@@ -455,16 +572,17 @@ function run() {
     // 3. gate the real ops.
     let worstSpread = { density: 0, position: 0 };
     for (const r of real) {
-      const m = gateFlat(r, `${r.op} (${r.mode})`);
+      const m = gateSubset(r, `${r.op} (${r.mode})`);   // PRESSURE density: d1..d31
       if (m.spread > worstSpread[r.mode]) worstSpread[r.mode] = m.spread;
     }
     // 4. EXPECTED-RED ops (none since S3): pinned non-flat until flipped.
     for (const r of red) {
-      gateRed(r, `${r.op} (${r.mode}) todo:${EXPECTED_RED[r.op]}`,
+      gateSubset(r, `${r.op} (${r.mode}) todo:${EXPECTED_RED[r.op]}`,
         (m) => `expected-red ${r.op} [${lane} ${r.mode}] came out flat (ratio ${f2(m.ratio)}, spread ${f2(m.spread / NOISE[lane])}N) -- flip it on purpose`);
       printFlags(r);
     }
-    // 5. same-corpus control: the harness's own null must be flat at d0/d32 too.
+    // 5. same-corpus control: the harness's own null must be flat at d0/d32 too
+    // (all cells in BOTH lanes: it is the control, not a subject).
     for (const [mode, params] of [['density', dens], ['position', pos]]) {
       gateFlat(spawn({ subject: 'ctlRead', op: 'ctlRead', lane, mode, params }), `ctlRead (${mode}) [control]`);
     }
@@ -530,17 +648,24 @@ function run() {
     } else {
       const r = spawn({ subject: 'foilLut16', op: 'count', lane, mode: 'density', params: dens });
       TABLE['LUT16 PRESSURE'] = r;
-      const m = gateRed(r, 'foilLut16 (density)', (mm) => `FOIL foilLut16 [PRESSURE] ratio ${f2(mm.ratio)} spread ${f2(mm.spread / NOISE.PRESSURE)}N -- the gate has no teeth`);
+      const m = gateSubset(r, 'foilLut16 (density)', (mm) => `FOIL foilLut16 [PRESSURE] ratio ${f2(mm.ratio)} spread ${f2(mm.spread / NOISE.PRESSURE)}N -- the gate has no teeth`);
       const margin = (m.spread - worstSpread.density) / NOISE.PRESSURE;
       const okM = CALIBRATE || margin >= MARGIN_K_PRESSURE;
-      note(`  SEP  PRESSURE foilLut16 spread - worst real-op density spread = ${f3(m.spread - worstSpread.density)}ns = ${f2(margin)}N >= ${MARGIN_K_PRESSURE}N ${okM ? 'ok' : hostTag('PRESSURE', 'FAIL')}`);
+      note(`  SEP  PRESSURE foilLut16 spread - worst real-op density spread (d1..d31) = ${f3(m.spread - worstSpread.density)}ns = ${f2(margin)}N >= ${MARGIN_K_PRESSURE}N ${okM ? 'ok' : hostTag('PRESSURE', 'FAIL')}`);
       if (!okM) fail('PRESSURE', `PRESSURE separation: LUT16 spread beats the worst real op by only ${f2(margin)}N (< ${MARGIN_K_PRESSURE}N) -- not resolvable on this run`);
       const k = spawn({ subject: 'foilKernighan', op: 'count', lane, mode: 'density', params: dens, outer: FOIL_OUTER.foilKernighan });
       TABLE['Kernighan PRESSURE'] = k;
-      gateRed(k, 'foilKernighan (density)', (mm) => `FOIL foilKernighan [PRESSURE] ratio ${f2(mm.ratio)} spread ${f2(mm.spread / NOISE.PRESSURE)}N`);
+      gateSubset(k, 'foilKernighan (density)', (mm) => `FOIL foilKernighan [PRESSURE] ratio ${f2(mm.ratio)} spread ${f2(mm.spread / NOISE.PRESSURE)}N`);
       const se = spawn({ subject: 'foilSubEps', op: 'count', lane, mode: 'density', params: dens });
       const ms = metrics(se.net, EPS.PRESSURE);
       note(`  (info) foilSubEps PRESSURE ratio=${f2(ms.ratio)} spread=${f2(ms.spread / NOISE.PRESSURE)}N (a ~0.7 ns HOT ALU step hides under the stream: not a PRESSURE foil)`);
+      // 6b. one-word CONTROL (INFO, not gated): the cause of the d0/d32 cut.
+      // select over K distinct random d16 words repeated to fill the corpus:
+      // K = 1 is a one-word stream like d0/d32, K = 2048 the density sweep's shape.
+      const kw = spawn({ subject: 'fb', op: 'select', lane, mode: 'kwords', params: [1, 2, 2048], density: 16 });
+      const kd = kw.net[0] - kw.net[2];
+      note(`  INFO PRESSURE CTRL select d16 one-word stream: K=1 ${f3(kw.net[0])} K=2 ${f3(kw.net[1])} K=2048 ${f3(kw.net[2])} ns; ` +
+        `K=1 - K=2048 = ${f3(kd)} ns = ${f2(kd / NOISE.PRESSURE)}N (info, not gated: why PRESSURE density d0/d32 are cut)`);
     }
     // 7. broken-floor control: a heavier floor MUST trip the negative-cell gate.
     const bf = spawn({ subject: 'ctlRead', op: 'ctlRead', lane, mode: 'density', params: [8, 16], floor: 'foilKernighan' });

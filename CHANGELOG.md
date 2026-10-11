@@ -3,6 +3,27 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Changed (test harness only; no library change)
+
+- Witness: gateFlat fails closed on an empty or one-cell row and on a
+  non-finite metric or NOISE (an empty row used to pass as NaN / -Infinity).
+  The Witness.test.mjs todo is now a real test, and
+  test/WitnessFailClosedQA.test.mjs pins every clause (10 cases).
+- Witness: PRESSURE density rows (real ops, the foilLut16 / foilKernighan
+  foils, the SEP margin and the PRESSURE NOISE) are judged over d1..d31. The
+  d0 and d32 corpora repeat one word, which the M4 Pro runs cheaper under the
+  PRESSURE stream (select ~0.2-0.35 ns); that failed the full witness at
+  PRESSURE select (density) 5.2-6.2 N. d0/d32 print as INFO and keep the
+  negative-cell check; a malformed, misaligned or under-2-density subset
+  fails closed. New INFO control row: select d16 over 1 / 2 / 2048 distinct
+  words. HOT and the position sweeps are unchanged.
+- Tests: test/WitnessSubsetQA.test.mjs (26 cases) drives run() with a fake
+  run-one and pins the d1..d31 routing for real ops, foils, SEP, NOISE and the
+  control row, kwords validation, and HOT / position / ctlRead keeping every
+  cell.
+
 ## [1.5.0] - 2026-10-11
 
 ### Added

@@ -22,7 +22,7 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S3** | The word-math law: clz32 idiom (SC-1), branchless scans, dead coercions | 1.3.0 (folded with S4; 1.2.2 never released) | internal, output-identical | **RELEASED 1.3.0 2026-10-11** (with S4) |
 | **S4** | Tier-1 API: cursor iteration, `rank`, `equals`, `set/copy`, `isSubsetOf`, `rangeMask`, `BitMapper.bit/size` | 1.3.0 | additive | **RELEASED 1.3.0 2026-10-11** (with S3) |
 | **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | 1.4.0 | additive, new export | **RELEASED 1.4.0 2026-10-11** |
-| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | DONE 2026-10-11 (select/nextSubset/nextCombination; reviewers APPROVED, qa PASS; uncommitted, awaiting /release 1.5.0; FastBit1024.select and reverse/rotl/rotr rejected) |
+| **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | **RELEASED 1.5.0 2026-10-11** (select/nextSubset/nextCombination; FastBit1024.select and reverse/rotl/rotr rejected) |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
@@ -1015,10 +1015,36 @@ and NOT blocking any release: the maintainer moved to a lighter process
   - HOST verdict gets its own exit code (2) + "re-run on a quiet host"
     message; optionally one automatic witness:fast retry before failing.
     Never an env var that skips it in prepublishOnly.
-  - gateFlat on an EMPTY row passes as flat (metrics([]) -> ratio NaN,
-    spread -Infinity, both read in-bounds). Unreachable today (sweeps are
-    constants); pinned as a `todo` in test/Witness.test.mjs. Fix: an empty
-    or short row fails closed; flip the todo.
+  - CLOSED 2026-10-11 (unreleased, test-only): gateFlat on an EMPTY row
+    passed as flat (metrics([]) -> ratio NaN, spread -Infinity). It now fails
+    closed on an empty or one-cell row and on any non-finite metric or NOISE;
+    the todo is a real test (+ a one-cell row, + a non-finite pin).
+  - REJECTED 2026-10-11: a SELECT_SLOW estimator for the HOT select flake
+    (div 1 did not help on a quiet host; a div 4 trial failed its pre-fixed
+    rule; METHODOLOGY has the numbers). Reverted; only gateFlat ships.
+  - OPEN, for the dedicated WITNESS-STABILITY session (maintainer,
+    2026-10-11): witness:fast (and so verify / prepublishOnly) failed 11/28
+    QUIET runs on 1.5.0 (load 1.1-1.7): select 7/28 and FastBit1024 HOT rows
+    (acquire, nextClearBit, highest, lowest) 6/28. Investigate per-row noise
+    and the NOISE estimate before changing anything; the backlog's "one
+    automatic retry" is a candidate, not a decision.
+  - CLOSED 2026-10-11 (unreleased, test-only): the full witness FAILed on
+    1.5.0 at PRESSURE select (density) 5.2-6.2 N > 4.5 N, caused by the
+    d0/d32 one-word corpora (METHODOLOGY). PRESSURE density is now gated over
+    d1..d31 (real ops, foils, SEP, NOISE); d0/d32 are INFO, and a K=1/2/2048
+    control row is INFO. Over d1..d31 select reads 1.93-4.25 N (7 runs;
+    least headroom of any row -- if it flakes, it belongs to the stability
+    session; do not widen SPREAD_K).
+  - OPEN, for the WITNESS-STABILITY session: the HOT SLOPE resid check flakes
+    on its own (limit 3.5 x slope): HEAD forEachArray 4.40, then 3.58, and
+    forEachMaskDiff 6.01 in 3 of 4 full runs on 2026-10-11 (load 1.2-2.8);
+    qa then saw forEachMaskUnion 7.40 (and HEAD fails it too). witness:fast
+    (in verify) failed 2 of 4 qa runs at load 1.8-2.4 on FastBit1024 HOT
+    nextClearBit 6.09 N and highest 6.63 N (the second advised "busy host");
+    qa's 3 runs at load 6-9 passed, so load alone does not predict it.
+    Also watch there: foilLut16 PRESSURE over d1..d31 fell to 6.86 N vs the
+    5.5 N line in one run (margin +1.36 N); if it drowns on a quiet host it
+    is stability work, not a reason to move FOIL_SPREAD_K.
   - S3 reviewer notes (2026-10-10): `.value` is a mutable public field; a
     direct out-of-range write (NaN, 0.5, 2**32) answers differently than
     1.2.1 -> make `value` readonly in d.ts or document the invariant (S6).

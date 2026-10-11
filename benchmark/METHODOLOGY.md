@@ -21,7 +21,8 @@ does not inline -- the first ad-hoc probe read SWAR at ~4 ns (mostly call
 overhead); inlined it is ~0.4 ns. So every op is a LITERAL expression compiled
 into a dedicated loop; no function is passed in and called.
 
-Per cell: 3 passes HOT (best-of-4 each) / 5 passes PRESSURE (best-of-3 each); in
+Per cell: 3 passes HOT (best-of-4 each) / 5 passes PRESSURE (best-of-3 each),
+except the SLOT_SLOW rows below; in
 each pass the op loop and an empty-loop FLOOR on the same corpus are timed with
 their reps INTERLEAVED (op, floor, op, floor, ...)
 so drift hits both sides of the subtraction. net = MEDIAN of the per-pass nets;
@@ -65,8 +66,10 @@ real-op HOT cell > 0). The PRESSURE EPS is sized to cover the bias (below).
 
 The anchor: every hot op runs in the SAME time for every input word.
 
-- **NOISE(lane)** = median cell-to-cell spread (max - min net) over the lane's 24
-  real-op rows (12 flat ops x density + position). The per-cell pass dispersion
+- **NOISE(lane)** = median cell-to-cell spread (max - min net) over the lane's 44
+  real-op rows (22 flat ops x density + position; 24 rows at S2a). In PRESSURE,
+  density rows contribute their d1..d31 spread (see "PRESSURE density d0/d32").
+  The per-cell pass dispersion
   is printed next to it but is NOT the comparator: it ran 0.015-0.033 ns HOT while
   single cells sat ~0.1 ns off their row for a whole process (corpus / JIT
   placement), so a dispersion-scaled gate failed clean runs.
@@ -110,9 +113,11 @@ The anchor: every hot op runs in the SAME time for every input word.
   the per-bit cost (0.46-7.4 ns/bit) and the scalar NOISE (~0.05 ns) is ~100x
   below it.
 
-Sweeps (full run): density 0..32 and position 0..31 + {empty, full} for the 13
-constant-time ops in BOTH lanes -- d0/d32 and empty/full are gated in PRESSURE
-too (the old "endpoint artifact" was the deopted stream index). Slopes: k = 0, 2,
+Sweeps (full run): density 0..32 and position 0..31 + {empty, full} for the 22
+constant-time ops (13 at S2a) in BOTH lanes -- empty/full are gated in PRESSURE
+too (the old "endpoint artifact" was the deopted stream index); PRESSURE density
+rows are gated over d1..d31 and d0/d32 print as INFO (one-word corpora, see
+"PRESSURE density d0/d32"). Slopes: k = 0, 2,
 .., 32 for `forEach` and the 7 free iterators.
 
 ### Frozen floors (calibration + margin, D-02 pattern)
@@ -126,7 +131,7 @@ NOISE(lane).
 | --- | --- | --- |
 | NOISE HOT / PRESSURE | measured per run | 0.038-0.073 ns / 0.046-0.081 ns (5 passes halved PRESSURE from 0.099-0.154) |
 | `NOISE_FLOOR_MAX` HOT | 0.27 | quiet noise/floor <= 0.243; foilSubEps flips at ~0.33 |
-| `NOISE_FLOOR_MAX` PRESSURE | 0.08 | quiet 0.033-0.060 (floor 1.32-1.38 ns); loaded 0.095-0.118 (floor 1.31-1.57 ns) |
+| `NOISE_FLOOR_MAX` PRESSURE | 0.08 | quiet 0.033-0.060 (floor 1.32-1.38 ns); loaded 0.095-0.118 (floor 1.31-1.57 ns) -- all-cell NOISE basis (2026-10-10); since 2026-10-11 PRESSURE NOISE is over d1..d31 (11-25% lower, 7 runs), so the cap is more lenient than calibrated; not recalibrated |
 | `EPS_K` HOT | 4 | real-op HOT ratio <= 1.86 |
 | `EPS_K` PRESSURE | 7 | worst real cell -0.167 ns = -3.6 N (1.9x) |
 | `FLAT_RATIO` HOT | 2.5 | real ops <= 1.86 (1.34x) |
@@ -134,8 +139,8 @@ NOISE(lane).
 | `SPREAD_K` HOT | 6 | real ops <= 3.86 N (1.55x) |
 | `SPREAD_K` PRESSURE | 4.5 | real ops <= 3.50 N (countMasked density) (1.29x) |
 | `FOIL_SPREAD_K` HOT | 7 | foilSubEps 9.34-19.96 N (1.33x), other foils >= 77.5 N |
-| `FOIL_SPREAD_K` PRESSURE | 5.5 | LUT16 8.82-18.91 N (1.6x) |
-| `MARGIN_K_PRESSURE` | 2 | SEP (LUT16 - worst real-op density spread) 6.89-15.40 N (3.4x) |
+| `FOIL_SPREAD_K` PRESSURE | 5.5 | LUT16 8.82-18.91 N (1.6x), all-cell basis (2026-10-10); over d1..d31 since 2026-10-11: 6.86-11.20 N (1.25x, 7 runs) |
+| `MARGIN_K_PRESSURE` | 2 | SEP (LUT16 - worst real-op density spread) 6.89-15.40 N (3.4x), all-cell basis; over d1..d31 since 2026-10-11: 3.86-9.27 N (1.93x, 7 runs) |
 | `REPEAT_K` | 5 | two processes, count d4/d8/d16: \|a-b\| <= 0.137 ns (5 N = 0.19-0.37 ns); control >= 0.535 ns |
 | `SLOPE_R2_FLOOR` | 0.90 (all) | 6 plain iterators >= 0.954; forEachMapped phase 0 >= 0.995; forEachArray >= 0.978 |
 | `RESID_K` | 3.5 (all) | 6 plain <= 2.57 x slope; forEachMapped phase 0 <= 1.28; forEachArray (quadratic) <= 2.85; foilIterStep 4.51-5.13 |
@@ -177,7 +182,7 @@ spread <= 2.44 N, LUT16 7.03 N, SEP 4.59 N); run B exit 1 on the host verdict on
 | naive forward lowest scan | HOT | ratio 9.6-13.6, 77.5-156 N | lowest set bit |
 | `Set<number>` by iteration | HOT | ratio 13.5-15.0, 335-652 N | O(popcount) + iterator |
 | foilSubEps (one imul on the full word) | HOT | 9.34-19.96 N, step ~0.7-0.8 ns | sub-old-EPS data dependence |
-| 16-bit LUT (64 KB), 2 loads | PRESSURE | 8.82-18.91 N, SEP 6.89-15.40 N (HOT: flat) | mixed words miss; 0x0000/0xFFFF stay cached |
+| 16-bit LUT (64 KB), 2 loads | PRESSURE | 8.82-18.91 N, SEP 6.89-15.40 N all-cell basis; over d1..d31 6.86-11.20 N, SEP 3.86-9.27 N, 7 runs (HOT: flat) | mixed words miss; 0x0000/0xFFFF stay cached |
 | foilIterQuad | slope | curv 0.953-0.980 | O(k^2) callbacks |
 | foilIterScan32 | slope | a/slope 29.7-42.7 | fixed 32-step scan |
 | foilIterStep | slope | resid 4.51-5.13 x slope (R^2 0.915-0.936, \|curv\| <= 0.19) | forEach + 16 callbacks at k >= 16 |
@@ -203,8 +208,9 @@ exceeded -> NOISE FAIL (and live, under host load, above).
 
 ### PRESSURE resolution
 
-The LUT16 claim IS resolvable on a quiet host: its density hump (d0 ~0, mid
-densities 0.5-1.0 ns) beats the worst real-op spread by 6.89-15.40 N in the 8
+The LUT16 claim IS resolvable on a quiet host: its density hump (d0 ~0, d1/d31
+~0.3 ns, mid densities 0.5-0.8 ns; gated over d1..d31 since 2026-10-11: 6.86-11.20
+N, SEP 3.86-9.27 N in 7 runs) beats the worst real-op spread by 6.89-15.40 N in the 8
 calibration runs. A ~0.7 ns ALU step (foilSubEps) is NOT resolvable in PRESSURE
 (2.07-4.20 N, inside the real-op band): it hides under the stream. PRESSURE
 resolves cache behaviour, not ALU work; HOT resolves ALU work.
@@ -344,6 +350,34 @@ in 32 instances spread 2.50-6.54 ns, and reversing the allocation order moved th
 - SLOT_SLOW (acquire and has only): median of 5 passes of best-of-8 reps at outer / 4 (acquire) or outer / 2 (has).
   This is an estimator change, not a threshold change. The foil and a deliberate word step read the same with and
   without it.
+- REJECTED 2026-10-11: a SELECT_SLOW estimator for the HOT FastBit32 `select` rows (the witness:fast flake). On a
+  quiet host (load 1.1-1.7) div 1 (best of 8, median of 5, full outer) did not lower the probe's median spread vs
+  the lane config and still failed witness:fast 2/23 (HEAD 7/28). A div 4 trial under a decision rule fixed in
+  advance failed it (probe density max 0.150 vs 0.144 ns lane; witness:fast select FAILs 1/10 vs HEAD 0/10). The
+  flake is not select-specific: HEAD failed 11/28 quiet witness:fast runs, FastBit1024 rows included. It belongs to
+  the dedicated witness-stability session (ROADMAP). A ~0.15 ns step added to select (off its dependent chain) was
+  gated red in only 3-4/8 runs under either config: at ~3 ns the 6 N bound is ~9% of the op, and that is the
+  gate's resolution for this row.
+- PRESSURE density d0/d32 (2026-10-11): those two corpora repeat ONE word in all 2048 slots (d0 = 0, d32 = -1;
+  every other density cell is 2048 distinct random words). On this M4 Pro, under the PRESSURE stream, a one-word
+  stream makes every op cheaper, more so the longer its dependent chain (likely load value prediction; a JS probe
+  cannot separate it from a same-value store effect). qa scratch probe (2026-10-11, logs not kept in the repo):
+  select K = 1 distinct word ~1.94 ns vs K = 2..2048 ~2.14-2.22 in one process (witness control row K = 1 vs
+  K = 2048: qa's 3 runs 2.43-2.48 vs 2.67-2.74 ns, all 7 runs 2.05-2.48 vs 2.31-2.74; absolute ns vary run to run,
+  the deltas agree); 0 and -1 alternating cost the full price; rank / countMasked / count gaps 0.01-0.08 ns; ctlRead
+  none; HOT shows no effect. So the full witness's PRESSURE `select (density)` 5.2-6.2 N > 4.5 N (HEAD and new
+  alike) is a corpus artifact, not select's code; the published HOT-only flatness claim is unaffected.
+  RESOLVED 2026-10-11 (maintainer-approved, unreleased): the witness gates PRESSURE density rows (real ops,
+  foilLut16, foilKernighan, SEP) and the PRESSURE NOISE over d1..d31; d0/d32 print as INFO and keep the
+  negative-cell check. HOT, the position sweeps and ctlRead keep every cell. Why the cut leaves no hole: HOT still
+  gates d0/d32 for every op, and the PRESSURE position rows still gate the words 0 and -1 (params 100/101)
+  against other one-word corpora; only the one-word-vs-2048-word comparison the effect skews is dropped. An INFO control row prints select d16
+  over K = 1 / 2 / 2048 distinct words: K = 1 was 0.21-0.35 ns (3.9-8.0 N) below K = 2048 in 7 runs and K = 2
+  matched K = 2048 within 0.06 ns. Over d1..d31 select reads 1.93-4.25 N vs 4.5 N in 7 runs (all 33 cells 4.9-7.0 N at the
+  all-cell NOISE the 1.5.0 gate uses), extremes
+  on scattered cells, no density trend. PRESSURE NOISE (and its floor median) over d1..d31 0.040-0.066 ns, 11-25% below the all-cell NOISE (7 runs); the NOISE_FLOOR_MAX PRESSURE
+  0.08 cap was not recalibrated for it and fires later than calibrated. Watch: select has the least real-op headroom (4.25 N vs 4.5 N in one run) and
+  foilLut16 the thinnest foil margin (6.86 N vs 5.5 N in one run).
 - PRESSURE lane: the FastBit1024 rows print as INFO, never gated (maintainer decision). Same-word control, all 32
   cells on word 5, at the shipped estimator:
   - PRESSURE `has` failed 4.5 N in 1 of 4 runs and `acquire` in 2 of 4;

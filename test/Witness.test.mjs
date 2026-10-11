@@ -351,12 +351,22 @@ describe('gateFlat / gateRed -- the frozen flatness verdicts', () => {
     assert.deepEqual(w.fails, ['empty foil']);
   });
 
-  it('gateFlat: an empty row should not pass flat (unreachable from run(): sweeps are constant and non-empty)',
-    { todo: 'finding: metrics([]) gives ratio NaN / spread -Infinity, both read as within bounds' }, async () => {
-      const w = await setup();
-      w.gateFlat(row('HOT', []), 'empty');
-      assert.equal(w.fails.length, 1);
-    });
+  it('gateFlat: an empty or one-cell row never passes flat (metrics([]) is ratio NaN / spread -Infinity)', async () => {
+    const w = await setup();
+    w.gateFlat(row('HOT', []), 'empty');
+    w.gateFlat(row('PRESSURE', []), 'empty-p');
+    w.gateFlat(row('HOT', [1]), 'one-cell');
+    assert.equal(w.fails.length, 3);
+  });
+
+  it('gateFlat: a non-finite metric or NOISE never passes flat (pin: these two were caught before the fix too; an [Inf, Inf] row was not -- WitnessFailClosedQA)', async () => {
+    const w = await setup();
+    w.gateFlat(row('HOT', [1, Infinity]), 'inf-cell');   // spread Infinity
+    assert.equal(w.fails.length, 1);
+    const v = await fresh();                              // NOISE never established (NaN)
+    v.gateFlat(row('HOT', [1, 1.01]), 'no-noise');
+    assert.equal(v.fails.length, 1);
+  });
 });
 
 describe('HOST relabelling invariant', () => {
@@ -428,5 +438,201 @@ describe('HOST relabelling invariant', () => {
     assert.equal(w.hostSuppressed.length, 0);
     assert.equal(w.fails.length, 2);
     assert.match(w.fails[1], /SLOPE foil foilIterQuad passed as linear/);
+  });
+});
+
+describe('PRESSURE density subset -- d0/d32 (one-word corpora) cut from the PRESSURE density gate only', () => {
+  const D33 = Array.from({ length: 33 }, (_, i) => i);
+  // flat d1..d31 (spread ~0.1 ns = 2 N at N 0.05), d0/d32 at 0.7 ns: ~0.3 ns below the row,
+  // all-cell spread ~0.35 ns = 7 N (> HOT 6 N and > PRESSURE 4.5 N)
+  const humpNet = () => D33.map((d) => (d === 0 || d === 32 ? 0.7 : 1 + 0.05 * Math.sin(d)));
+  const drow = (lane, net, extra = {}) => row(lane, net, { mode: 'density', params: D33.slice(0, net.length), ...extra });
+  const setup = async () => {
+    const w = await fresh();
+    w.laneNoise('HOT', noiseRows('HOT', 0.05, 1));
+    w.laneNoise('PRESSURE', noiseRows('PRESSURE', 0.05, 1));
+    w.fails.length = 0; w.lines.length = 0;
+    return w;
+  };
+
+  it('gateCells: PRESSURE density gates d1..d31 and reports d0/d32 as info; HOT and position gate every cell', async () => {
+    const w = await fresh();
+    const p = w.gateCells('PRESSURE', 'density', D33);
+    assert.deepEqual(p.gate, D33.slice(1, 32));
+    assert.deepEqual(p.info, [0, 32]);
+    assert.equal(p.ok, true);
+    for (const [lane, mode] of [['HOT', 'density'], ['PRESSURE', 'position'], ['HOT', 'position']]) {
+      const c = w.gateCells(lane, mode, D33);
+      assert.equal(c.subset, false, lane + ' ' + mode);
+      assert.deepEqual(c.gate, D33, lane + ' ' + mode);
+      assert.deepEqual(c.info, []);
+    }
+    // the fast sweep shape
+    const f = w.gateCells('PRESSURE', 'density', [0, 1, 4, 8, 16, 24, 31, 32]);
+    assert.deepEqual(f.gate, [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(f.info, [0, 7]);
+  });
+
+  it('a row flat over d1..d31 with a d0/d32 dip PASSES in PRESSURE, the same row FAILS in HOT', async () => {
+    const w = await setup();
+    w.gateSubset(drow('PRESSURE', humpNet()), 'select (density)');
+    assert.deepEqual(w.fails, []);
+    const info = w.lines.filter((l) => /^ {2}INFO PRESSURE/.test(l));
+    assert.equal(info.length, 1);
+    assert.match(info[0], /d0=0\.700 d32=0\.700 ns not gated for flatness: one repeated word/);
+    assert.match(info[0], /negative-cell check ok/);
+    assert.ok(w.lines.some((l) => /^ {2}FLAT PRESSURE select \(density\) \[d1\.\.31\] .* ok$/.test(l)));
+    w.gateSubset(drow('HOT', humpNet()), 'select (density)');          // 6 N bound, 8 N spread
+    assert.equal(w.fails.length, 1);
+    assert.match(w.fails[0], /^select \(density\) \[HOT\]/);
+    // and without the subset (plain gateFlat over all 33 cells) PRESSURE fails too: 8 N > 4.5 N
+    w.gateFlat(drow('PRESSURE', humpNet()), 'select (density) all cells');
+    assert.equal(w.fails.length, 2);
+  });
+
+  it('the subset does not hide a step INSIDE d1..d31 (PRESSURE 4.5 N bound still binds)', async () => {
+    const w = await setup();
+    w.gateSubset(drow('PRESSURE', D33.map((d) => (d === 16 ? 1.3 : 1))), 'mid-step');   // 6 N at d16
+    assert.equal(w.fails.length, 1);
+    assert.match(w.fails[0], /^mid-step \[d1\.\.31\] \[PRESSURE\]/);
+  });
+
+  it('position rows and ctlRead-style direct gateFlat keep d0/d32 in PRESSURE', async () => {
+    const w = await setup();
+    w.gateSubset(row('PRESSURE', humpNet(), { mode: 'position', params: D33 }), 'pos');
+    assert.equal(w.fails.length, 1);
+  });
+
+  it('fail closed: an empty, one-cell or malformed PRESSURE density subset FAILS with no verdict', async () => {
+    const bad = [
+      [[0, 32], [1, 1]],                       // subset empty
+      [[0, 16, 32], [1, 1, 1]],                // one cell
+      [[0, 1, 33], [1, 1, 1]],                 // out of range
+      [[1, 2.5, 3], [1, 1, 1]],                // non-integer
+      [[1, NaN, 3], [1, 1, 1]],                // NaN
+      [['1', '2', '3'], [1, 1, 1]],            // strings
+      [[-1, 1, 2], [1, 1, 1]],                 // negative
+    ];
+    for (const [params, net] of bad) {
+      const w = await setup();
+      const m = w.gateSubset(row('PRESSURE', net, { mode: 'density', params }), 'bad');
+      assert.equal(w.fails.length, 1, JSON.stringify(params));
+      assert.match(w.fails[0], /subset d1\.\.d31 empty, malformed or misaligned/);
+      assert.ok(Number.isNaN(m.spread));
+      // and as a foil it is never counted red
+      const v = await setup();
+      v.gateSubset(row('PRESSURE', net, { mode: 'density', params }), 'badfoil', () => 'no teeth');
+      assert.equal(v.fails.length, 1);
+    }
+    const w = await setup();
+    w.gateSubset(row('PRESSURE', [1, 1], { mode: 'density', params: null }), 'null-params');
+    assert.equal(w.fails.length, 1);
+  });
+
+  it('a d0/d32 cell at or below -EPS still fails the negative-cell check (broken floor is not a flatness claim)', async () => {
+    const w = await setup();
+    const net = D33.map((d) => (d === 32 ? -0.36 : 1));                // EPS PRESSURE = 7 N ~ 0.35
+    w.gateSubset(drow('PRESSURE', net), 'neg32');
+    assert.equal(w.fails.length, 1);
+    assert.match(w.fails[0], /negative cells @d32/);
+    const v = await setup();
+    v.gateSubset(drow('PRESSURE', D33.map((d) => (d === 0 ? -0.34 : 1))), 'near-neg0');
+    assert.deepEqual(v.fails, []);
+    // exactly -EPS and NaN are negative cells too (the check is !(x > -EPS), not x < -EPS)
+    for (const bad of ['eps', NaN]) {
+      const u = await setup();
+      const x = bad === 'eps' ? -u.EPS.PRESSURE : bad;
+      u.gateSubset(drow('PRESSURE', D33.map((d) => (d === 0 ? x : 1))), 'edge-neg0');
+      assert.equal(u.fails.length, 1, 'd0 = ' + x);
+      assert.match(u.fails[0], /negative cells @d0/);
+    }
+  });
+
+  it('WITNESS_CALIBRATE: the d0/d32 negative-cell check gives no verdict, as gateFlat (no fail recorded)', async () => {
+    process.env.WITNESS_CALIBRATE = '1';
+    let w;
+    try { w = await fresh(); } finally { delete process.env.WITNESS_CALIBRATE; }
+    w.laneNoise('PRESSURE', noiseRows('PRESSURE', 0.05, 1));
+    w.fails.length = 0;
+    w.gateSubset(drow('PRESSURE', D33.map((d) => (d === 32 ? -5 : 1))), 'cal-neg32');
+    w.gateFlat(row('PRESSURE', [-5, 1]), 'cal-flat-neg');           // the reference behaviour
+    assert.deepEqual(w.fails, []);
+    // a malformed subset still fails under CALIBRATE (like spawn's malformed-row check)
+    w.gateSubset(row('PRESSURE', [1, 1], { mode: 'density', params: [0, 32] }), 'cal-empty');
+    assert.equal(w.fails.length, 1);
+  });
+
+  it('fail closed: net / disp / floor not aligned to params FAILS (no cell past params.length is dropped silently)', async () => {
+    const cases = [
+      { params: [1, 2, 3], net: [1, 1, 1, 9, 9] },                                     // the reviewer's probe
+      { params: [1, 2, 3, 4], net: [1, 1, 1] },                                        // net short
+      { params: [1, 2, 3], net: [1, 1, 1], disp: [0.01, 0.01] },                       // disp short
+      { params: [1, 2, 3], net: [1, 1, 1], floor: [1, 1, 1, 1] },                      // floor long
+      { params: [1, 2, 3], net: [1, 1, 1], floor: null },                              // floor missing
+    ];
+    for (const k of cases) {
+      const w = await setup();
+      const r = { lane: 'PRESSURE', mode: 'density', valid: true, label: 'x', disp: k.net.map(() => 0.01), floor: k.net.map(() => 1), ...k };
+      w.gateSubset(r, 'misaligned');
+      assert.equal(w.fails.length, 1, JSON.stringify(k));
+      assert.match(w.fails[0], /empty, malformed or misaligned/);
+      w.gateSubset(r, 'misaligned-foil', () => 'no teeth');
+      assert.equal(w.fails.length, 2);
+      assert.equal(w.subsetRow(r).valid, false);
+    }
+  });
+
+  it('fail closed: the subset needs >= 2 DISTINCT densities ([0, 32, 16, 16] is one density)', async () => {
+    const w = await fresh();
+    assert.equal(w.gateCells('PRESSURE', 'density', [0, 32, 16, 16]).ok, false);
+    assert.equal(w.gateCells('PRESSURE', 'density', [16, 16, 16]).ok, false);
+    assert.equal(w.gateCells('PRESSURE', 'density', [0, 16, 17, 32]).ok, true);
+    const v = await setup();
+    v.gateSubset(row('PRESSURE', [1, 1, 1, 1], { mode: 'density', params: [0, 32, 16, 16] }), 'one-density');
+    assert.equal(v.fails.length, 1);
+  });
+
+  it('an invalid PRESSURE density row (spawn found a non-finite cell) never passes', async () => {
+    const w = await setup();
+    w.gateSubset(drow('PRESSURE', humpNet(), { valid: false }), 'invalid');
+    assert.equal(w.fails.length, 1);
+  });
+
+  it('foils over the subset: a hump inside d1..d31 is red; a step ONLY at d0/d32 is not (the foil FAILS the run)', async () => {
+    const w = await setup();
+    w.gateSubset(drow('PRESSURE', D33.map((d) => 1 + 0.5 * Math.sin(Math.PI * d / 32))), 'lut-like', () => 'no teeth');   // 10 N hump
+    assert.deepEqual(w.fails, []);
+    w.gateSubset(drow('PRESSURE', D33.map((d) => (d === 32 ? 3 : 1))), 'd32-only', () => 'd32-only no teeth');
+    assert.deepEqual(w.fails, ['d32-only no teeth']);
+    w.gateSubset(drow('HOT', D33.map((d) => (d === 32 ? 3 : 1))), 'd32-only HOT', () => 'hot no teeth');
+    assert.deepEqual(w.fails, ['d32-only no teeth']);                 // HOT keeps d32: red
+  });
+
+  it('NOISE: PRESSURE density rows vote with their d1..d31 spread; HOT and position rows with every cell', async () => {
+    const w = await fresh();
+    // three rows: d1..d31 spread 0.04, d0 outlier 1 ns below
+    const net = D33.map((d) => (d === 0 ? 0 : 1 + 0.04 * (d % 2)));
+    w.laneNoise('PRESSURE', [drow('PRESSURE', net), drow('PRESSURE', net), drow('PRESSURE', net)]);
+    assert.ok(Math.abs(w.NOISE.PRESSURE - 0.04) < 1e-12, String(w.NOISE.PRESSURE));
+    w.laneNoise('HOT', [drow('HOT', net), drow('HOT', net), drow('HOT', net)]);
+    assert.equal(w.NOISE.HOT, 1.04);
+    const v = await fresh();
+    v.laneNoise('PRESSURE', [row('PRESSURE', net, { mode: 'position', params: D33 })]);
+    assert.equal(v.NOISE.PRESSURE, 1.04);
+    // malformed / misaligned density rows among a valid one do not vote (N stays the valid row's 0.04)
+    const t = await fresh();
+    const wide = D33.map((d) => (d === 16 ? 9 : 1));                                // spread 8 ns if it votes
+    t.laneNoise('PRESSURE', [
+      drow('PRESSURE', net),
+      row('PRESSURE', wide, { mode: 'density', params: D33.map((d) => (d === 5 ? 2.5 : d)) }),   // non-integer param
+      row('PRESSURE', wide, { mode: 'density', params: D33.map((d) => (d === 7 ? 33 : d)) }),    // out of range
+      row('PRESSURE', [...wide, 9], { mode: 'density', params: D33 }),                            // net misaligned
+    ]);
+    assert.ok(Math.abs(t.NOISE.PRESSURE - 0.04) < 1e-12, String(t.NOISE.PRESSURE));
+    // a malformed density row does not vote; all-malformed fails closed
+    const u = await fresh();
+    u.laneNoise('PRESSURE', [row('PRESSURE', [1, 1.1], { mode: 'density', params: [0, 32] })]);
+    assert.equal(u.fails.length, 1);
+    assert.match(u.fails[0], /^NOISE PRESSURE/);
   });
 });
