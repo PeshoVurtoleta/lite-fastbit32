@@ -154,7 +154,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path'; import { realpathSync } from 'node:fs';
 import { loadavg } from 'node:os';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -855,4 +855,10 @@ function emitResearchTable() {
 }
 
 // run only as the entry point; importing (synthetic-series checks) only exports.
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) run();
+// realpath on BOTH sides: node resolves import.meta.url to the real path but
+// argv[1] keeps a symlinked path (a link, macOS /tmp -> /private/tmp, tmpdir()),
+// so a plain resolve() never matches, run() never runs and the process exits 0
+// -- a gate that never ran would pass. The import.meta side needs it too: under
+// --preserve-symlinks-main (flag or NODE_OPTIONS) import.meta.url keeps the
+// link path, so realpath on argv[1] alone fails open the same way.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) run();

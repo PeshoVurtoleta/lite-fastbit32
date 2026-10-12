@@ -106,7 +106,8 @@ function runGate(pkg, scenario) {
 
 describe('gate:release end to end -- real drivers, synthetic run-one, 5 rounds per scenario', () => {
   before(async () => {
-    // realpath: macOS tmpdir() is a symlink and the drivers run only when argv[1] is its real path.
+    // realpath: belt-and-braces only. Both drivers realpath both sides of their entry guard, so a
+    // symlinked tmpdir() (macOS) no longer stops them running.
     ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-wrel-')));
     for (const s of SCEN) runs[s.name] = await runGate(mkPkg(), s.name);   // serial
   }, { timeout: 1800000 });

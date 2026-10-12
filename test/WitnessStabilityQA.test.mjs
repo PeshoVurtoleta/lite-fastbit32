@@ -133,7 +133,8 @@ function mkDriverDir(name, src) {
 
 describe('witness slope confirm / exit codes -- frozen efbb377 vs live driver, synthetic run-one', () => {
   before(async () => {
-    // realpath: macOS tmpdir() is a symlink and the driver runs only when argv[1] is its real path.
+    // realpath: macOS tmpdir() is a symlink; the FROZEN efbb377 driver runs only when argv[1] is its real path
+    // (the live driver realpaths both sides of its entry guard, so for it this is belt-and-braces).
     ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-wstab-')));
     const t0 = Date.now();
     const targets = [['live', LIVE]];

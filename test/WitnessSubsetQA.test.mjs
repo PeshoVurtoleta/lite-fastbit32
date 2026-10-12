@@ -11,10 +11,15 @@
 // 2. gateCells / subsetRow / gateSubset boundary matrix the shipped tests skip.
 // 3. run-one `kwords` corpus mode: K / density validation and the DISTINCT rule
 //    (d1 has exactly 32 words: K = 32 draws, K = 33 must throw).
+// 4. entry guard: the driver started through a file symlink, and through a
+//    directory symlink under --preserve-symlinks-main, still runs (a guard that
+//    compared resolve(argv[1]) with the real module path skipped run() and
+//    exited 0 silently -- a fail-open gate; realpath on argv[1] alone fails
+//    open the same way under --preserve-symlinks-main).
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,11 +84,11 @@ let DIR;
 const runs = {};
 const SCEN = ['base', 'dip', 'hotdip', 'midstep', 'lutedge', 'kernedge', 'neg32', 'ctldip', 'posdip', 'kwbad'];
 
-function runScenario(s) {
+function runScenario(s, script = join(DIR, 'witness.mjs'), nodeArgs = []) {
   return new Promise((res) => {
     const env = { ...process.env, WQA_SCENARIO: s };
     delete env.WITNESS_FAST; delete env.WITNESS_CALIBRATE;
-    execFile(process.execPath, [join(DIR, 'witness.mjs')], { env, encoding: 'utf8', maxBuffer: 64 << 20 }, (err, stdout) => {
+    execFile(process.execPath, [...nodeArgs, script], { env, encoding: 'utf8', maxBuffer: 64 << 20 }, (err, stdout) => {
       const code = err ? err.code : 0;
       const i = stdout.indexOf('\nFAILURES:\n');
       const failures = i < 0 ? [] : stdout.slice(i + 11).split('\n').filter((l) => l.startsWith('  ')).map((l) => l.slice(2));
@@ -94,8 +99,9 @@ function runScenario(s) {
 
 describe('run() wiring -- the real driver against a synthetic run-one (no timing)', () => {
   before(async () => {
-    // realpath: on macOS tmpdir() is a symlink, and the driver only runs when
-    // argv[1] equals its own (real) module path.
+    // realpath: belt-and-braces only. The driver's entry guard realpaths both
+    // sides, so a symlinked tmpdir() (macOS) no longer stops it running; the
+    // symlink case is pinned by the entry-guard probe below.
     DIR = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-wqa-')));
     mkdirSync(join(DIR, 'witness'));
     copyFileSync(join(HERE, 'witness.mjs'), join(DIR, 'witness.mjs'));
@@ -202,6 +208,48 @@ describe('run() wiring -- the real driver against a synthetic run-one (no timing
     assert.equal(r.code, 1);
     assert.equal(r.failures.length, 1, r.failures.join('\n'));
     assert.match(r.failures[0], /fb\/select PRESSURE kwords: malformed or non-finite result/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('entry guard -- the driver started through a symlink still runs (no silent exit 0)', () => {
+  let COPY, LINKDIR, viaLink, viaDirLink;
+  before(async () => {
+    // NOT realpathed on purpose: the copy and the links live in separate temp
+    // dirs, and on macOS tmpdir() is itself under a symlink (/var -> /private/var).
+    COPY = mkdtempSync(join(tmpdir(), 'fb32-wqa-copy-'));
+    mkdirSync(join(COPY, 'witness'));
+    copyFileSync(join(HERE, 'witness.mjs'), join(COPY, 'witness.mjs'));
+    writeFileSync(join(COPY, 'witness', 'run-one.mjs'), FAKE);
+    LINKDIR = mkdtempSync(join(tmpdir(), 'fb32-wqa-link-'));
+    symlinkSync(join(COPY, 'witness.mjs'), join(LINKDIR, 'witness.mjs'));    // file link
+    symlinkSync(COPY, join(LINKDIR, 'pkg'), 'dir');                          // dir link: HERE = link dir still reaches witness/run-one.mjs
+    // serial, two driver runs (~135 fake children each)
+    viaLink = await runScenario('hotdip', join(LINKDIR, 'witness.mjs'));
+    // --preserve-symlinks-main keeps import.meta.url on the link path: a guard
+    // that realpaths argv[1] alone never matches there.
+    viaDirLink = await runScenario('hotdip', join(LINKDIR, 'pkg', 'witness.mjs'), ['--preserve-symlinks-main']);
+  }, { timeout: 120000 });
+  after(() => {
+    if (LINKDIR) rmSync(LINKDIR, { recursive: true, force: true });   // removes the links only
+    if (COPY) rmSync(COPY, { recursive: true, force: true });
+  });
+
+  const ranAndFailed = (r, how) => {
+    assert.equal(r.code, 1, `exit ${r.code} ${how}, ${r.stdout.length} stdout bytes -- the entry guard skipped run()`);
+    assert.ok(r.stdout.includes('\nFAILURES:\n'), 'no FAILURES section in the driver output');
+    assert.equal(r.failures.length, 1, r.failures.join('\n'));
+    assert.match(r.failures[0], /^select \(density\) \[HOT\]/);
+    // the driver really ran end to end: its normal NOISE line is there too
+    assert.ok(r.lines.some((l) => l.startsWith('  NOISE PRESSURE 0.020 ns')), 'no NOISE PRESSURE line');
+  };
+
+  it('hotdip via <linkdir>/witness.mjs (file symlink) exits 1 with its FAILURES section (a skipped run() exits 0 with no output)', () => {
+    ranAndFailed(viaLink, 'through the file symlink');
+  });
+
+  it('hotdip via node --preserve-symlinks-main <linkdir>/pkg/witness.mjs (dir symlink) exits 1 with its FAILURES section', () => {
+    ranAndFailed(viaDirLink, 'through the dir symlink under --preserve-symlinks-main');
   });
 });
 

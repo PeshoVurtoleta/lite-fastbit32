@@ -19,10 +19,16 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   negative-cell check; a malformed, misaligned or under-2-density subset
   fails closed. New INFO control row: select d16 over 1 / 2 / 2048 distinct
   words. HOT and the position sweeps are unchanged.
-- Tests: test/WitnessSubsetQA.test.mjs (26 cases) drives run() with a fake
+- Tests: test/WitnessSubsetQA.test.mjs (28 cases) drives run() with a fake
   run-one and pins the d1..d31 routing for real ops, foils, SEP, NOISE and the
   control row, kwords validation, and HOT / position / ctlRead keeping every
   cell.
+- Witness: the witness.mjs entry guard compares realpaths on both sides. The
+  old guard skipped run() when the driver was started through a symlink or a
+  realpath-changing path (macOS /tmp, tmpdir()) and exited 0 -- a fail-open
+  gate; realpath on argv[1] alone fails open the same way under
+  --preserve-symlinks-main. Two symlink probes in WitnessSubsetQA (a file
+  link, and a dir link under --preserve-symlinks-main) pin it.
 - Witness: a HOST-only failure exits 2. Exit 2 is used only when every
   failure is a lane NOISE cap failure (noise/floor > NOISE_FLOOR_MAX), with
   "HOST: re-run on a quiet host"; any other finding exits 1 (a NOISE that
