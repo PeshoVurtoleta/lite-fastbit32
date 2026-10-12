@@ -3,3 +3,4 @@
 /test-bundle.js
 /.bundle-check/
 /.handoff/
+/.gate-release.json*

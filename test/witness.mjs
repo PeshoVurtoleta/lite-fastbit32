@@ -2,7 +2,7 @@
  * @zakkster/lite-fastbit32 -- the constant-time Witness.
  *
  *     node test/witness.mjs            # full run (HOT + PRESSURE), gated
- *     WITNESS_FAST=1 node ...          # HOT lane, coarse sweep (goes in verify)
+ *     WITNESS_FAST=1 node ...          # HOT lane, coarse sweep (gate:release runs it 5x)
  *     WITNESS_CALIBRATE=1 node ...     # print measured metrics, DO NOT gate
  *
  * RESEARCH section 2 made executable. The anchor claim: every hot op runs in the

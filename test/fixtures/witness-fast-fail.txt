@@ -1,0 +1,85 @@
+  (advisory, not a gate) load average 1.92
+--- lane HOT ---
+  NOISE HOT      0.036 ns (median cell-to-cell spread of 44 real-op rows; pass dispersion median 0.045 ns), floor 0.302 ns, noise/floor=0.120 max=0.27 ok; EPS=4N=0.145 ns
+  FLAT HOT      count (density)            ratio=1.51/2.5 spread=0.154ns=4.27N/6N [0.301,0.456] ok
+  FLAT HOT      count (position)           ratio=1.01/2.5 spread=0.004ns=0.12N/6N [0.370,0.374] ok
+  FLAT HOT      countMasked (density)      ratio=1.02/2.5 spread=0.008ns=0.21N/6N [0.426,0.433] ok
+  FLAT HOT      countMasked (position)     ratio=1.01/2.5 spread=0.005ns=0.14N/6N [0.383,0.388] ok
+  FLAT HOT      countRange (density)       ratio=1.09/2.5 spread=0.036ns=1.00N/6N [0.391,0.427] ok
+  FLAT HOT      countRange (position)      ratio=1.09/2.5 spread=0.033ns=0.90N/6N [0.382,0.415] ok
+  FLAT HOT      lowest (density)           ratio=1.37/2.5 spread=0.065ns=1.79N/6N [0.134,0.199] ok
+  FLAT HOT      lowest (position)          ratio=1.37/2.5 spread=0.062ns=1.70N/6N [0.137,0.199] ok
+  FLAT HOT      highest (density)          ratio=1.38/2.5 spread=0.118ns=3.28N/6N [0.081,0.199] ok
+  FLAT HOT      highest (position)         ratio=1.14/2.5 spread=0.044ns=1.22N/6N [0.120,0.165] ok
+  FLAT HOT      nextClearBit (density)     ratio=1.36/2.5 spread=0.054ns=1.49N/6N [0.148,0.202] ok
+  FLAT HOT      nextClearBit (position)    ratio=1.00/2.5 spread=0.028ns=0.77N/6N [0.093,0.121] ok
+  FLAT HOT      highestClearBit (density)  ratio=1.42/2.5 spread=0.067ns=1.84N/6N [0.139,0.205] ok
+  FLAT HOT      highestClearBit (position) ratio=1.29/2.5 spread=0.043ns=1.18N/6N [0.146,0.189] ok
+  FLAT HOT      has (density)              ratio=1.10/2.5 spread=0.016ns=0.44N/6N [0.159,0.175] ok
+  FLAT HOT      has (position)             ratio=1.23/2.5 spread=0.037ns=1.01N/6N [0.161,0.198] ok
+  FLAT HOT      hasAll (density)           ratio=1.04/2.5 spread=0.007ns=0.19N/6N [0.189,0.196] ok
+  FLAT HOT      hasAll (position)          ratio=1.07/2.5 spread=0.012ns=0.33N/6N [0.180,0.192] ok
+  FLAT HOT      hasAny (density)           ratio=1.04/2.5 spread=0.008ns=0.22N/6N [0.190,0.198] ok
+  FLAT HOT      hasAny (position)          ratio=1.38/2.5 spread=0.074ns=2.04N/6N [0.125,0.199] ok
+  FLAT HOT      hasNone (density)          ratio=1.09/2.5 spread=0.017ns=0.48N/6N [0.183,0.200] ok
+  FLAT HOT      hasNone (position)         ratio=1.01/2.5 spread=0.002ns=0.06N/6N [0.162,0.164] ok
+  FLAT HOT      isEmpty (density)          ratio=1.01/2.5 spread=0.001ns=0.04N/6N [0.198,0.199] ok
+  FLAT HOT      isEmpty (position)         ratio=1.29/2.5 spread=0.049ns=1.37N/6N [0.138,0.187] ok
+  FLAT HOT      isFull (density)           ratio=1.39/2.5 spread=0.117ns=3.24N/6N [0.083,0.200] ok
+  FLAT HOT      isFull (position)          ratio=1.05/2.5 spread=0.010ns=0.28N/6N [0.195,0.206] ok
+  FLAT HOT      nextSetBit (density)       ratio=1.06/2.5 spread=0.012ns=0.33N/6N [0.197,0.209] ok
+  FLAT HOT      nextSetBit (position)      ratio=1.32/2.5 spread=0.076ns=2.09N/6N [0.115,0.190] ok
+  FLAT HOT      prevSetBit (density)       ratio=1.21/2.5 spread=0.036ns=1.00N/6N [0.173,0.209] ok
+  FLAT HOT      prevSetBit (position)      ratio=1.08/2.5 spread=0.016ns=0.44N/6N [0.202,0.218] ok
+  FLAT HOT      rank (density)             ratio=1.03/2.5 spread=0.013ns=0.36N/6N [0.394,0.407] ok
+  FLAT HOT      rank (position)            ratio=1.04/2.5 spread=0.014ns=0.38N/6N [0.377,0.391] ok
+  FLAT HOT      equals (density)           ratio=1.07/2.5 spread=0.035ns=0.97N/6N [0.120,0.155] ok
+  FLAT HOT      equals (position)          ratio=1.04/2.5 spread=0.009ns=0.26N/6N [0.217,0.226] ok
+  FLAT HOT      isSubsetOf (density)       ratio=1.02/2.5 spread=0.040ns=1.11N/6N [0.107,0.147] ok
+  FLAT HOT      isSubsetOf (position)      ratio=1.19/2.5 spread=0.031ns=0.85N/6N [0.164,0.195] ok
+  FLAT HOT      equalsValue (density)      ratio=1.37/2.5 spread=0.072ns=2.00N/6N [0.126,0.198] ok
+  FLAT HOT      equalsValue (position)     ratio=1.36/2.5 spread=0.084ns=2.33N/6N [0.113,0.197] ok
+  FLAT HOT      select (density)           ratio=1.06/2.5 spread=0.197ns=5.43N/6N [3.070,3.267] ok
+  FLAT HOT      select (position)          ratio=1.08/2.5 spread=0.243ns=6.71N/6N [2.964,3.207] FAIL
+  FLAT HOT      nextSubset (density)       ratio=1.12/2.5 spread=0.018ns=0.49N/6N [0.149,0.167] ok
+  FLAT HOT      nextSubset (position)      ratio=1.36/2.5 spread=0.088ns=2.43N/6N [0.109,0.197] ok
+  FLAT HOT      nextCombination (density)  ratio=1.07/2.5 spread=0.024ns=0.67N/6N [0.351,0.375] ok
+  FLAT HOT      nextCombination (position) ratio=1.16/2.5 spread=0.056ns=1.54N/6N [0.353,0.409] ok
+  FLAT HOT      ctlRead (density) [control] ratio=1.00/2.5 spread=0.075ns=2.08N/6N [-0.075,-0.000] ok
+      flags ctlRead/ctlRead HOT density: 0:net<=0(-0.001) 1:net<=0(-0.000) 4:net<=0(-0.075) 8:net<=0(-0.075) 16:net<=0(-0.075) 24:net<=0(-0.075) 31:net<=0(-0.075) 32:net<=0(-0.075)
+  FLAT HOT      ctlRead (position) [control] ratio=1.00/2.5 spread=0.083ns=2.30N/6N [0.003,0.086] ok
+  FLAT HOT      FastBit1024.acquire (slot word) ratio=1.02/2.5 spread=0.052ns=1.43N/6N [3.163,3.215] ok
+      FastBit1024.acquire HOT median net 3.202 ns [3.163,3.215]
+  FLAT HOT      FastBit1024.nextClearBit (slot word) ratio=1.02/2.5 spread=0.011ns=0.30N/6N [0.668,0.679] ok
+      FastBit1024.nextClearBit HOT median net 0.669 ns [0.668,0.679]
+  FLAT HOT      FastBit1024.lowest (slot word) ratio=1.06/2.5 spread=0.022ns=0.60N/6N [0.356,0.378] ok
+      FastBit1024.lowest HOT median net 0.359 ns [0.356,0.378]
+  FLAT HOT      FastBit1024.highest (slot word) ratio=1.06/2.5 spread=0.023ns=0.63N/6N [0.411,0.434] ok
+      FastBit1024.highest HOT median net 0.425 ns [0.411,0.434]
+  FLAT HOT      FastBit1024.has (slot word) ratio=1.07/2.5 spread=0.065ns=1.81N/6N [0.915,0.981] ok
+      FastBit1024.has HOT median net 0.925 ns [0.915,0.981]
+  (info) FastBit1024 has() check cost HOT: has 0.925 ns - unchecked read 0.160 ns = 0.764 ns (median over words)
+  RED  HOT      foilWordScan (lane)        ratio=13.60(info) spread=7.990ns=220.95N>=7N ok(non-flat)
+  RED  HOT      foilWordScan (acquire-est) ratio=14.83(info) spread=8.903ns=246.19N>=7N ok(non-flat)
+  RED  HOT      foilWordScan (has-est)     ratio=13.11(info) spread=8.015ns=221.66N>=7N ok(non-flat)
+  RED  HOT      foilKernighan (density)    ratio=13.12(info) spread=7.316ns=202.32N>=7N ok(non-flat)
+  RED  HOT      foilEarlyExit (density)    ratio=14.67(info) spread=6.831ns=188.92N>=7N ok(non-flat)
+  RED  HOT      foilNaiveLowest (density)  ratio=13.92(info) spread=5.737ns=158.66N>=7N ok(non-flat)
+  RED  HOT      foilSet (density)          ratio=14.41(info) spread=24.793ns=685.62N>=7N ok(non-flat)
+  RED  HOT      foilSubEps (density)       ratio=5.40(info) spread=0.702ns=19.42N>=7N ok(non-flat)
+  RED  HOT      foilSubEps (position)      ratio=4.71(info) spread=0.664ns=18.37N>=7N ok(non-flat)
+  CTRL HOT      broken-floor (Kernighan floor) net=[-1.808,-3.293] negative-cell gate fired ok
+  SELF repeat count@d4,8,16 two processes |a-b|=[0.057,0.056,0.053] tol=5N=0.181 ok
+  CTRL self-check control count vs Kernighan |a-c|=[0.802,1.541,3.038] disagrees ok
+--- slope HOT ---
+  SLOPE HOT     forEach                    r2=0.9974 slope=0.921 a=0.332=0.36xslope rise=815.11N curv=-0.041 resid=0.980ns=1.06xslope ok
+  SLOPE HOT     forEachMaskUnion           r2=0.9981 slope=0.921 a=0.475=0.52xslope rise=814.77N curv=-0.014 resid=0.911ns=0.99xslope ok
+  SLOPE HOT     foilIterQuad               r2=0.9244 slope=30.779 a=-147.285=-4.79xslope rise=27236.72N curv=0.993 resid=148.063ns=4.81xslope ok(foil rejected by: resid,curv)
+  SLOPE HOT     foilIterScan32             r2=0.9632 slope=0.287 a=9.191=31.97xslope rise=254.39N curv=-0.612 resid=1.071ns=3.73xslope ok(foil rejected by: resid,icpt,curv)
+  SLOPE HOT     foilIterStep               r2=0.9459 slope=1.676 a=-1.426=-0.85xslope rise=1483.57N curv=-0.190 resid=7.094ns=4.23xslope ok(foil rejected by: resid)
+  CTRL confirm-slope foilIterStep as a real iterator: process 1 not linear(resid); median of 3 resid=4.81xslope ok(non-linear: resid)
+
+witness FAST done in 13.6s -- 1 FAIL
+
+FAILURES:
+  select (position) [HOT] ratio 1.08 (<= 2.5) spread 6.71N (<= 6N)

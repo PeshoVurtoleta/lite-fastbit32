@@ -83,7 +83,8 @@
     "bench:sc1": "node benchmark/experiments/sc1-scans.mjs",
     "bench:sc2": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 benchmark/experiments/sc2-repr.mjs",
     "bundle-check": "esbuild FastBit32.js --bundle --format=esm --outfile=.bundle-check/test-bundle.js",
-    "verify": "npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf && npm run witness:fast",
-    "prepublishOnly": "npm run verify && npm run bundle-check"
+    "verify": "npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf",
+    "gate:release": "node test/witness-release.mjs",
+    "prepublishOnly": "npm run verify && node test/witness-release.mjs --if-stale && npm run bundle-check"
   }
 }
