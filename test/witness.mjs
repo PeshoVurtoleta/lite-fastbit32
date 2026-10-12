@@ -46,6 +46,19 @@
  *                 gated on its stable phase k = 0 mod 4; forEachArray's residual
  *                 is taken against the quadratic fit, concave floor -0.75.
  *                 Same R^2 0.90 / RESID_K 3.5 for all eight.
+ *   slope confirm = a REAL iterator row that fails the slope verdict on its one
+ *                 process is re-measured in EXACTLY 2 more processes from the
+ *                 same spec (no loop, no "until linear") and judged ONCE, by the
+ *                 same verdict, on the cellwise median of the 3 (cellMedian; no
+ *                 centring -- the intercept check needs the absolute level). The
+ *                 single-process verdict prints as a `CONFIRM` note and is never
+ *                 a finding; a malformed re-measure FAILS. A regression present
+ *                 in every process survives the median; a sporadic one-process
+ *                 residual outlier does not. A regression that is itself random
+ *                 per process is caught only when 2 of the 3 show it. Skipped
+ *                 under WITNESS_CALIBRATE and when NOISE HOT failed. Flat rows,
+ *                 foils and controls stay single-process: a cellwise median of 3
+ *                 mixes per-process LEVELS into a flat row's spread.
  * The self-referential NOISE fails open only inside a BOUNDED window. The foils
  * are judged in the same units, but foilSubEps has a fixed ~0.7 ns step: NOISE
  * can inflate ~1.5-2x (to ~0.1 ns HOT) before that foil reads flat and fails the
@@ -57,6 +70,13 @@
  * (flip at noise/floor ~0.33), so a too-noisy host gets a HOST verdict. Once a
  * lane's NOISE check fails, that lane's other gate lines print HOST (no
  * verdict) and are not reported as findings; the NOISE failure fails the run.
+ * (Not a malformed PRESSURE density subset: a harness fault, like a malformed
+ * spawn row, it FAILS as a finding in every lane state.)
+ * Exit: 0 clean; 1 any finding; 2 ("HOST: re-run on a quiet host") only when
+ * EVERY failure is a lane NOISE cap failure (noise/floor > NOISE_FLOOR_MAX;
+ * hostFails). A NOISE that measured nothing (no valid row, NOISE 0, a
+ * non-finite NOISE or floor) is a harness finding, exit 1. A cap failure that
+ * persists on a quiet host is a finding: >= 22 real-op rows regressed together.
  * Absolute ns are printed for orientation only. The constants are
  * dimensionless; the RESOLUTION is host-dependent (NOISE is per host, per run).
  *
@@ -73,6 +93,9 @@
  *   SLOPE     foilIterQuad (O(k^2): curvature), foilIterScan32 (fixed
  *             32-step scan: intercept) and foilIterStep (forEach + a 16-callback
  *             step at k >= 16: max residual).
+ *             CTRL confirm-slope: foilIterStep judged AS A REAL ITERATOR through
+ *             the slope confirm (its own spawn is process 1 of the 3) must still
+ *             end non-linear on the median, or the confirm has no teeth.
  *   CONTROLS  ctlRead (the harness's own null on the same corpora, d0/d32 and
  *             empty/full included) must be flat; broken-floor control (a
  *             Kernighan floor drives the net negative) must trip the
@@ -258,6 +281,8 @@ const HOT_FOILS = ['foilKernighan', 'foilEarlyExit', 'foilNaiveLowest', 'foilSet
 // whose d1..d31 subset has < 2 DISTINCT densities, or whose net / disp / floor
 // are not arrays aligned to params, FAILS with no verdict (even under
 // WITNESS_CALIBRATE, like spawn's malformed-row check) and casts no NOISE vote.
+// It is a harness fault, never relabelled HOST: a lane whose NOISE cap failed
+// still records it as a finding (exit 1, like a malformed spawn row).
 const ONE_WORD_WHY = 'one repeated word; this CPU runs it cheaper under the stream, see METHODOLOGY';
 
 const range = (n) => Array.from({ length: n }, (_, i) => i);
@@ -283,6 +308,16 @@ const note = (s) => lines.push(s);
 // teeth"). The NOISE failure itself already fails the run.
 export const HOST_BAD = { HOT: false, PRESSURE: false };
 export const hostSuppressed = [];
+// The NOISE CAP failures laneNoise recorded (message strings): see hostFails.
+const noiseFails = new Set();
+// true iff the run failed and EVERY failure is a lane NOISE cap failure (a NOISE
+// was measured and only noise/floor exceeded NOISE_FLOOR_MAX) -- a HOST verdict,
+// run() exits 2. Any other entry in fails (a gate finding, a malformed spawn
+// result, a NOISE that measured nothing, a NOISE-looking string laneNoise did not
+// record) is a finding, exit 1. No failure: false.
+export function hostFails() {
+  return fails.length > 0 && fails.every((f) => noiseFails.has(f));
+}
 export function fail(lane, msg) {
   if (HOST_BAD[lane]) hostSuppressed.push(lane + ': ' + msg);
   else fails.push(msg);
@@ -309,6 +344,7 @@ function spawn(spec) {
   if (!ok) fails.push(`${label}: malformed or non-finite result (net/disp/floor must be finite, length ${P})`);
   res.valid = ok;
   res.label = label;
+  res.spec = spec;   // the slope confirm re-spawns exactly this spec
   return res;
 }
 
@@ -353,7 +389,12 @@ export function laneNoise(lane, results) {
     `${f3(median(d))} ns), floor ${f3(floorMed)} ns, noise/floor=${f3(n / floorMed)} max=${NOISE_FLOOR_MAX[lane]} ${ok ? 'ok' : 'FAIL'}; ` +
     `EPS=${EPS_K[lane]}N=${f3(EPS_K[lane] * n)} ns`);
   if (!ok) {
-    fails.push(`NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 22 real-op rows regressed together`);
+    const msg = `NOISE ${lane}: ${f3(n)} ns vs floor ${f3(floorMed)} -- host too noisy (or invalid) to resolve the claim, or >= 22 real-op rows regressed together`;
+    fails.push(msg);
+    // HOST only when a NOISE was measured and the cap alone failed. No valid row,
+    // NOISE 0 (a quantized timer, constant cells) or a non-finite / non-positive
+    // floor is a harness bug, not host noise: it stays a finding.
+    if (spreads.length > 0 && Number.isFinite(n) && n > 0 && Number.isFinite(floorMed) && floorMed > 0) noiseFails.add(msg);
     if (!CALIBRATE) HOST_BAD[lane] = true;
   }
   NOISE[lane] = n;
@@ -440,8 +481,9 @@ export function gateSubset(res, name, why) {
   if (!c.subset) return red ? gateRed(res, name, why) : gateFlat(res, name);
   const lane = res.lane;
   if (!c.ok) {
-    note(`  ${red ? 'RED ' : 'FLAT'} ${lane.padEnd(8)} ${name.padEnd(26)} gate subset d1..d31 empty, malformed or misaligned (params ${JSON.stringify(res.params)}) ${hostTag(lane, 'FAIL')}`);
-    fail(lane, `${name} [${lane}]: density gate subset d1..d31 empty, malformed or misaligned -- no verdict (fail closed)`);
+    // a harness fault, never relabelled HOST (exit 1, like spawn's malformed row)
+    note(`  ${red ? 'RED ' : 'FLAT'} ${lane.padEnd(8)} ${name.padEnd(26)} gate subset d1..d31 empty, malformed or misaligned (params ${JSON.stringify(res.params)}) FAIL`);
+    fails.push(`${name} [${lane}]: density gate subset d1..d31 empty, malformed or misaligned -- no verdict (fail closed)`);
     return { ratio: NaN, spread: NaN, min: NaN, max: NaN };
   }
   const m = red ? gateRed(subsetRow(res), name + ' [d1..31]', why) : gateFlat(subsetRow(res), name + ' [d1..31]');
@@ -544,13 +586,87 @@ export function gateSlope(res, name, expectRed) {
   return s;
 }
 
+// Cellwise median of an ODD count >= 3 of rows of ONE measurement (the slope
+// confirm passes exactly 3). No centring. Fail closed (valid: false,
+// net/disp/floor/flags empty): fewer than 3 rows, an EVEN row count (median()
+// would pick the upper middle, not a median -- median() itself stays as is:
+// laneNoise relies on it), a row that is not valid, params that differ from
+// row 0's, net / disp / floor not arrays aligned to params, or a non-finite
+// value.
+export function cellMedian(rows) {
+  const r0 = Array.isArray(rows) && rows.length > 0 && rows[0] ? rows[0] : null;
+  const P = r0 && Array.isArray(r0.params) ? r0.params.length : 0;
+  let ok = r0 !== null && rows.length >= 3 && (rows.length & 1) === 1 && P > 0;
+  if (ok) for (const r of rows) {
+    if (!(r && r.valid === true && Array.isArray(r.params) && r.params.length === P)) { ok = false; break; }
+    for (let i = 0; i < P; i++) if (r.params[i] !== r0.params[i]) ok = false;
+    for (const a of [r.net, r.disp, r.floor]) if (!(Array.isArray(a) && a.length === P && a.every(Number.isFinite))) ok = false;
+  }
+  const cell = (key) => (ok ? r0.params.map((_, i) => median(rows.map((r) => r[key][i]))) : []);
+  const flags = ok ? [...new Set(rows.flatMap((r) => (Array.isArray(r.flags) ? r.flags : [])))] : [];
+  return { ...(r0 || {}), net: cell('net'), disp: cell('disp'), floor: cell('floor'), flags, valid: ok };
+}
+
+// SLOPE CONFIRM (real iterators only; see header). A row that FAILS the slope
+// verdict on its one process -> EXACTLY 2 re-measures from res.spec -> ONE
+// verdict on the cellwise median of the 3. Not under CALIBRATE or when NOISE
+// HOT failed (HOST_BAD), and not for an invalid row (spawn already failed it).
+// Default mode prints the single-process verdict as a `CONFIRM` note (never a
+// finding) and gates the judged row with gateSlope; a malformed re-measure
+// FAILS. `quiet` (CTRL confirm-slope) prints and gates nothing: the caller
+// judges the returned verdict.
+export function confirmSlope(res, name, respawn = () => spawn(res.spec), quiet = false) {
+  const one = slopeVerdict(name, res.params, res.net, NOISE.HOT);
+  const confirmed = !CALIBRATE && !HOST_BAD.HOT && res.valid === true && !one.linear;
+  const row = confirmed ? cellMedian([res, respawn(), respawn()]) : res;
+  const valid = row.valid === true;
+  const fin = valid ? (confirmed ? slopeVerdict(name, row.params, row.net, NOISE.HOT) : one) : null;
+  const out = { confirmed, valid, linear: fin !== null && fin.linear, one, fin, row };
+  if (quiet) return out;
+  if (confirmed) {
+    const failed1 = Object.keys(one.checks).filter((k) => !one.checks[k]);
+    note(`  CONFIRM HOT    ${name.padEnd(26)} one process not linear(${failed1.join(',')}) resid=${f2(one.s.maxResid / one.s.slope)}xslope r2=${f3(one.s.r2)} ` +
+      `-- not a verdict: re-measured in 2 more processes, judged once on the cellwise median of 3`);
+  }
+  if (confirmed && !valid) {
+    note(`  SLOPE HOT     ${name.padEnd(26)} median of 3: a re-measure was malformed or misaligned FAIL(no verdict)`);
+    fails.push(`SLOPE ${name}: confirm re-measure malformed or misaligned -- no verdict (fail closed)`);
+  } else gateSlope(row, name, false);
+  return out;
+}
+
+// CTRL confirm-slope: the foilIterStep row (its own single spawn = process 1)
+// judged AS A REAL ITERATOR through confirmSlope must end non-linear.
+export function ctlConfirmSlope(res, respawn = () => spawn(res.spec)) {
+  if (CALIBRATE || HOST_BAD.HOT) {
+    note(`  CTRL confirm-slope foilIterStep as a real iterator: not run (${CALIBRATE ? 'CALIBRATE' : hostTag('HOT', 'FAIL')})`);
+    return null;
+  }
+  const c = confirmSlope(res, 'foilIterStep', respawn, true);
+  const ok = c.confirmed && c.valid && !c.linear;
+  const failedOf = (v) => Object.keys(v.checks).filter((k) => !v.checks[k]).join(',');
+  note(`  CTRL confirm-slope foilIterStep as a real iterator: process 1 ${c.one.linear ? 'linear' : 'not linear(' + failedOf(c.one) + ')'}; ` +
+    (!c.confirmed ? 'not re-measured ' : c.valid ? `median of 3 resid=${f2(c.fin.s.maxResid / c.fin.s.slope)}xslope ` : 'median of 3 malformed ') +
+    (ok ? `ok(non-linear: ${failedOf(c.fin)})` : `FAIL(${c.confirmed && !c.valid ? 'malformed re-measure' : 'ended linear'}: no teeth)`));
+  if (!ok) fail('HOT', 'confirm-slope has no teeth');
+  return c;
+}
+
 const TABLE = {}; // RESEARCH section 2 popcount table
+
+// Load advisory, printed first by run(). NOT a gate: the NOISE precondition is
+// the gate. Busy above 5 (was 2): witness:fast failed quiet runs at load 1.1-1.7
+// and passed three at load 6-9, so a load of 2 flagged ordinary hosts. A
+// non-finite load is not read as quiet.
+const ADVISORY_LOAD = 5;
+export function advisory(la) {
+  return `  (advisory, not a gate) load average ${f2(la)}` +
+    (!(la <= ADVISORY_LOAD) ? ' -- busy host: a NOISE cap failure here is a HOST verdict (exit 2)' : '');
+}
 
 function run() {
   const t0 = Date.now();
-  // advisory only (not a gate): the NOISE precondition is the gate.
-  const la = loadavg()[0];
-  note(`  (advisory) load average ${la.toFixed(2)}${la > 2 ? ' -- busy host: expect a HOST verdict (NOISE precondition), not a finding' : ''}`);
+  note(advisory(loadavg()[0]));
   const lanes = FAST ? ['HOT'] : ['HOT', 'PRESSURE'];
 
   for (const lane of lanes) {
@@ -696,12 +812,15 @@ function run() {
   const ks = FAST ? K_FAST : K_FULL;
   for (const op of iterOps) {
     const s = spawn({ subject: 'fb', op, lane: 'HOT', mode: 'slope', params: ks, ops: SLOPE_OPS[op] || 150000, reps: 3 });
-    gateSlope(s, op, false);
+    confirmSlope(s, op);   // gateSlope; a one-process FAIL is re-measured twice
   }
+  let stepFoil = null;
   for (const f of ['foilIterQuad', 'foilIterScan32', 'foilIterStep']) {
     const s = spawn({ subject: f, op: f, lane: 'HOT', mode: 'slope', params: ks, ops: SLOPE_OPS[f] || 150000, reps: 3 });
     gateSlope(s, f, true);
+    if (f === 'foilIterStep') stepFoil = s;
   }
+  ctlConfirmSlope(stepFoil);   // the confirm's teeth: reuses that spawn as process 1
   if (!FAST) {
     const s = spawn({ subject: 'fb', op: 'forEach', lane: 'PRESSURE', mode: 'slope', params: K_FAST, ops: 200000 });
     const m = slopeMetrics(s.params, s.net);
@@ -720,7 +839,10 @@ function run() {
   process.stdout.write(lines.join('\n') + '\n');
   if (!CALIBRATE && fails.length) {
     process.stdout.write('\nFAILURES:\n' + fails.map((f) => '  ' + f).join('\n') + '\n');
-    process.exitCode = 1;
+    // NOISE failures only: no lane reached a verdict -> HOST, exit 2. Any finding: 1.
+    const host = hostFails();
+    if (host) process.stdout.write('\nHOST: re-run on a quiet host -- every failure above is a lane NOISE cap failure (no verdict; if it persists on a quiet host it is a finding: >= 22 real-op rows regressed together)\n');
+    process.exitCode = host ? 2 : 1;
   }
 }
 

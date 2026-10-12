@@ -1009,12 +1009,19 @@ and NOT blocking any release: the maintainer moved to a lighter process
     regression confined to that phase passes. Add a loose pin (inside the
     documented bimodal band, or within a stated multiple of slope of the
     phase-0 fit) with a must-fail synthetic series.
-  - Load advisory (witness.mjs ~:411) says "expect HOST" above load 2; data
-    says HOT noise/floor 0.135-0.158 at load 2-3.7, 0.336 only at 6-11.7.
-    Move the advisory threshold to ~5.
-  - HOST verdict gets its own exit code (2) + "re-run on a quiet host"
-    message; optionally one automatic witness:fast retry before failing.
-    Never an env var that skips it in prepublishOnly.
+  - (ES = .handoff/evidence/stability)
+  - CLOSED 2026-10-12 (unreleased, test-only): load advisory. It now reads
+    "(advisory, not a gate)" and the busy-host note fires above load 5 (was
+    2); data said HOT noise/floor 0.135-0.158 at load 2-3.7, 0.336 only at
+    6-11.7. Evidence: ES/quiet2/verify.log,
+    ES/qa-slope/verify.log (npm test 627/627).
+  - CLOSED 2026-10-12 (unreleased, test-only): HOST verdict exit code. Exit 2
+    ONLY when every failure is a lane NOISE cap failure, with "HOST: re-run on
+    a quiet host"; any other finding exits 1 (a NOISE that measured nothing,
+    a malformed spawn row, a malformed PRESSURE subset). No automatic retry
+    and no env var that skips it. Evidence: ES/qa-slope/mutants/
+    driver-mutants.txt (live noiseonly exit 2, noisefind exit 1) and full
+    runs 11 and 16 in ES/qa-slope/runs/table.txt (exit 2).
   - CLOSED 2026-10-11 (unreleased, test-only): gateFlat on an EMPTY row
     passed as flat (metrics([]) -> ratio NaN, spread -Infinity). It now fails
     closed on an empty or one-cell row and on any non-finite metric or NOISE;
@@ -1022,12 +1029,16 @@ and NOT blocking any release: the maintainer moved to a lighter process
   - REJECTED 2026-10-11: a SELECT_SLOW estimator for the HOT select flake
     (div 1 did not help on a quiet host; a div 4 trial failed its pre-fixed
     rule; METHODOLOGY has the numbers). Reverted; only gateFlat ships.
-  - OPEN, for the dedicated WITNESS-STABILITY session (maintainer,
-    2026-10-11): witness:fast (and so verify / prepublishOnly) failed 11/28
-    QUIET runs on 1.5.0 (load 1.1-1.7): select 7/28 and FastBit1024 HOT rows
-    (acquire, nextClearBit, highest, lowest) 6/28. Investigate per-row noise
-    and the NOISE estimate before changing anything; the backlog's "one
-    automatic retry" is a candidate, not a decision.
+  - OPEN (flat path), for the dedicated WITNESS-STABILITY session
+    (maintainer, 2026-10-11): witness:fast (and so verify / prepublishOnly)
+    failed 11/28 QUIET runs on 1.5.0 (load 1.1-1.7): select 7/28 and
+    FastBit1024 HOT rows (acquire, nextClearBit, highest, lowest) 6/28. The
+    flat confirm (cellwise median of 3) was REJECTED: 49/60 med3 spreads
+    <= 0.132 ns, clause (i) failed (ES/med3/summary.txt).
+    A centred-median redesign is planned (plan-witness-stability-delta1.md
+    (b)), not built. Stage-1 baseline on the slope-confirm build: fast flat
+    FAIL 3/20, all select HOT (ES/qa-slope/runs/table.txt:3-5).
+    Never a wider K. The slope half is adopted (next item).
   - CLOSED 2026-10-11 (unreleased, test-only): the full witness FAILed on
     1.5.0 at PRESSURE select (density) 5.2-6.2 N > 4.5 N, caused by the
     d0/d32 one-word corpora (METHODOLOGY). PRESSURE density is now gated over
@@ -1035,16 +1046,35 @@ and NOT blocking any release: the maintainer moved to a lighter process
     control row is INFO. Over d1..d31 select reads 1.93-4.25 N (7 runs;
     least headroom of any row -- if it flakes, it belongs to the stability
     session; do not widen SPREAD_K).
-  - OPEN, for the WITNESS-STABILITY session: the HOT SLOPE resid check flakes
-    on its own (limit 3.5 x slope): HEAD forEachArray 4.40, then 3.58, and
-    forEachMaskDiff 6.01 in 3 of 4 full runs on 2026-10-11 (load 1.2-2.8);
-    qa then saw forEachMaskUnion 7.40 (and HEAD fails it too). witness:fast
-    (in verify) failed 2 of 4 qa runs at load 1.8-2.4 on FastBit1024 HOT
-    nextClearBit 6.09 N and highest 6.63 N (the second advised "busy host");
-    qa's 3 runs at load 6-9 passed, so load alone does not predict it.
-    Also watch there: foilLut16 PRESSURE over d1..d31 fell to 6.86 N vs the
-    5.5 N line in one run (margin +1.36 N); if it drowns on a quiet host it
-    is stability work, not a reason to move FOIL_SPREAD_K.
+  - ADOPTED 2026-10-12 (unreleased, test-only), SLOPE resid half: the HOT
+    SLOPE resid check flaked on its own (limit 3.5 x slope): HEAD forEachArray
+    4.40, then 3.58, and forEachMaskDiff 6.01 in 3 of 4 full runs on
+    2026-10-11 (load 1.2-2.8); qa saw forEachMaskUnion 7.40. A real iterator
+    that fails on one process is now re-spawned twice and judged once on the
+    cellwise median of 3 (CTRL confirm-slope keeps teeth). qa, quiet host,
+    full n=5: 5 confirm triggers in 4 runs, 4 one-process outliers rescued,
+    real SLOPE FAIL 1/5 (forEachArray; qa A1s recorded FAILED, the confirm
+    kept by maintainer decision 2026-10-12); fast n=20: real SLOPE FAIL
+    0/20. Evidence:
+    ES/qa-slope/runs/table.txt. forEachArray stays open (next item).
+  - OPEN: forEachArray resid sits near its limit. Final resid in 5 full runs
+    3.00 / 3.19 / 2.54 / 3.21 / 4.29x slope vs the 3.5x limit
+    (ES/qa-slope/runs/{01,06,11,16,21}-full.log);
+    the pre-confirm builds also failed it (4.40 at 1.5.0, 3.58 on the
+    d1..d31 subset build). The confirm cannot help: in the failing
+    run the single process read 4.28x. Find out whether it is a model fit
+    (the quadratic-residual model) or a true non-linearity. Never a wider
+    RESID_K.
+  - WITNESS-STABILITY qa notes (2026-10-12, quiet host, load1 1.30-3.46): the
+    full witness exited 0 in only 1/5 runs (exit codes 0,1,2,2,1): NOISE
+    PRESSURE cap failure x2 (exit 2), foilLut16 PRESSURE 4.98N < 5.5N x1,
+    forEachArray x1 (ES/qa-slope/runs/table.txt:28).
+    The A3s driver checks (golden compare, spawn count +2) live only in
+    ES/qa-slope/ (not in npm test, by decision).
+  - Also watch in the stability work: foilLut16 PRESSURE over d1..d31 fell
+    to 6.86 N vs the 5.5 N line in one run (margin +1.36 N), then to 4.98 N
+    in qa full run 06 (see above); on a quiet host it is stability work, not
+    a reason to move FOIL_SPREAD_K.
   - S3 reviewer notes (2026-10-10): `.value` is a mutable public field; a
     direct out-of-range write (NaN, 0.5, 2**32) answers differently than
     1.2.1 -> make `value` readonly in d.ts or document the invariant (S6).

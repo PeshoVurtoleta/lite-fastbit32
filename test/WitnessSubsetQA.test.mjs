@@ -100,12 +100,12 @@ describe('run() wiring -- the real driver against a synthetic run-one (no timing
     mkdirSync(join(DIR, 'witness'));
     copyFileSync(join(HERE, 'witness.mjs'), join(DIR, 'witness.mjs'));
     writeFileSync(join(DIR, 'witness', 'run-one.mjs'), FAKE);
-    // at most 3 drivers at once (each spawns ~135 children): keeps npm test from
-    // loading the host right before verify's timing gates.
-    const queue = [...SCEN];
-    const worker = async () => { for (let s; (s = queue.shift()) !== undefined;) runs[s] = await runScenario(s); };
-    await Promise.all([worker(), worker(), worker()]);
-  }, { timeout: 180000 });
+    // serial, one driver at a time (each spawns ~135 children): so npm test does
+    // not load the host right before verify's timing gates.
+    const t0 = Date.now();
+    for (const s of SCEN) runs[s] = await runScenario(s);
+    console.log('WitnessSubsetQA scenario runs wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+  }, { timeout: 300000 });
   after(() => { if (DIR) rmSync(DIR, { recursive: true, force: true }); });
 
   const noiseLine = (r, lane) => r.lines.find((l) => l.startsWith('  NOISE ' + lane));
@@ -313,13 +313,14 @@ describe('gateCells / subsetRow / gateSubset -- QA boundary matrix', () => {
     assert.deepEqual(c.gate, [1, 3, 5, 7]);
   });
 
-  it('HOST-bad lane: the subset path (malformed subset, d0/d32 negative cell) is relabelled HOST -- recorded, never dropped', async () => {
+  it('HOST-bad lane: a malformed subset FAILS (10b, never HOST); only the d0/d32 negative cell is relabelled HOST -- recorded, never dropped', async () => {
     const w = await setup();
     w.HOST_BAD.PRESSURE = true;
     w.gateSubset(drow([1, 1], [0, 32]), 'host-bad-malformed');
     w.gateSubset(drow(D33.map((d) => (d === 32 ? -5 : 1))), 'host-bad-neg');
-    assert.equal(w.fails.length, 0);
-    assert.equal(w.hostSuppressed.length, 2);
+    assert.equal(w.fails.length, 1);
+    assert.match(w.fails[0], /^host-bad-malformed \[PRESSURE\]: density gate subset/);
+    assert.equal(w.hostSuppressed.length, 1);
   });
 
   it('laneNoise: the PRESSURE floor median is taken over d1..d31 as well (a d0 floor outlier does not move it)', async () => {

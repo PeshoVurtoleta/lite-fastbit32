@@ -76,11 +76,11 @@ The anchor: every hot op runs in the SAME time for every input word.
 - **The self-reference fails open only inside a bounded window.** The foils are
   judged in the same units, but foilSubEps has a fixed ~0.7 ns step: NOISE HOT
   can inflate ~1.5-2x (to ~0.1 ns, where 7 N passes the step) before that foil reads
-  flat and fails the run, and the median only inflates if >= 19 of the 38 real-op
+  flat and fails the run, and the median only inflates if >= 22 of the 44 real-op
   rows regress together. Inside that window a common regression of up to ~0.1 ns
   per op could pass, and one op is then allowed SPREAD_K x NOISE = 6 N ~ 0.6 ns
   of spread. NOISE must also be finite, > 0 and <= NOISE_FLOOR_MAX x the lane's
-  median floor ns; the failure message says "host too noisy ... or >= 19 real-op
+  median floor ns; the failure message says "host too noisy ... or >= 22 real-op
   rows regressed together".
 - **Host verdict.** NOISE_FLOOR_MAX HOT = 0.27 is derived so the precondition
   fires BEFORE foilSubEps can flip: quiet calibration max 0.243 (14 runs);
@@ -89,10 +89,18 @@ The anchor: every hot op runs in the SAME time for every input word.
   the old 0.4 a host at load 6-11 read 0.336, passed, and printed a false "the
   gate has no teeth".) Once a lane's NOISE check fails, every other gate line of
   that lane prints `HOST(no verdict: lane NOISE failed)` and is listed under
-  "HOST ... (not findings)", never under FAILURES; the NOISE failure alone fails
-  the run. Shown on a scratch copy (cap forced to 0.01, foil floor to 1000 N):
-  exit 1, FAILURES = the NOISE line only, 8 foil lines relabelled HOST. An
-  advisory `os.loadavg()` line is printed up front (not a gate).
+  "HOST ... (not findings)", never under FAILURES. Exit codes: 0 clean; 1 any
+  finding; 2 only when EVERY failure is a lane NOISE cap failure
+  (noise/floor > NOISE_FLOOR_MAX), which prints "HOST: re-run on a quiet
+  host". A NOISE that measured nothing (no valid rows, non-finite n or floor,
+  n == 0, a non-positive floor), a malformed spawn row and a malformed PRESSURE density subset (10b)
+  are harness faults: findings, exit 1. A NOISE cap failure that persists on a
+  quiet host is a finding (>= 22 real-op rows regressed together). Shown on a
+  scratch copy (cap forced to 0.01, foil floor to 1000 N), measured BEFORE
+  the exit-2 split: exit 1, FAILURES = the NOISE line only, 8 foil lines
+  relabelled HOST. An advisory `os.loadavg()` line is printed up front
+  "(advisory, not a gate)"; the busy-host note fires above load 5 (was 2) and
+  reads "-- busy host: a NOISE cap failure here is a HOST verdict (exit 2)".
 - **EPS(lane)** = EPS_K x NOISE: the ratio clamp AND the negative-cell bound.
 - **HOT**: a real op must pass ratio (max/min, cells clamped up to EPS) AND
   spread (unclamped max - min, in N) and have no cell <= -EPS. A foil's verdict
@@ -170,6 +178,7 @@ state into an explicit HOST verdict ("host too noisy") instead of a false foil
 reading. **The full witness needs a quiet host.** Under that load the two
 confirming runs read: run A exit 0 (NOISE P 0.092 ns, noise/floor 0.070, real
 spread <= 2.44 N, LUT16 7.03 N, SEP 4.59 N); run B exit 1 on the host verdict only
+(it would exit 2 under the HOST split)
 (noise/floor 0.095 > 0.08; its LUT16 6.28 N and SEP 4.47 N still separated).
 `witness:fast` is HOT-only and is unaffected.
 
@@ -263,13 +272,70 @@ closed: forEachMapped + 16 / 32 / 64 callbacks at k >= 16 -> red (resid; resid +
 R^2); forEachArray + 10 / 16 callbacks at k >= 16 -> red (resid), where the
 round-2 floor first caught 31.
 
+### Slope confirm (one re-measure, no loop)
+
+A real iterator that fails `slopeVerdict` on one process is re-spawned exactly
+twice and judged once on the cellwise median of the 3 processes (an odd count;
+no centring, because the intercept check needs the absolute level). There is
+no loop. The confirm is skipped under WITNESS_CALIBRATE and when NOISE HOT
+failed. The one-process verdict prints as a `CONFIRM` note
+("not a verdict: re-measured in 2 more processes") and never enters FAILURES;
+only the median verdict does. Foils, flat rows, the broken-floor and the
+self-check do not go through it.
+
+- Teeth: `CTRL confirm-slope` judges foilIterStep as a real iterator through
+  the same path; it must stay non-linear, else the run fails ("no teeth").
+  Measured median resid of that control: 4.49-8.29x slope in the 5 full runs
+  (n=5), 4.67-5.28x in the 20 fast runs (n=20); limit 3.5x (qa-slope
+  runs/table.txt:28,30). Under a HOT NOISE failure it prints `not run
+  (HOST(...))` and makes no respawns.
+- A regression that is random per process is caught only when 2 of the 3
+  processes show it.
+- qa (quiet host, load1 1.30-3.46, 25 runs, 0 tainted; qa-slope/runs/):
+  full (n=5): 5 confirm triggers in 4 of 5 runs (forEachArray x3,
+  forEachMaskPair x1, forEachMaskUnion x1); 4 rescued, 1 confirmed FAIL
+  (forEachArray, one process 4.28x -> median of 3 4.29x). Fast (n=20): 0
+  triggers, real SLOPE FAIL 0/20.
+- Teeth, driver level (fake run-one, qa-slope/mutants/driver-mutants.txt): a
+  confirm that always reports linear makes the CTRL fail (exit 1, "ended
+  linear: no teeth"); a confirm that re-spawns until linear raises the
+  foilIterStep spawn count from 3 to 9; a cellMedian that returns the first
+  row lets a union outlier on the 1st spawn fail the run (exit 1; live exits 0).
+  Live driver spawn count is frozen + 2 in 20/20 scenario x mode pairs
+  (qa-slope/spawn-counts.txt).
+- forEachArray sits systematically near its limit. Final resid in the 5 full
+  runs, in run order: 3.00 / 3.19 / 2.54 / 3.21 / 4.29x slope (limit 3.5x;
+  qa-slope/runs/01,06,11,16,21-full.log). The confirm cannot help a row that
+  sits at its limit: in the failing run the single process read 4.28x and the
+  median of 3 read 4.29x. The pre-confirm builds also failed it (4.40 at 1.5.0, 3.58 on the
+  d1..d31 subset build; ROADMAP backlog).
+  ROADMAP carries it as its own OPEN item (model fit or true non-linearity;
+  never a wider RESID_K).
+
+### Flat rows: the confirm was tried and rejected
+
+The same cellwise median of 3 was probed for the flat rows (med3,
+.handoff/evidence/stability/med3/summary.txt) and REJECTED: the pre-fixed
+clause (i) failed, with 49/60 med3 spreads <= 0.132 ns (worst: FB1024
+nextClearBit, 0.245 ns). A cellwise median of rows that sit at different
+per-process levels switches level from cell to cell, so its spread measures
+the gap between levels, not an in-process step. The slope half held (med3
+resid max 1.61x slope for forEachMaskDiff, 1.86x for forEachMaskUnion; 3.5x
+limit; foilIterStep min 4.65x). A redesign (each process centred on its own
+median before the cellwise median, DELTA 1 (b)) is planned, not built; it
+needs a fresh quiet probe under a rule fixed in advance. Fast flat FAIL under
+the slope-confirm build: 3/20 runs, all select HOT (runs 02-04,
+qa-slope/runs/table.txt:3-5): the baseline for that redesign.
+
 ### Verify integration
 
 `npm run verify` runs `witness:fast` (HOT lane only; density 8 cells, position 8
 cells; the 4 HOT foils + foilSubEps; ctlRead; broken-floor and self-check
-controls; forEach + forEachMaskUnion + the three iterator foils): ~10 s. The full
+controls; forEach + forEachMaskUnion + the three iterator foils): 13.8 s
+median (n=20, wall 13.5-14.1 s; qa-slope/runs/table.txt:30, meta.tsv). The full
 `npm run witness` (both lanes, full sweeps incl. the PRESSURE position sweep,
-all 8 iterators, the RESEARCH table) is 85-94 s and stays out of verify: it is
+all 8 iterators, the RESEARCH table) is 116.2-123.1 s wall (n=5, with the
+slope confirm; qa-slope/runs/meta.tsv) and stays out of verify: it is
 timing-heavy and needs a quiet host. The PRESSURE position sweep and the LUT16
 PRESSURE teeth are proven by the full run only.
 

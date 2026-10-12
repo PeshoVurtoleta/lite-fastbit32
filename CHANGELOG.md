@@ -23,6 +23,35 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   run-one and pins the d1..d31 routing for real ops, foils, SEP, NOISE and the
   control row, kwords validation, and HOT / position / ctlRead keeping every
   cell.
+- Witness: a HOST-only failure exits 2. Exit 2 is used only when every
+  failure is a lane NOISE cap failure (noise/floor > NOISE_FLOOR_MAX), with
+  "HOST: re-run on a quiet host"; any other finding exits 1 (a NOISE that
+  measured nothing, a malformed spawn row, a malformed PRESSURE subset). The
+  load advisory reads "(advisory, not a gate)"; its busy-host note fires
+  above load 5 (was 2).
+- Witness: a malformed PRESSURE density subset is a finding (FAIL line,
+  exit 1) even when the lane also failed its NOISE cap. It used to be
+  relabelled HOST (the run still exited 1). One intentional golden delta.
+- Witness: slope confirm. A real iterator that fails slopeVerdict on one
+  process is re-spawned twice and judged once on the cellwise median of 3
+  (odd count, no loop). Skipped under WITNESS_CALIBRATE and when NOISE HOT
+  failed; the one-process verdict prints as a CONFIRM note. New control
+  `CTRL confirm-slope` (foilIterStep judged as a real iterator must stay
+  non-linear, else "no teeth"). Cost: +2 spawns per run for the CTRL
+  (fake-driver count, 20/20 scenario x mode pairs); each confirm trigger
+  adds 2 more.
+- Witness: a flat-row confirm (cellwise median of 3) was tried and rejected;
+  49/60 med3 spreads were <= 0.132 ns, so the pre-fixed rule failed. Flat
+  rows stay single-process.
+- Tests: test/WitnessConfirm.test.mjs replays the gate functions against
+  test/fixtures/witness-gates-golden.json (cut from efbb377), and covers
+  cellMedian, the confirm with a stub respawn, the advisory and hostFails.
+- Tests: test/WitnessStabilityQA.test.mjs drives run() with a fake run-one
+  (FAST, serial, per-spawn counter): a 1st-spawn slope outlier exits 0, a
+  step on every spawn exits 1, a 1st-spawn select outlier exits 1, a NOISE
+  failure alone exits 2, a NOISE failure plus a finding exits 1.
+- Tests: test/WitnessSubsetQA.test.mjs now runs serially and pins the
+  malformed-subset behaviour (fails 1, hostSuppressed 1).
 
 ## [1.5.0] - 2026-10-11
 
