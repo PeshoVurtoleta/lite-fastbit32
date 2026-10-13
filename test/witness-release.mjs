@@ -3,6 +3,7 @@
  *
  *     node test/witness-release.mjs              # K = 5 serial FAST rounds, gated
  *     node test/witness-release.mjs --if-stale   # exit 0 at once on an exact stamp match
+ *     node test/witness-release.mjs --keep <dir> # the same gate, every round kept in <dir>
  *
  * `verify` keeps only DETERMINISTIC gates. One witness:fast run is a STATISTICAL
  * gate (fixed thresholds over this run's own NOISE): it false-failed 14 of 58 fast
@@ -63,6 +64,19 @@
  * matches exactly (same package.json, same file set, same hashes, same node); a
  * missing, corrupt or mismatched stamp reruns the full gate.
  *
+ * KEEP (--keep <dir>, opts.keepDir; evidence for a noise study). <dir> must NOT
+ * exist and its parent MUST exist; it is made with a non-recursive mkdir first,
+ * before the old stamp is touched (any failure: HARNESS, exit 1, no round runs,
+ * an old stamp kept: the run measured nothing). After each round, BEFORE
+ * it is parsed, round-N.stdout.txt (the exact stdout) and round-N.json
+ * ({status, signal, wall}) are written with flag 'wx' (never overwrite), so a
+ * HARNESS round is kept too; decision.json is written at the end, after the stamp
+ * step, so it holds the final exit. Any write error is HARNESS: no further round,
+ * exit 1, no stamp (the old one was deleted before round 1; a stamp just written
+ * is deleted if decision.json cannot be written).
+ * `--keep` with `--if-stale` exits 1 (a skipped gate keeps nothing). Without
+ * --keep the log is byte-identical to the build before --keep existed.
+ *
  * Known weaknesses (expected, from logs; METHODOLOGY): the rounds are serial on
  * one host, so they are correlated -- in the low-NOISE state the gate still
  * false-fails ~21%; a marginal (~0.15 ns) select step is missed 50-73% of the
@@ -73,7 +87,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync, lstatSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { loadavg } from 'node:os';
@@ -468,6 +482,26 @@ function dropStamp(dir) {
   return true;
 }
 
+// --- keep dir ---------------------------------------------------------------------
+// make the --keep dir: '' when made, else why not. Fail closed: not a non-empty
+// string, it exists (never reused, even as a dangling link), its parent is missing
+// or not a directory, or the non-recursive mkdir throws.
+function keepOpen(dir, mkdir) {
+  if (typeof dir !== 'string' || dir === '') return `keep dir ${JSON.stringify(dir)} is not a non-empty path`;
+  try {
+    lstatSync(dir);
+    return `keep dir ${dir} already exists (a keep dir is never reused)`;
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return `keep dir ${dir}: cannot check it (${e && (e.code || e.message)})`;
+  }
+  const parent = dirname(resolve(dir));
+  let st;
+  try { st = statSync(parent); } catch (e) { return `keep dir parent ${parent} is missing (${e && (e.code || e.message)})`; }
+  if (!st.isDirectory()) return `keep dir parent ${parent} is not a directory`;
+  try { mkdir(dir); } catch (e) { return `keep dir ${dir}: mkdir failed (${e && (e.code || e.message)})`; }
+  return '';
+}
+
 // --- the driver -----------------------------------------------------------------
 /** The default round: one `WITNESS_FAST=1 node test/witness.mjs` process. */
 export function spawnRoundDefault(env) {
@@ -482,12 +516,19 @@ export function spawnRoundDefault(env) {
  * @param {(env: object, round: number) => {status, signal, stdout, error?}} spawnRound
  *   called with a FRESH env copy per round (WITNESS_FAST '1', no
  *   WITNESS_CALIBRATE) and the 0-based round index.
- * @param {{stampDir?: string, log?: Function, err?: Function}} opts  ONLY when
+ * @param {{stampDir?: string, keepDir?: string, log?: Function, err?: Function,
+ *   writeFile?: Function, mkdir?: Function}} opts  ONLY when
  *   stampDir is given: an old stamp is DELETED before round 1 (a run killed or
  *   crashing mid-way leaves no pass behind), the stamp inputs are hashed before
  *   round 1 (a hash failure exits 1, no round runs), and on exit 0 that pre-run
  *   hash is stamped iff the files still hash the same after the vote; if the
  *   stamp is not written, a 0 vote becomes exit 1 (HARNESS).
+ *   ONLY when keepDir is given (any value, even null: a bad one fails closed): see
+ *   KEEP in the header. The dir is made BEFORE the stamp step above (a bad dir
+ *   leaves an old stamp in place); decision.json is written after the stamp step at the end, and if it cannot be
+ *   written the stamp just written is deleted (exit 1). writeFile (default
+ *   fs.writeFileSync, called (path, data, {flag: 'wx'})) and mkdir (default
+ *   fs.mkdirSync, called (dir): non-recursive) are injectable for tests.
  * @returns {{exit: 0|1|2, records: Array, decision: object, stamp: object|null}}
  */
 export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
@@ -496,6 +537,26 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
   const la = loadavg();
   log(`gate:release -- ${K} serial witness:fast rounds, strict majority ${MAJORITY}/${K} per row`);
   log(`  node ${process.version} ${process.platform}/${process.arch}; load average ${la.map((x) => x.toFixed(2)).join(' ')} (advisory)`);
+  const keep = opts.keepDir !== undefined;
+  // '' when written, else the HARNESS reason. data: a thunk, so a serialisation
+  // error is a write error too.
+  const keepWrite = (name, data) => {
+    try { (opts.writeFile || writeFileSync)(join(opts.keepDir, name), data(), { flag: 'wx' }); return ''; } catch (e) {
+      return `keep: cannot write ${name} in ${opts.keepDir}: ${e && (e.code || e.message) ? (e.code || e.message) : String(e)}`;
+    }
+  };
+  if (keep) {
+    const why = keepOpen(opts.keepDir, opts.mkdir || mkdirSync);
+    if (why) {
+      const decision = { exit: 1, findings: [], inconclusive: [], host: [], demoted: [], harness: [why] };
+      log(`  HARNESS ${why}`);
+      err('gate:release FAIL (exit 1): HARNESS (keep dir)');
+      // checked BEFORE the stamp step: a bad --keep measured nothing, so an old
+      // stamp from an earlier pass is left as it is.
+      return { exit: 1, records: [], decision, stamp: opts.stampDir ? { written: false, why } : null };
+    }
+    log(`  keep: every round + decision.json -> ${opts.keepDir}`);
+  }
   let pre;
   if (opts.stampDir) {
     if (dropStamp(opts.stampDir)) log(`  old ${STAMP_FILE} deleted before round 1`);
@@ -510,17 +571,29 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
   const base = { ...process.env, WITNESS_FAST: '1' };
   delete base.WITNESS_CALIBRATE;
   const records = [];
+  let keepFail = '';
   for (let i = 0; i < K; i++) {
     const t0 = Date.now();
-    const rec = roundRecord(spawnRound({ ...base }, i));
+    const raw = spawnRound({ ...base }, i);
     const wall = ((Date.now() - t0) / 1000).toFixed(1);
+    if (keep) {
+      // saved BEFORE parsing: a HARNESS round is kept too.
+      const r = raw && typeof raw === 'object' ? raw : {};
+      keepFail = keepWrite(`round-${i + 1}.stdout.txt`, () => (typeof r.stdout === 'string' || Buffer.isBuffer(r.stdout) ? r.stdout : '')) ||
+        keepWrite(`round-${i + 1}.json`, () => JSON.stringify({
+          status: r.status === undefined ? null : r.status, signal: r.signal === undefined ? null : r.signal, wall: Number(wall),
+        }) + '\n');
+    }
+    const rec = roundRecord(raw);
     records.push(rec);
     const nz = rec.noise ? `NOISE HOT ${rec.noise.ns} ns noise/floor=${rec.noise.ratio} ${rec.noise.ok ? 'ok' : 'FAIL'}` : 'NOISE HOT ?';
     log(`  round ${i + 1}/${K} status=${rec.status} ${rec.kind} ${nz} wall=${wall}s -- ${rec.why}`);
     if (rec.kind === 'valid') for (const [k, r] of rec.rows) if (r.verdict === 'FAIL') log(`      FAIL ${r.cls.padEnd(5)} ${k}`);
+    if (keepFail) { log(`  round ${i + 1}: HARNESS (keep write) -- stop`); break; }
     if (rec.kind === 'harness') { log(`  round ${i + 1}: HARNESS -- stop`); break; }
   }
   const d = decide(records);
+  if (keepFail) { d.exit = 1; d.harness.push(keepFail); }
   if (d.host.length) log(`  HOST rounds: ${d.host.map((i) => i + 1).join(',')} (no verdicts)`);
   if (d.demoted.length) log(`  demoted to HOST (a teeth row FAIL in < ${MAJORITY} rounds): ${d.demoted.map((i) => i + 1).join(',')}`);
   for (const f of d.findings) log(`  FINDING ${f.cls.padEnd(5)} ${f.key}: FAIL ${f.fail}, ok ${f.ok}${f.cls === 'teeth' ? ' -- no teeth' : ''}`);
@@ -540,22 +613,63 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
       }
     } else if (dropStamp(opts.stampDir)) log(`  stale ${STAMP_FILE} deleted (exit ${d.exit})`);
   }
+  if (keep) {
+    const kf = keepWrite('decision.json', () => JSON.stringify({
+      gate: 'gate:release', exit: d.exit, node: process.version,
+      rounds: records.map((r, i) => ({ round: i + 1, status: r.status, kind: r.kind, why: r.why })),
+      findings: d.findings, inconclusive: d.inconclusive, host: d.host, demoted: d.demoted, harness: d.harness, stamp,
+    }, null, 2) + '\n');
+    if (kf) {
+      d.exit = 1;
+      d.harness.push(kf);
+      log(`  HARNESS ${kf}`);
+      // a pass whose decision was not kept is not a pass: drop the stamp just written.
+      if (opts.stampDir && dropStamp(opts.stampDir)) log(`  ${STAMP_FILE} deleted (decision.json not kept)`);
+    } else log(`  kept ${records.length} round(s) + decision.json in ${opts.keepDir}`);
+  }
   if (d.exit === 0) log(`gate:release ok -- ${records.length} rounds, ${d.host.length} HOST, ${d.demoted.length} demoted`);
   else if (d.exit === 1) err(`gate:release FAIL (exit 1): ${d.harness.length ? 'HARNESS -- ' + d.harness.join('; ') : d.findings.length + ' finding(s)'}`);
   else err(`gate:release INCONCLUSIVE (exit 2, the GATE, not quiet-lock): ${d.inconclusive.length} row(s) without a majority -- re-run on a quiet host`);
   return { exit: d.exit, records, decision: d, stamp };
 }
 
-function main(argv) {
-  const OPTS = ['--if-stale'];
-  for (const a of argv) {
-    if (!OPTS.includes(a)) {
-      process.stderr.write(`gate:release: unknown option ${JSON.stringify(a)} (did you mean --if-stale?)\n`);
-      process.exitCode = 1;
-      return;
+/**
+ * The command line. Pure. Fail closed: an unknown option (with a did-you-mean
+ * hint), `--keep` without a value or with one starting with `--`, `--keep` twice,
+ * or `--keep` with `--if-stale` -> error (main exits 1, no round runs).
+ * @param {string[]} argv  process.argv.slice(2)
+ * @returns {{ifStale: boolean, keep: string|null, error: string|null}}
+ */
+export function parseArgs(argv) {
+  const fail = (error) => ({ ifStale: false, keep: null, error });
+  if (!Array.isArray(argv)) return fail('argv is not an array');
+  let ifStale = false, keep = null;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--if-stale') { ifStale = true; continue; }
+    if (a === '--keep') {
+      if (keep !== null) return fail('--keep given twice');
+      const v = argv[i + 1];
+      if (typeof v !== 'string' || v === '' || v.startsWith('--')) return fail('--keep needs a directory: --keep <dir>');
+      keep = v;
+      i++;
+      continue;
     }
+    const hint = typeof a === 'string' && (a.startsWith('--k') || a.includes('keep')) ? '--keep <dir>' : '--if-stale';
+    return fail(`unknown option ${JSON.stringify(a)} (did you mean ${hint}?)`);
   }
-  if (argv.includes('--if-stale')) {
+  if (keep !== null && ifStale) return fail('--keep with --if-stale: a skipped gate keeps nothing (give one of them)');
+  return { ifStale, keep, error: null };
+}
+
+function main(argv) {
+  const args = parseArgs(argv);
+  if (args.error !== null) {
+    process.stderr.write(`gate:release: ${args.error}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (args.ifStale) {
     const c = checkStamp(ROOT);
     if (c.match) {
       process.stdout.write(`gate:release skipped (--if-stale): ${c.why}\n`);
@@ -564,7 +678,9 @@ function main(argv) {
     }
     process.stdout.write(`gate:release --if-stale: ${c.why} -- running the gate\n`);
   }
-  process.exitCode = runRelease(spawnRoundDefault, { stampDir: ROOT }).exit;
+  const opts = { stampDir: ROOT };
+  if (args.keep !== null) opts.keepDir = resolve(args.keep);
+  process.exitCode = runRelease(spawnRoundDefault, opts).exit;
 }
 
 // run only as the entry point; importing (the tests) only exports. realpath on

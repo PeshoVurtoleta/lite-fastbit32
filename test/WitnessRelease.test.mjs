@@ -8,11 +8,11 @@
 // makes the "real row FAIL 5/5" case exit 2, not 1 (5 < 6, so it is inconclusive);
 // MAJORITY=2 makes the "FAIL 2/5 -> 0" case exit 1. Both are asserted below, so
 // each mutant turns exactly those cases red. (Scratch copies live outside the tree.)
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as M from './witness-release.mjs';
 
@@ -439,4 +439,187 @@ describe('addendum 5b stamp: node, exit, edit during the run', () => {
     assert.equal(calls, 0);
   });
   it('cleanup', () => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+});
+
+// ---- DELTA 2 task 6 (B-KEEP): --keep <dir> = runRelease opts.keepDir + parseArgs ----
+// Written from DELTA 2 tasks 4-6, not from the implementation. Exactly 6 tests
+// (A4: 703 + 6). Every one FAILS on the frozen ed3db0f build: it has no keepDir
+// (nothing is written, a bad dir still runs 5 rounds and exits 0) and no parseArgs.
+// parseArgs is read through the namespace (M.parseArgs) so the frozen build still
+// links and only K6 goes red there.
+describe('K --keep <dir> (DELTA 2 task 6)', () => {
+  const quiet = { log: () => {}, err: () => {} };
+  const roots = [];
+  after(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
+  const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-keep-'))); roots.push(d); return d; };
+  const okRound = () => ({ status: 0, stdout: OK_TXT, signal: null });
+  const files = (d) => readdirSync(d).sort();
+  const json = (d, f) => JSON.parse(readFileSync(join(d, f), 'utf8'));
+  const roundFiles = (n) => Array.from({ length: n }, (_, i) => [`round-${i + 1}.json`, `round-${i + 1}.stdout.txt`]).flat();
+  const SHIPPED = ['FastBit32.js', 'README.md'];
+  // a stamp dir that already holds a valid stamp (an earlier pass)
+  function stampedDir() {
+    const d = tmp();
+    mkdirSync(join(d, 'test', 'witness'), { recursive: true });
+    writeFileSync(join(d, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0', files: SHIPPED }));
+    for (const f of [...SHIPPED, ...M.HARNESS_FILES]) writeFileSync(join(d, f), 'content of ' + f + '\n');
+    assert.equal(M.writeStamp(d, { exit: 0, records: rep(5, () => ({ status: 0 })) }).written, true);
+    assert.equal(M.checkStamp(d).match, true);
+    return d;
+  }
+
+  it('K1: each round-N.stdout.txt byte-equals round N stdout, round-N.json + decision.json (exit 0), every write wx', () => {
+    const keepDir = join(tmp(), 'keep');
+    // 5 distinct stdouts (the done-line time differs; round 3 is the FAIL fixture: 1/5 FAIL -> exit 0)
+    const outs = [0, 1, 2, 3, 4].map((i) => (i === 2 ? FAIL_TXT : OK_TXT.replace(/done in [0-9.]+s -- ok/, `done in 1${i}.5s -- ok`)));
+    assert.equal(new Set(outs).size, 5);
+    const flags = [];
+    const writeFile = (p, data, o) => { flags.push(o && o.flag); return writeFileSync(p, data, o); };
+    const r = runRelease((env, i) => ({ status: i === 2 ? 1 : 0, stdout: outs[i], signal: null }), { ...quiet, keepDir, writeFile });
+    assert.equal(r.exit, 0);
+    assert.deepEqual(files(keepDir), ['decision.json', ...roundFiles(5)].sort());
+    for (let i = 0; i < 5; i++) {
+      assert.ok(readFileSync(join(keepDir, `round-${i + 1}.stdout.txt`)).equals(Buffer.from(outs[i], 'utf8')), 'round ' + (i + 1));
+      const m = json(keepDir, `round-${i + 1}.json`);
+      assert.equal(m.status, i === 2 ? 1 : 0);
+      assert.equal(m.signal, null);
+      assert.ok(Number.isFinite(m.wall), 'wall ' + m.wall);
+    }
+    const dj = json(keepDir, 'decision.json');
+    assert.equal(dj.exit, 0);
+    assert.equal(dj.rounds.length, 5);
+    assert.equal(flags.length, 11);
+    assert.ok(flags.every((f) => f === 'wx'), flags.join(','));
+  });
+
+  it('K2: the keep dir already exists -> exit 1, 0 spawnRound calls, its contents unchanged, an old stamp kept', () => {
+    const keepDir = join(tmp(), 'keep');
+    mkdirSync(keepDir);
+    writeFileSync(join(keepDir, 'sentinel.txt'), 'sentinel\n');
+    const asFile = join(tmp(), 'keep-file');
+    writeFileSync(asFile, 'a file\n');
+    // a valid stamp from an earlier pass survives: the dir is checked before the stamp step
+    const sd = stampedDir();
+    for (const d of [keepDir, asFile]) {
+      let calls = 0;
+      const r = runRelease(() => { calls++; return okRound(); }, { ...quiet, keepDir: d, stampDir: sd });
+      assert.equal(r.exit, 1, d);
+      assert.equal(calls, 0, d);
+      assert.equal(M.checkStamp(sd).match, true, 'old stamp kept: ' + d);
+    }
+    assert.deepEqual(files(keepDir), ['sentinel.txt']);
+    assert.equal(readFileSync(join(keepDir, 'sentinel.txt'), 'utf8'), 'sentinel\n');
+    assert.equal(readFileSync(asFile, 'utf8'), 'a file\n');
+  });
+
+  it('K3: parent missing / mkdir throws / empty or null keepDir -> exit 1, 0 calls, nothing made', () => {
+    const root = tmp();
+    const noParent = join(root, 'no-such-parent', 'keep');
+    const cases = [
+      [{ keepDir: noParent }, 'parent missing'],
+      [{ keepDir: join(root, 'k2'), mkdir: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } }, 'mkdir throws'],
+      [{ keepDir: '' }, 'empty'],
+      [{ keepDir: null }, 'null'],
+    ];
+    for (const [o, name] of cases) {
+      let calls = 0;
+      const r = runRelease(() => { calls++; return okRound(); }, { ...quiet, ...o });
+      assert.equal(r.exit, 1, name);
+      assert.equal(calls, 0, name);
+      assert.equal(r.records.length, 0, name);
+    }
+    assert.equal(existsSync(join(root, 'no-such-parent')), false);   // non-recursive: no parent made
+    assert.deepEqual(files(root), []);
+  });
+
+  it('K4: a write error -> HARNESS, stop, exit 1, no stamp: round 3, the last round, decision.json; decision.json holds the final exit', () => {
+    // (a) round-3.stdout.txt throws: exactly 3 calls
+    const d = stampedDir();
+    const keepDir = join(tmp(), 'keep');
+    const enospc = () => Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    let calls = 0;
+    const r = runRelease(() => { calls++; return okRound(); }, {
+      ...quiet, stampDir: d, keepDir,
+      writeFile: (p, data, o) => { if (basename(p) === 'round-3.stdout.txt') throw enospc(); return writeFileSync(p, data, o); },
+    });
+    assert.equal(calls, 3);
+    assert.equal(r.exit, 1);
+    assert.ok(r.decision.harness.some((h) => /round-3\.stdout\.txt/.test(h)), r.decision.harness.join('|'));
+    assert.equal(existsSync(join(d, M.STAMP_FILE)), false);
+    assert.equal(M.checkStamp(d).match, false);
+    assert.equal(existsSync(join(keepDir, 'round-3.stdout.txt')), false);
+    assert.equal(existsSync(join(keepDir, 'round-4.stdout.txt')), false);
+    // (b) a clean 5-round pass whose decision.json cannot be written: the stamp it just wrote is dropped
+    const d2 = stampedDir();
+    const keep2 = join(tmp(), 'keep');
+    const r2 = runRelease(okRound, {
+      ...quiet, stampDir: d2, keepDir: keep2,
+      writeFile: (p, data, o) => { if (basename(p) === 'decision.json') throw enospc(); return writeFileSync(p, data, o); },
+    });
+    assert.equal(r2.records.length, 5);
+    assert.equal(r2.exit, 1);
+    assert.equal(existsSync(join(d2, M.STAMP_FILE)), false);
+    assert.equal(M.checkStamp(d2).match, false);
+    // (c) the LAST round's write fails (round-5.json): 5 valid records still vote 0, so only the
+    // keep failure itself can force exit 1 and keep the stamp away
+    const d3 = stampedDir();
+    let calls3 = 0;
+    const r3 = runRelease(() => { calls3++; return okRound(); }, {
+      ...quiet, stampDir: d3, keepDir: join(tmp(), 'keep'),
+      writeFile: (p, data, o) => { if (basename(p) === 'round-5.json') throw enospc(); return writeFileSync(p, data, o); },
+    });
+    assert.equal(calls3, 5);
+    assert.equal(r3.exit, 1);
+    assert.equal(existsSync(join(d3, M.STAMP_FILE)), false);
+    assert.equal(M.checkStamp(d3).match, false);
+    // (d) a stamp refused at the end (a shipped file edited during round 3): decision.json is
+    // written AFTER the stamp step, so it holds the final exit 1, not the vote's 0 (A5)
+    const d4 = stampedDir();
+    const keep4 = join(tmp(), 'keep');
+    const r4 = runRelease((env, i) => {
+      if (i === 2) writeFileSync(join(d4, 'FastBit32.js'), 'edited mid-run\n');
+      return okRound();
+    }, { ...quiet, stampDir: d4, keepDir: keep4 });
+    assert.equal(r4.exit, 1);
+    assert.equal(r4.stamp.written, false);
+    const dj4 = json(keep4, 'decision.json');
+    assert.equal(dj4.exit, 1);
+    assert.equal(dj4.stamp.written, false);
+    assert.equal(existsSync(join(d4, M.STAMP_FILE)), false);
+  });
+
+  it('K5: a HARNESS round is saved before it is parsed (bad status; a signal-killed round)', () => {
+    const keepDir = join(tmp(), 'keep');
+    const r = runRelease((env, i) => (i === 1 ? { status: 3, stdout: 'garbage\n', signal: null } : okRound()), { ...quiet, keepDir });
+    assert.equal(r.exit, 1);
+    assert.deepEqual(files(keepDir), ['decision.json', ...roundFiles(2)].sort());
+    assert.equal(readFileSync(join(keepDir, 'round-2.stdout.txt'), 'utf8'), 'garbage\n');
+    assert.equal(json(keepDir, 'round-2.json').status, 3);
+    assert.equal(json(keepDir, 'decision.json').exit, 1);
+    const keep2 = join(tmp(), 'keep');
+    const r2 = runRelease(() => ({ status: null, signal: 'SIGTERM', stdout: 'partial' }), { ...quiet, keepDir: keep2 });
+    assert.equal(r2.exit, 1);
+    assert.equal(readFileSync(join(keep2, 'round-1.stdout.txt'), 'utf8'), 'partial');
+    assert.deepEqual([json(keep2, 'round-1.json').status, json(keep2, 'round-1.json').signal], [null, 'SIGTERM']);
+  });
+
+  it('K6: parseArgs -- --keep needs a value not starting with --, --keep + --if-stale and unknown options are errors', () => {
+    assert.equal(typeof M.parseArgs, 'function');
+    const P = M.parseArgs;
+    assert.deepEqual(P([]), { ifStale: false, keep: null, error: null });
+    assert.deepEqual(P(['--if-stale']), { ifStale: true, keep: null, error: null });
+    assert.deepEqual(P(['--keep', 'out/k1']), { ifStale: false, keep: 'out/k1', error: null });
+    const bad = [
+      ['--keep'], ['--keep', ''], ['--keep', '--if-stale'], ['--keep', '--x'],
+      ['--keep', 'a', '--if-stale'], ['--if-stale', '--keep', 'a'], ['--keep', 'a', '--keep', 'b'],
+      ['--bogus'], ['--keep=a'], ['--if-stale', 'x'],
+    ];
+    for (const argv of bad) {
+      const a = P(argv);
+      assert.equal(typeof a.error, 'string', JSON.stringify(argv));
+      assert.ok(a.error.length > 0, JSON.stringify(argv));
+    }
+    assert.match(P(['--bogus']).error, /unknown option "--bogus" \(did you mean --if-stale\?\)/);
+    assert.match(P(['--keep=a']).error, /did you mean --keep <dir>/);
+  });
 });
