@@ -1387,3 +1387,40 @@ export class SparseBit1024 {
 }
 
 ```
+
+---
+
+## 14. External audit of 1.5.0: triage (2026-10-14)
+
+An outside audit (pasted by the maintainer, 2026-10-14) made five code claims and
+four extension proposals. Each was checked against `FastBit32.js` at 22693ef and
+against this file and the ROADMAP. Probes and logs: `.handoff/evidence/audit-2026-10-14/`
+(gitignored; node v26.8.2 darwin/arm64).
+
+### 14.1 Code claims
+
+| # | Claim | Verdict | Where it lives |
+| --- | --- | --- | --- |
+| 1 | Constructor / `fromArray` store `>>> 0`, mutators store int32: `serialize()` differs for one set; bit-31 values make the field a HeapNumber | TRUE, ALREADY KNOWN | FB-03; SC-2 option B (2.0.0), measured in S2a (`%DebugPrint`: signed Smi vs unsigned HeapNumber; serialize 0/0 vs 7/61 scavenges) |
+| 1b | `BitMapper.getMask` returns `>>> 0` but `bit(name)` returns `1 << i`: `getMask(['F31']) !== bit('F31')` | TRUE, NEW DETAIL | Not in SC-2's scope until now. Added to SC-2 B (ROADMAP) |
+| 2 | `rank(31)` deopts after warm-up on 0..30: `(1 << 31) - 1` overflows int32 (CheckedInt32Sub) | NOT REPRODUCED | `rank-deopt.mjs`: 2e6 calls warm on bits 0..30, then 2e6 on bit 31, under `--trace-deopt`: 4 bailouts, all OSR / insufficient-feedback in the probe's own loop, 0 with an overflow reason, `rank(31) = 31`. The `- 1` feeds only `&`, so V8 truncates it to Word32 and needs no overflow check. The audit's `~(-1 << bit)` is an equivalent loop-free mask (checked by hand for bit 0 and 31); no change is needed. A browser / Maglev-only engine is not covered by this probe |
+| 3 | `FastBit1024.toggle` validates twice and reads the word twice (branch to `add` / `remove`) | TRUE | `FastBit32.js:572-575`. The proposed single-load form keeps I1-I4 by the same `clz32(d) >>> 5` and `clz32(~d) >>> 5` terms `add` / `remove` use. A speed claim, so STATISTICAL: adopt only with an interleaved A/B, never on reasoning. ROADMAP FB-15 |
+| 4a | `BitMapper(['A','A'])`: one name owns two bits, bit 0 orphaned | TRUE, ALREADY KNOWN | FB-06 (S6) |
+| 4b | `_reverse = new Array(32)` is HOLEY; `getActiveNames` walks the whole Map (O(names), a Map iterator) | TRUE, MINOR | `getActiveNames` already allocates its result array (a cold API), so the iterator is not a hot-path breach. Folded into the FB-06 fix: walk the set bits of `value` through a packed `_reverse` once duplicates are rejected |
+| 5a | `countRange`'s outer `>>> 0` is redundant | TRUE, NO EFFECT | `countMasked` ANDs it into int32 anyway. Leave it to SC-3 (S6), which decides `countRange`'s contract |
+| 5b | `nextCombination('3') === 31`; coerce with `v \|= 0` | TRUE, ALREADY PINNED | `FastBit32.js:334` pins it until S6 (SC-3 input law) |
+
+### 14.2 Extension proposals
+
+| Proposal | Verdict | Reason |
+| --- | --- | --- |
+| `findClearRun(k)` / `acquireRun(k)`: lowest run of k clear bits by a SWAR shift cascade | CANDIDATE (kernel verified) | `clear-run.mjs`: a doubling cascade `r &= r >>> s` (at most 5 steps for k <= 32) then `31 - clz32(r & -r)`, against a brute-force oracle: 640,320 cases (k = 1..32, 10 edge words + 20k random each), 0 mismatches. Must-fail control: signed `>>` instead of `>>>` smears bit 31 and disagrees 79 times. One word only; a run crossing words in `FastBit1024` needs a carry between neighbour words, not designed. Overlaps BITWISE_RESEARCH Candidate C (TLSF) for variable sizes. Needs a named consumer before a planner pass |
+| `FastBit1024` tier-2 parity: bulk `union` / `intersect` / `difference`, `prevSetBit`, `rank` / `select`, pair iterators, `copy` / `equals` | CANDIDATE, CONSUMER-GATED | The `_active` / `_full` summaries do make these O(non-empty words). But SC-5 scoped FastBit1024 to slot pools and id sets; the ECS use the audit names belongs to lite-ecs (BITWISE_RESEARCH Candidate D: query sets on lite-o1 `SparseSet`), and lite-o1 `BitSet` already has bulk ops. Add a member only when a consumer needs it in a pool |
+| Raw-word views over an `Int32Array` arena (`FastBit1024View`, 36-word stride) or a `SharedArrayBuffer` | CANDIDATE, OVERLAPS SC-2 | The free iterators are already raw-word functions. Caveat the audit omits: a view over a SharedArrayBuffer shared by workers is a data race unless every write is an `Atomics` op (BITWISE_RESEARCH Candidate A, `sab-alloc.mjs`, uses CAS). A single-thread arena is plain typed-array code |
+| `FastBit32768` (32 x 32 x 32, three summary hops) | REJECTED HERE | SC-4 / SC-5 boundary: "32 x 32 x 32 is not built here". The multi-word answer is lite-o1 `BitSet` (3 levels, fan-out 32); its missing `firstClear` / `nextClear` is the 11.4 handoff, decided in lite-o1 |
+| `FastBitTable32`: `dense[mask.rank(bit)]` sparse table | REJECTED AS A CLASS | `rank` is already documented as the HAMT index (section 7). At most a GUIDE recipe in S8 |
+
+Lesson kept: three of the five code claims were already on record (FB-03, FB-06,
+the S6 pins); the one engine claim with a mechanism (the rank deopt) did not
+reproduce. An audit's JIT claim is a hypothesis until `--trace-deopt` or
+`%DebugPrint` shows it on the engine in question.

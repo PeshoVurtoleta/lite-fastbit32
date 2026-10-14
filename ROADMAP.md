@@ -124,7 +124,7 @@ re-run with `node -e`.
 | **FB-03** | S2 | **Two representations of one set.** Constructor and `fromArray` store `>>> 0` (unsigned; a heap double for >= 2^31); every mutator stores signed int32. The same set serializes as `2147483648` or `-2147483648` depending on how it was built, so save-state equality, dedupe and hashing break. `d.ts`, README and llms.txt all document `value` as "unsigned". | `[new FastBit32(0x80000000).serialize(), new FastBit32().add(31).serialize()]` -> `[2147483648, -2147483648]` |
 | **FB-04** | S2 | **`deserialize` / constructor accept garbage silently**: `'garbage'` -> 0, `NaN` -> 0, `2**32 + 1` -> 1, `1.5` -> 1. A corrupted save loads as a plausible mask. This is the one boundary where validation costs nothing. | `FastBit32.deserialize('garbage').value` -> `0` |
 | **FB-05** | S2 | `countRange` has no domain: `(5, 2)` -> `27`, `(0, 32)` -> `1`, `(-1, 3)` -> `1` on a full word. Documented "caller must guarantee", but the failure is plausible numbers, not an error. | `new FastBit32(-1).countRange(5, 2)` -> `27` |
-| **FB-06** | S2 | **`BitMapper` accepts duplicates and non-strings.** `['A','A','B']` -> `get('A') === 1`, `getName(0) === 'A'`: one name owns two bits and bit 0 is orphaned. `forEachMapped` passes `undefined` for an unmapped set bit while `d.ts` types the name as `string`. | `new BitMapper(['A','A','B']).get('A')` -> `1` |
+| **FB-06** | S2 | **`BitMapper` accepts duplicates and non-strings.** `['A','A','B']` -> `get('A') === 1`, `getName(0) === 'A'`: one name owns two bits and bit 0 is orphaned. `forEachMapped` passes `undefined` for an unmapped set bit while `d.ts` types the name as `string`. Also (2026-10-14 audit, RESEARCH 14.1 row 4b): `_reverse` is a holey `new Array(32)` and `getActiveNames` walks the whole Map; the S6 fix walks the set bits of `value` through a packed `_reverse`. | `new BitMapper(['A','A','B']).get('A')` -> `1` |
 | **FB-07** | S2 | **The test suite is red: 7 of 48 fail.** The iterator tests import from `'../FastBit32.d.ts'`, which has no runtime bodies -> `TypeError: forEachArray is not a function` for all seven `forEach*` free functions. `prepublishOnly` runs `vitest run`, so 1.2.0 shipped either red or with a test file edited after publish. The seven free functions have **zero** passing coverage. | `vitest run` in a scratch copy -> `48 tests, 7 failed` |
 | **FB-08** | S2 | **Doc truth.** "No branches" / "Branchless": `lowest`, `highest`, `nextClearBit`, `highestClearBit` each branch. "A plain unsigned 32-bit integer": false after any mutation touching bit 31. "The fastest 32-bit flag engine in JavaScript" and four benchmark tables: no harness exists in the repo, so the numbers cannot be reproduced. Comparison rows such as FastBitSet "O(k) iteration: No" are unverified. "The only library with O(1) bit-scan": lite-o1 `BitSet` in this suite ships `firstSet`. | read README lines 11, 21-37, 74-76, 114-149, 175 |
 | **FB-09** | S3 | **Idiom drift.** `Math.clz32(x) ^ 31` at 11 sites, `31 - Math.clz32(x)` at 2 (`highest`, `highestClearBit`). The three `forEachMask*` helpers coerce `>>> 0` (a no-op for `!== 0` loops, and it produces a double for >= 2^31), while `forEach` does not. | `grep -c '\^ 31'` -> 11; `grep -c '31 - Math.clz32'` -> 2 |
@@ -132,6 +132,8 @@ re-run with `node -e`.
 | **FB-11** | S3 | **No closure-free iteration.** `forEach` with a capturing callback allocates per call: **425 scavenges over 2e6 calls** with a capturing closure, **0** with a hoisted function (measured). The README markets `forEach` as a zero-GC hot path, and the API offers no cursor alternative. | `perf_hooks` gc entries over `m.forEach(b => { a += b + i })` vs `m.forEach(noop)`, 2e6 calls; becomes S0's T6/T9 control |
 | **FB-12** | S3 | **(unmeasured) Browser Smi boundary.** Under pointer compression (Chrome, Electron, Deno), Smis are 31-bit, so any word with bit 30 or 31 is a HeapNumber. On Node (32-bit Smis) `add/remove` at bits 30 and 31 measured **0 scavenges over 2e7 ops**. Chrome is unmeasured, and S7's `#measure` mode answers it. | -- |
 | **FB-13** | S3 | **d.ts drift.** `value` is documented as "unsigned". `forEachMapped` types its callback name as `string` but can pass `undefined` (FB-06). `clone()` and `forEach` are not marked as allocating / closure-sensitive. `countRange` claims a return of "0-32" for any input. | read `FastBit32.d.ts` |
+| **FB-14** | S2 | **Phantom package in a shipped file.** `llms.txt` sends users who need more than 32 (or 1024) bits to `@zakkster/lite-bits`, which does not exist and was never planned. It has been there since the initial commit (1052881) and shipped in every release through 1.5.0. RESEARCH.md section 11 item 9 found it on 2026-10-10 and parked the fix in S8. Pulled forward (maintainer, 2026-10-13) into the next docs batch: repoint the three sites to lite-o1 `BitSet` (multi-word, fixed capacity up to 2^25 bits) and say it has no `firstClear` / `nextClear` yet (RESEARCH 11.4 handoff). | `grep -n lite-bits llms.txt` -> lines 11, 252, 408 |
+| **FB-15** | S3 | **`FastBit1024.toggle` pays twice.** It validates the index, reads the word, then branches to `add` / `remove`, which validate and read again (`FastBit32.js:572-575`). The 2026-10-14 external audit proposes a single-load form that keeps I1-I4 with the same `clz32` terms `add` / `remove` use (RESEARCH 14.1 row 3). A speed claim: STATISTICAL tier, adopt only with an interleaved A/B plus torture T0 on I1-I4. Low priority. | read `FastBit32.js:572-575` |
 
 **Clean, and pinned so it stays clean:** `has`, `hasAny`, `hasNone`, `isEmpty`
 and `isFull` compare to `0` or go through `~`, so they are signedness-agnostic.
@@ -239,6 +241,9 @@ the dead `>>> 0` (FB-09). The SC-1 evidence for B is decisive, not marginal.
 
 Recommendation: **B in 2.0.0.** It changes `new FastBit32(0x80000000).value` from
 `2147483648` to `-2147483648`, which is observable, so it is a major.
+Scope addendum (2026-10-14, external audit, RESEARCH 14.1 row 1b): B also makes
+`BitMapper.getMask` return signed int32 (`| 0`, not `>>> 0`), so
+`getMask(['F31']) === bit('F31')`. Today they are `2147483648` vs `-2147483648`.
 
 **S2a results (reworked 2026-10-10, node v26.8.2, both semi-space pins = 4;
 `npm run bench:sc2`).** The 2026-10-07 block ("0 scavenges for BOTH, no per-op
@@ -375,6 +380,14 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
 - **S7 runs any time after S4.** It needs the cursor API for the pool panel and
   S2's corpora for `#measure`.
 - **S8 is last.** The README describes the shipped package, with S2's numbers.
+- **Candidates, not scheduled (2026-10-14 external audit, RESEARCH 14.2).** Each
+  needs a named consumer before a planner pass:
+  - `findClearRun(k)` (one word; the kernel is verified, 640,320 cases);
+  - `FastBit1024` bulk set ops and `prevSetBit` / `rank` / `select`;
+  - raw-word views over an `Int32Array` arena (SharedArrayBuffer only with
+    `Atomics`).
+  Rejected: `FastBit32768` (SC-4 / SC-5 boundary: lite-o1 `BitSet`) and a
+  `rank`-indexed sparse table class (an S8 GUIDE recipe at most).
 
 ---
 
