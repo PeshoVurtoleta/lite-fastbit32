@@ -388,6 +388,11 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
     `Atomics`).
   Rejected: `FastBit32768` (SC-4 / SC-5 boundary: lite-o1 `BitSet`) and a
   `rank`-indexed sparse table class (an S8 GUIDE recipe at most).
+- **FastBit1024 gaps vs FastBitSet.js (2026-10-22, RESEARCH 15.1).** First
+  candidate: G1 save / restore (`serialize` + a restore that rebuilds `_active` /
+  `_full` / the count and fails closed above capacity, plus `copy` / `equals`).
+  Then G2 cross-set counts without a result set (O(non-empty words), zero
+  allocation). G3 bulk set ops stay consumer-gated; G4 checked add is minor.
 
 ---
 
@@ -952,6 +957,11 @@ S2b -- the competitor matrix + report (only needed before S8's README)
      reproduced / struck (with the measurement or API fact).
   4. Report.mjs refuses to build without a version stamp; a second run
      reproduces every ratio within the stated tolerance.
+  5. Scope addendum (2026-10-22, RESEARCH 15.2): add a like-for-like
+     multi-word row, `FastBit1024` vs fastbitset / typedfastbitset at 1024
+     bits (incl. "lowest free slot", where they need a scan loop); use
+     FastBitSet's category names (`-card`, `-inplace`); add a scavenges-per-op
+     column. Never quote FastBitSet's published table (Node 10.9).
   DONE WHEN: results.json reproducible; every README comparison row has a
   verdict.
 

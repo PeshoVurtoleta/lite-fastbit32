@@ -1424,3 +1424,57 @@ Lesson kept: three of the five code claims were already on record (FB-03, FB-06,
 the S6 pins); the one engine claim with a mechanism (the rank deopt) did not
 reproduce. An audit's JIT claim is a hypothesis until `--trace-deopt` or
 `%DebugPrint` shows it on the engine in question.
+
+---
+
+## 15. FastBitSet.js (lemire) gap check (2026-10-22)
+
+The maintainer asked what FastBitSet.js has that this package lacks, in function
+and in benchmarking. Source: the repo README (github.com/lemire/FastBitSet.js,
+read 2026-10-22: API list and benchmark categories; the internals were not read).
+Compared against the methods in `FastBit32.js` at 435e748.
+
+### 15.1 Function
+
+FastBitSet is ONE dynamic multi-word set (32-bit words, `resize` / `trim`). Its
+single-word surface is already here: `add` / `remove` / `has` / `flip` ->
+`add` / `remove` / `has` / `toggle`; `intersects` -> `hasAny`;
+`intersection_size` -> `countMasked`; in-place `union` / `intersection` /
+`difference` -> `union` / `intersect` / `difference`; `equals`, `clone`;
+iteration -> `forEach` / `nextSetBit`. `union_size` / `change_size` on one word
+are `popcount(v | m)` / `popcount(v ^ m)`: a composite, not a gap.
+
+The gaps are in `FastBit1024` (today: add / remove / toggle / has, acquire /
+release, size / capacity, isEmpty / isFull, lowest / highest, nextClearBit,
+nextSetBit, hasAll / hasAny, forEach, clear):
+
+| Gap | FastBitSet | Value | Verdict |
+| --- | --- | --- | --- |
+| G1 save / restore: `serialize` + a `fromWords`-style restore, plus `copy` / `equals` | `fromWords`, `clone`, `equals` | Snapshots for rollback, save games, network sync. Today the only way is reading `_data`, which voids I1-I4 | CANDIDATE, FIRST. The restore must rebuild `_active` / `_full` / the count from the words and fail closed on a bit at or above capacity (I4) |
+| G2 cross-set counts without a result set | `intersection_size`, `difference_size`, `union_size`, `change_size` | "How many ids are in both sets" at O(non-empty words) via `_active`, zero allocation | CANDIDATE |
+| G3 in-place `union` / `intersect` / `difference` between two FastBit1024 | `union`, `intersection`, `difference`, `change` | Bulk set algebra | CANDIDATE, CONSUMER-GATED (same as 14.2; lite-o1 `BitSet` has bulk ops) |
+| G4 checked add (returns whether the bit was new) | `checkedAdd` | Dedupe in id sets; `acquire` already covers pools | MINOR |
+
+Not adopted: the `new_*` operations and `array()` (allocate by design);
+`resize` / `trim` (fixed capacity, SC-5); `[Symbol.iterator]` (an iterator object
+per loop; the `nextSetBit` cursor is the zero-GC form); `difference2` (niche).
+
+### 15.2 Benchmark
+
+FastBitSet's suite: categories create, array, foreach, cardinality, query, clone,
+intersection, union, difference, xor, with `-card` (size only) and `-inplace`
+variants. Competitors: TypedFastBitSet, roaring, infusion BitSet, tdegrunt BitSet,
+mattkrick fast-bitset and the native `Set`. Its published table is from Node 10.9
+on an i7-6700: REPORTED-tier at best and stale; never quote it.
+
+What this package lacks:
+1. The competitor matrix itself. S2b (ROADMAP section 6) was never built
+   (`benchmark/Matrix.mjs` does not exist; no competitor devDeps installed), so the
+   README comparison tables are still unverified (FB-08).
+2. A like-for-like multi-word row. S2b compares the multi-word libraries on their
+   32-bit subset only; `FastBit1024` against `fastbitset` / `typedfastbitset` at
+   1024 bits is a fair comparison. For "lowest free slot" they need a scan loop,
+   which is the difference worth showing.
+3. FastBitSet's category names (`-card`, `-inplace`), so readers can map rows.
+4. A column FastBitSet does not measure: scavenges per op, from the torture
+   machinery. That is this package's differentiator.
