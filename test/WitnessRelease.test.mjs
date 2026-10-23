@@ -1,8 +1,8 @@
 // Release gate tests (2026-10-12): batch B2 task 5 of .handoff/plan-release-gate.md
 // (A1-A4 + addendum 1-2). Written from the spec's RULE and ASSERTIONS as an
 // independent oracle. In-process only: NOTHING is spawned. Expected values come
-// from the spec (counts 69 = 54 real + 15 teeth, the A2 table), not from running
-// the implementation.
+// from the spec (counts 69 = 52 real + 2 reported + 15 teeth since DELTA 5 B-SEL,
+// the A2 table), not from running the implementation.
 //
 // Mutant evidence (A2 revert): in a scratch COPY of witness-release.mjs, MAJORITY=6
 // makes the "real row FAIL 5/5" case exit 2, not 1 (5 < 6, so it is inconclusive);
@@ -20,6 +20,21 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OK_TXT = readFileSync(join(HERE, 'fixtures', 'witness-fast-ok.txt'), 'utf8');
 const FAIL_TXT = readFileSync(join(HERE, 'fixtures', 'witness-fast-fail.txt'), 'utf8');
 const { parseRound, decide, runRelease } = M;
+// A gated (real) row FAIL: the fail fixture with its select (position) FAIL moved to
+// count (density) -- a FLAT row the REPORTED tier does not touch.
+const CNT_FAIL_TXT = (() => {
+  const t = FAIL_TXT.replace(/^( {2}FLAT HOT {6}select \(position\) .*\]) FAIL$/m, '$1 ok')
+    .replace(/^( {2}FLAT HOT {6}count \(density\) .*\]) ok$/m, '$1 FAIL')
+    .replace(/^ {2}select \(position\) \[HOT\] .*$/m, '  count (density) [HOT] ratio 1.08 (<= 2.5) spread 6.71N (<= 6N)');
+  assert.notEqual(t, FAIL_TXT);
+  return t;
+})();
+// Both REPORTED rows FAIL: the ok fixture with select density + position FAIL, done 2 FAIL.
+const SEL_FAIL_TXT = (() => {
+  const t = OK_TXT.replace(/^( {2}FLAT HOT {6}select \((density|position)\) .*\]) ok$/mg, '$1 FAIL')
+    .replace(/-- ok\n/, '-- 2 FAIL\n\nFAILURES:\n  select (density) [HOT] ratio 1.02 (<= 2.5) spread 6.50N (<= 6N)\n  select (position) [HOT] ratio 1.04 (<= 2.5) spread 6.60N (<= 6N)\n');
+  return t;
+})();
 const count = (x) => (Array.isArray(x) ? x.length : x instanceof Set || x instanceof Map ? x.size : x);
 
 describe('A1 parseRound', () => {
@@ -28,17 +43,19 @@ describe('A1 parseRound', () => {
     assert.equal(M.MAJORITY, 3);
   });
 
-  it('ok fixture, status 0 -> valid, 69 rows (54 real / 15 teeth), 0 FAIL', () => {
+  it('ok fixture, status 0 -> valid, 69 rows (52 real / 2 reported / 15 teeth), 0 FAIL', () => {
     const r = parseRound(OK_TXT, 0);
     assert.equal(r.kind, 'valid', r.why);
     assert.equal(r.rows.size, 69);
-    let real = 0, teeth = 0, fail = 0;
+    let real = 0, teeth = 0, reported = 0, fail = 0;
     for (const v of r.rows.values()) {
       if (v.cls === 'real') real++;
       else if (v.cls === 'teeth') teeth++;
+      else if (v.cls === 'reported') reported++;
       if (v.verdict === 'FAIL') fail++;
     }
-    assert.equal(real, 54);
+    assert.equal(real, 52);
+    assert.equal(reported, 2);
     assert.equal(teeth, 15);
     assert.equal(fail, 0);
   });
@@ -48,7 +65,7 @@ describe('A1 parseRound', () => {
     assert.equal(r.kind, 'valid', r.why);
     const fails = [...r.rows].filter(([, v]) => v.verdict === 'FAIL').map(([k]) => k);
     assert.deepEqual(fails, ['FLAT select (position)']);
-    assert.equal(r.rows.get('FLAT select (position)').cls, 'real');
+    assert.equal(r.rows.get('FLAT select (position)').cls, 'reported');
   });
 
   const harness = (name, txt, status) => it('harness: ' + name, () => {
@@ -360,11 +377,11 @@ describe('addendum 5 stamp: package.json hash, runRelease stamp lifecycle', () =
     assert.equal(M.checkStamp(d).match, true);
   });
 
-  it('runRelease stampDir: a later exit 1 (fail fixture, 3 rounds) deletes the old stamp', () => {
+  it('runRelease stampDir: a later exit 1 (a gated count FAIL, 3 rounds) deletes the old stamp', () => {
     const d = mk();
     assert.equal(gate(d, OK_TXT, 0).exit, 0);
     assert.equal(M.checkStamp(d).match, true);
-    const r = runRelease((env, i) => (i < 3 ? { status: 1, stdout: FAIL_TXT, signal: null } : { status: 0, stdout: OK_TXT, signal: null }), { ...quiet, stampDir: d });
+    const r = runRelease((env, i) => (i < 3 ? { status: 1, stdout: CNT_FAIL_TXT, signal: null } : { status: 0, stdout: OK_TXT, signal: null }), { ...quiet, stampDir: d });
     assert.equal(r.exit, 1);
     assert.equal(existsSync(stampPath(d)), false);
     assert.equal(M.checkStamp(d).match, false);
@@ -621,5 +638,127 @@ describe('K --keep <dir> (DELTA 2 task 6)', () => {
     }
     assert.match(P(['--bogus']).error, /unknown option "--bogus" \(did you mean --if-stale\?\)/);
     assert.match(P(['--keep=a']).error, /did you mean --keep <dir>/);
+  });
+});
+
+// ---- DELTA 5 B-SEL (M11 option (b)): select flatness is REPORTED, not gated ----
+// Written from plan-witness-stability-delta5.md "SEL OPTIONS" (b) + addendum 30-1.
+// Revert check: on the frozen 435e748 build the select rows are 'real', so R1-R7
+// go red there. R6 pins the class-flip HARNESS (drop `r.cls !== r0.cls` in
+// decide() and R6 goes red); R7 pins the no-gated-row HARNESS.
+describe('R REPORTED tier: FLAT select (density|position)', () => {
+  const SEL = ['FLAT select (density)', 'FLAT select (position)'];
+  const roots = [];
+  after(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
+  const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-rep-'))); roots.push(d); return d; };
+  function gateLog(fake, opts = {}) {
+    const lines = [];
+    let calls = 0;
+    const r = runRelease((env, i) => { calls++; return fake(i); }, { log: (x) => lines.push(x), err: (x) => lines.push(x), ...opts });
+    return { r, calls, out: lines.join('\n') };
+  }
+
+  it('R1: the two select rows parse as class reported (census stays 69, 52 real)', () => {
+    for (const [txt, st] of [[OK_TXT, 0], [SEL_FAIL_TXT, 1]]) {
+      const r = parseRound(txt, st);
+      assert.equal(r.kind, 'valid', r.why);
+      assert.equal(r.rows.size, 69);
+      const rep = [...r.rows].filter(([, v]) => v.cls === 'reported').map(([k]) => k).sort();
+      assert.deepEqual(rep, SEL);
+    }
+    assert.equal(parseRound(SEL_FAIL_TXT, 1).fails, 2);
+  });
+
+  it('R2: both select rows FAIL in 5/5 rounds -> exit 0, REPORTED counts printed and kept in decision.json', () => {
+    const keepDir = join(tmp(), 'keep');
+    const g = gateLog(() => ({ status: 1, stdout: SEL_FAIL_TXT, signal: null }), { keepDir });
+    assert.equal(g.calls, 5);
+    assert.equal(g.r.exit, 0, g.out);
+    assert.deepEqual(g.r.decision.findings, []);
+    assert.deepEqual(g.r.decision.inconclusive, []);
+    const want = [
+      { key: 'FLAT select (density)', cls: 'reported', fail: 5, ok: 0 },
+      { key: 'FLAT select (position)', cls: 'reported', fail: 5, ok: 0 },
+    ];
+    assert.deepEqual(g.r.decision.reported, want);
+    assert.match(g.out, /^ {2}REPORTED FLAT select \(density\): FAIL 5, ok 0 of the counted rounds \(not gated\)$/m);
+    assert.match(g.out, /^ {2}REPORTED FLAT select \(position\): FAIL 5, ok 0 of the counted rounds \(not gated\)$/m);
+    assert.doesNotMatch(g.out, /FINDING|INCONCLUSIVE|HARNESS/);
+    const dj = JSON.parse(readFileSync(join(keepDir, 'decision.json'), 'utf8'));
+    assert.equal(dj.exit, 0);
+    assert.deepEqual(dj.reported, want);
+    assert.deepEqual(dj.findings, []);
+  });
+
+  it('R3: a gated count (density) FAIL in 3/5 rounds still -> exit 1 (FINDING), select counts still reported', () => {
+    const g = gateLog((i) => (i < 3 ? { status: 1, stdout: CNT_FAIL_TXT, signal: null } : { status: 1, stdout: FAIL_TXT, signal: null }));
+    assert.equal(g.r.exit, 1, g.out);
+    assert.deepEqual(g.r.decision.findings, [{ key: 'FLAT count (density)', cls: 'real', fail: 3, ok: 2 }]);
+    assert.deepEqual(g.r.decision.harness, []);
+    assert.match(g.out, /FINDING real +FLAT count \(density\): FAIL 3, ok 2/);
+    assert.deepEqual(g.r.decision.reported.find((f) => f.key === 'FLAT select (position)'), { key: 'FLAT select (position)', cls: 'reported', fail: 2, ok: 3 });
+  });
+
+  it('R4: a missing select row is HARNESS (exit 1, stops at round 1), never a REPORTED count', () => {
+    for (const key of ['select (density)', 'select (position)']) {
+      const L = OK_TXT.split('\n');
+      const i = L.findIndex((l) => l.startsWith('  FLAT HOT      ' + key));
+      assert.ok(i >= 0, key);
+      L.splice(i, 1);
+      const txt = L.join('\n');
+      const p = parseRound(txt, 0);
+      assert.equal(p.kind, 'harness');
+      assert.match(p.why, new RegExp('missing row "FLAT ' + key.replace(/[()]/g, '\\$&') + '"'));
+      const g = gateLog(() => ({ status: 0, stdout: txt, signal: null }));
+      assert.equal(g.calls, 1);
+      assert.equal(g.r.exit, 1);
+      assert.match(g.r.decision.harness[0], /^round 1: missing row "FLAT select/);
+      assert.deepEqual(g.r.decision.reported, []);
+      assert.doesNotMatch(g.out, /REPORTED/);
+    }
+  });
+
+  it('R5: reported rows never vote -- 1 HOST + a reported row FAIL 2 / ok 2 -> exit 0 (a real row there is INCONCLUSIVE)', () => {
+    const mk = (kind, v) => ({
+      status: kind === 'host' ? 2 : 0, kind, why: '',
+      rows: new Map([['FLAT a (density)', { cls: 'real', verdict: kind === 'host' ? 'HOST' : 'ok' }],
+        ['FLAT s (density)', { cls: 'reported', verdict: kind === 'host' ? 'HOST' : v }]]),
+    });
+    const recs = [mk('host'), mk('valid', 'FAIL'), mk('valid', 'FAIL'), mk('valid', 'ok'), mk('valid', 'ok')];
+    const d = decide(recs);
+    assert.equal(d.exit, 0);
+    assert.deepEqual(d.inconclusive, []);
+    assert.deepEqual(d.reported, [{ key: 'FLAT s (density)', cls: 'reported', fail: 2, ok: 2 }]);
+    // and 5/5 FAIL: still no finding
+    const d5 = decide(rep(5, () => mk('valid', 'FAIL')));
+    assert.equal(d5.exit, 0);
+    assert.deepEqual(d5.findings, []);
+    // control: the same counts on a real row are INCONCLUSIVE (exit 2)
+    const real = recs.map((r) => ({ ...r, rows: new Map([...r.rows].map(([k, v]) => [k, { ...v, cls: 'real' }])) }));
+    assert.equal(decide(real).exit, 2);
+    // reported rows count over the COUNTED rounds (a teeth FAIL demotes round 1)
+    const mkT = (tf, sv) => ({ status: 0, kind: 'valid', why: '', rows: new Map([['FLAT a (density)', { cls: 'real', verdict: 'ok' }], ['RED t (density)', { cls: 'teeth', verdict: tf ? 'FAIL' : 'ok' }], ['FLAT s (density)', { cls: 'reported', verdict: sv }]]) });
+    const dd = decide([mkT(1, 'FAIL'), mkT(0, 'ok'), mkT(0, 'ok'), mkT(0, 'ok'), mkT(0, 'ok')]);
+    assert.deepEqual(dd.demoted, [0]);
+    assert.deepEqual(dd.reported, [{ key: 'FLAT s (density)', cls: 'reported', fail: 0, ok: 4 }]);
+  });
+
+  it('R6: a class that changes between rounds is still HARNESS (reported in round 1, real in round 2)', () => {
+    // a gated row in every round, so only the class-flip check (not R7's guard) can fire
+    const mk = (cls) => ({ status: 0, kind: 'valid', why: '', rows: new Map([['FLAT a (density)', { cls: 'real', verdict: 'ok' }], ['FLAT s (density)', { cls, verdict: 'ok' }]]) });
+    const d = decide([mk('reported'), mk('real'), mk('reported'), mk('reported'), mk('reported')]);
+    assert.equal(d.exit, 1);
+    assert.equal(d.harness.length, 1);
+    assert.match(d.harness[0], /^round 2: "FLAT s \(density\)" class real$/);
+  });
+
+  it('R7: only reported rows is HARNESS, never a vacuous pass', () => {
+    const mk = (kind) => ({ status: kind === 'host' ? 2 : 0, kind, why: '', rows: new Map([['FLAT s (density)', { cls: 'reported', verdict: kind === 'host' ? 'HOST' : 'ok' }]]) });
+    for (const kind of ['host', 'valid']) {
+      const d = decide(rep(5, () => mk(kind)));
+      assert.equal(d.exit, 1, kind);
+      assert.deepEqual(d.reported, []);
+      assert.match(d.harness[0], /no gated row/);
+    }
   });
 });

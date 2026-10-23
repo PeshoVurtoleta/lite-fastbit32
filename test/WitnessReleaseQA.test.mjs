@@ -9,7 +9,9 @@
 // fake keeps a per-row spawn counter, so a flat row is spawned once per round and
 // its counter equals the round number.
 //   clean     every row clean on every round          -> gate exit 0
-//   sel3      select (density) HOT steps in rounds 1-3 -> 3 of 5 FAIL = finding -> exit 1
+//   sel5      select (density) HOT steps in all 5 rounds -> REPORTED, not gated -> exit 0
+//             (DELTA 5 B-SEL, M11 (b); was sel3 -> exit 1 before the REPORTED tier)
+//   any3      hasAny (density) HOT steps in rounds 1-3 -> 3 of 5 FAIL = finding -> exit 1
 //   noiseonly HOT real rows noisy in every round       -> 5 HOST rounds -> exit 2
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,7 +61,8 @@ if (mode === 'slope') {
   net = flat();
   const sel = subject === 'fb' && op === 'select';
   if (S === 'noiseonly' && subject === 'fb' && lane === 'HOT') net = noisy(0.2);
-  if (S === 'sel3' && sel && lane === 'HOT' && mode === 'density' && n <= 3) net = net.map((v, i) => (i === 3 ? v + 0.7 : v));
+  if (S === 'sel5' && sel && lane === 'HOT' && mode === 'density' && n <= 5) net = net.map((v, i) => (i === 3 ? v + 0.7 : v));
+  if (S === 'any3' && subject === 'fb' && op === 'hasAny' && lane === 'HOT' && mode === 'density' && n <= 3) net = net.map((v, i) => (i === 3 ? v + 0.7 : v));
 }
 const floor = net.map(() => 1);
 process.stdout.write(JSON.stringify({ subject, op, lane, mode, params, raw: net.map((v) => v + 1), floor, net,
@@ -69,7 +72,10 @@ process.stdout.write(JSON.stringify({ subject, op, lane, mode, params, raw: net.
 // exit 1 is shared by FINDING and HARNESS, so each scenario also checks the stdout.
 const SCEN = [
   { name: 'clean', exit: 0, has: [/stamp written/], not: [/HARNESS/] },
-  { name: 'sel3', exit: 1, has: [/FINDING real +FLAT select \(density\): FAIL 3, ok 2/], not: [/HARNESS/] },
+  { name: 'sel5', exit: 0, has: [/REPORTED FLAT select \(density\): FAIL 5, ok 0 of the counted rounds \(not gated\)/, /stamp written/],
+    not: [/HARNESS/, /FINDING/, /INCONCLUSIVE/] },
+  { name: 'any3', exit: 1, has: [/FINDING real +FLAT hasAny \(density\): FAIL 3, ok 2/, /REPORTED FLAT select \(density\): FAIL 0, ok 5/],
+    not: [/HARNESS/] },
   { name: 'noiseonly', exit: 2, has: [/HOST rounds: 1,2,3,4,5/], not: [] },
 ];
 

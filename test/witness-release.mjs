@@ -36,19 +36,33 @@
  * row; 415 FLAT; 431 RED; 580 SLOPE; 632 SLOPE malformed re-measure; 648 CTRL
  * confirm-slope; 790 CTRL broken-floor; 800 SELF; 806 CTRL self-check; 832 done).
  * A FAST round has EXACTLY 69 rows (checked per round):
- *   54 real  -- 44 const-op FLAT (22 CONST_OPS x density/position), 2 ctlRead,
- *               5 FastBit1024, SELF repeat, SLOPE forEach, SLOPE forEachMaskUnion;
- *   15 teeth -- 9 RED, 3 SLOPE foils, CTRL broken-floor, CTRL self-check
- *               control, CTRL confirm-slope.
+ *   52 real     -- 42 const-op FLAT (21 CONST_OPS other than select x
+ *                  density/position), 2 ctlRead, 5 FastBit1024, SELF repeat,
+ *                  SLOPE forEach, SLOPE forEachMaskUnion;
+ *    2 reported -- FLAT select (density), FLAT select (position);
+ *   15 teeth    -- 9 RED, 3 SLOPE foils, CTRL broken-floor, CTRL self-check
+ *                  control, CTRL confirm-slope.
+ * REPORTED tier (DELTA 5, M11 option (b), 2026-10-21): select flatness is
+ * REPORTED, not gated per release (flat-sel H, 2026-10-21: 30 of 60 select
+ * processes read a spread > 0.132 ns with no code change, so a per-release vote
+ * on these rows is a coin flip, not a gate). A reported row is still
+ * REQUIRED in every round (a missing or unknown row is HARNESS, census 69), and a
+ * select FAIL still counts in the round's own FAILURES check; decide() only
+ * counts it: a REPORTED line, never a FINDING or an INCONCLUSIVE, so a select
+ * regression does NOT block a release. witness.mjs still prints and fails select
+ * per run.
  *
  * VOTES (decide). Exactly K records, or exit 1. Every round's key set (and each
  * key's class) must be identical, or HARNESS.
  *   teeth row: FAIL in >= MAJORITY of the valid rounds -> FINDING ("no teeth");
  *              FAIL in 1..MAJORITY-1 rounds -> those rounds are DEMOTED to HOST
  *              (a foil that came out flat says the round could not resolve).
- *   every row, over the counted rounds (valid, not demoted):
+ *   every real / teeth row, over the counted rounds (valid, not demoted):
  *              FAIL >= MAJORITY -> FINDING; ok >= MAJORITY -> pass; else
  *              INCONCLUSIVE. (Always inconclusive once host + demoted >= 3.)
+ *   reported row, over the same counted rounds: its FAIL / ok counts go to
+ *              decision.reported ({key, cls: 'reported', fail, ok}), printed as
+ *              a REPORTED line and kept in decision.json; never a vote.
  * Gate exit: 1 any finding or harness; else 2 any inconclusive; else 0.
  * Exit 2 shares its code with quiet-lock's BUSY: stderr says which.
  *
@@ -80,9 +94,9 @@
  * Known weaknesses (expected, from logs; METHODOLOGY): the rounds are serial on
  * one host, so they are correlated -- in the low-NOISE state the gate still
  * false-fails ~21%; a marginal (~0.15 ns) select step is missed 50-73% of the
- * time (a single run: 50-63%). A per-round timeout kills witness.mjs, not a
- * run-one.mjs child it is waiting on; that child is a single short cell and
- * exits on its own.
+ * time (a single run: 50-63%) -- one reason select is REPORTED, not gated. A
+ * per-round timeout kills witness.mjs, not a run-one.mjs child it is waiting
+ * on; that child is a single short cell and exits on its own.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -120,7 +134,11 @@ export const TEETH_KEYS = [
   'SLOPE foilIterQuad', 'SLOPE foilIterScan32', 'SLOPE foilIterStep',
   'CTRL broken-floor', 'CTRL self-check control', 'CTRL confirm-slope',
 ];
-const ROW_CLASS = new Map([...REAL_KEYS.map((k) => [k, 'real']), ...TEETH_KEYS.map((k) => [k, 'teeth'])]);
+// REPORTED tier (header): still in REAL_KEYS (the census), counted, never voted.
+export const REPORTED_KEYS = ['FLAT select (density)', 'FLAT select (position)'];
+const ROW_CLASS = new Map([
+  ...REAL_KEYS.map((k) => [k, REPORTED_KEYS.includes(k) ? 'reported' : 'real']), ...TEETH_KEYS.map((k) => [k, 'teeth']),
+]);
 
 // --- line grammar (witness.mjs note() formats) -------------------------------
 const HOSTV = 'HOST\\(no verdict: lane NOISE failed\\)';
@@ -205,7 +223,7 @@ function rowOf(s) {
  * @param {string} stdout  the round's whole stdout (no npm banner)
  * @param {number|null} status  its exit status
  * @returns {{status, kind: 'valid'|'host'|'harness', why: string,
- *   rows: Map<string, {cls: 'real'|'teeth', verdict: 'ok'|'FAIL'|'HOST'}>,
+ *   rows: Map<string, {cls: 'real'|'reported'|'teeth', verdict: 'ok'|'FAIL'|'HOST'}>,
  *   noise: {ns: number, ratio: number, ok: boolean}|null, secs: number, fails: number}}
  * A host round's rows all read 'HOST'. A harness round's rows are whatever was
  * parsed before the fault (never voted on).
@@ -323,11 +341,13 @@ export function roundRecord(r) {
  * The vote. Pure.
  * @param {Array} records  exactly K round records (parseRound / roundRecord)
  * @returns {{exit: 0|1|2, findings: Array<{key, cls, fail, ok}>,
- *   inconclusive: Array<{key, cls, fail, ok}>, host: number[], demoted: number[],
- *   harness: string[]}}  host / demoted: 0-based round indices.
+ *   inconclusive: Array<{key, cls, fail, ok}>, reported: Array<{key, cls, fail, ok}>,
+ *   host: number[], demoted: number[], harness: string[]}}  host / demoted: 0-based
+ *   round indices. reported: the REPORTED rows' counts over the counted rounds
+ *   (empty when the vote stops at HARNESS); they never set the exit.
  */
 export function decide(records) {
-  const out = { exit: 1, findings: [], inconclusive: [], host: [], demoted: [], harness: [] };
+  const out = { exit: 1, findings: [], inconclusive: [], reported: [], host: [], demoted: [], harness: [] };
   const recs = Array.isArray(records) ? records : [];
   if (!Array.isArray(records)) out.harness.push('records is not an array');
   recs.forEach((r, i) => {
@@ -347,11 +367,12 @@ export function decide(records) {
     for (const k of keys) {
       const r = rows.get(k), r0 = recs[0].rows.get(k);
       if (!r) { out.harness.push(`round ${i + 1}: key set differs from round 1 (no "${k}")`); return out; }
-      if (!(r.cls === 'real' || r.cls === 'teeth') || r.cls !== r0.cls) { out.harness.push(`round ${i + 1}: "${k}" class ${String(r.cls)}`); return out; }
+      if (!(r.cls === 'real' || r.cls === 'teeth' || r.cls === 'reported') || r.cls !== r0.cls) { out.harness.push(`round ${i + 1}: "${k}" class ${String(r.cls)}`); return out; }
       if (!(r.verdict === 'ok' || r.verdict === 'FAIL' || r.verdict === 'HOST')) { out.harness.push(`round ${i + 1}: "${k}" verdict ${String(r.verdict)}`); return out; }
       if (recs[i].kind === 'valid' && r.verdict === 'HOST') { out.harness.push(`round ${i + 1}: "${k}" HOST in a valid round`); return out; }
     }
   }
+  if (!keys.some((k) => recs[0].rows.get(k).cls !== 'reported')) { out.harness.push('round 1: no gated row (only reported rows)'); return out; }
   const valid = [];
   for (let i = 0; i < K; i++) if (recs[i].kind === 'valid') valid.push(i);
   // teeth: >= MAJORITY FAIL is a finding; 1..MAJORITY-1 FAIL demotes those rounds.
@@ -369,6 +390,7 @@ export function decide(records) {
     if (cls === 'teeth' && out.findings.some((f) => f.key === k)) continue;
     let fail = 0, ok = 0;
     for (const i of counted) { if (recs[i].rows.get(k).verdict === 'FAIL') fail++; else ok++; }
+    if (cls === 'reported') { out.reported.push({ key: k, cls, fail, ok }); continue; }
     if (fail >= MAJORITY) out.findings.push({ key: k, cls, fail, ok });
     else if (!(ok >= MAJORITY)) out.inconclusive.push({ key: k, cls, fail, ok });
   }
@@ -548,7 +570,7 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
   if (keep) {
     const why = keepOpen(opts.keepDir, opts.mkdir || mkdirSync);
     if (why) {
-      const decision = { exit: 1, findings: [], inconclusive: [], host: [], demoted: [], harness: [why] };
+      const decision = { exit: 1, findings: [], inconclusive: [], reported: [], host: [], demoted: [], harness: [why] };
       log(`  HARNESS ${why}`);
       err('gate:release FAIL (exit 1): HARNESS (keep dir)');
       // checked BEFORE the stamp step: a bad --keep measured nothing, so an old
@@ -562,7 +584,7 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
     if (dropStamp(opts.stampDir)) log(`  old ${STAMP_FILE} deleted before round 1`);
     try { pre = computeStamp(opts.stampDir); } catch (e) {
       const why = 'cannot hash the stamp inputs before round 1: ' + e.message;
-      const decision = { exit: 1, findings: [], inconclusive: [], host: [], demoted: [], harness: [why] };
+      const decision = { exit: 1, findings: [], inconclusive: [], reported: [], host: [], demoted: [], harness: [why] };
       log(`  HARNESS ${why}`);
       err('gate:release FAIL (exit 1): HARNESS (stamp inputs)');
       return { exit: 1, records: [], decision, stamp: { written: false, why } };
@@ -598,6 +620,7 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
   if (d.demoted.length) log(`  demoted to HOST (a teeth row FAIL in < ${MAJORITY} rounds): ${d.demoted.map((i) => i + 1).join(',')}`);
   for (const f of d.findings) log(`  FINDING ${f.cls.padEnd(5)} ${f.key}: FAIL ${f.fail}, ok ${f.ok}${f.cls === 'teeth' ? ' -- no teeth' : ''}`);
   for (const f of d.inconclusive) log(`  INCONCLUSIVE ${f.cls.padEnd(5)} ${f.key}: FAIL ${f.fail}, ok ${f.ok} of the counted rounds`);
+  for (const f of d.reported) log(`  REPORTED ${f.key}: FAIL ${f.fail}, ok ${f.ok} of the counted rounds (not gated)`);
   for (const h of d.harness) log(`  HARNESS ${h}`);
   let stamp = null;
   if (opts.stampDir) {
@@ -617,7 +640,7 @@ export function runRelease(spawnRound = spawnRoundDefault, opts = {}) {
     const kf = keepWrite('decision.json', () => JSON.stringify({
       gate: 'gate:release', exit: d.exit, node: process.version,
       rounds: records.map((r, i) => ({ round: i + 1, status: r.status, kind: r.kind, why: r.why })),
-      findings: d.findings, inconclusive: d.inconclusive, host: d.host, demoted: d.demoted, harness: d.harness, stamp,
+      findings: d.findings, inconclusive: d.inconclusive, reported: d.reported, host: d.host, demoted: d.demoted, harness: d.harness, stamp,
     }, null, 2) + '\n');
     if (kf) {
       d.exit = 1;
