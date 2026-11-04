@@ -191,3 +191,10 @@ pool.intersectionSize(5);
 
 // @ts-expect-error -- prevSetBit needs a from index.
 pool.prevSetBit();
+
+// ---- 1.6.0 L3: addRange / removeRange (half-open [lo, hi)) ----
+const l3Chain: FastBit1024 = pool.addRange(0, 5).removeRange(1, 2);
+void l3Chain;
+
+// @ts-expect-error -- addRange takes numbers, not strings.
+pool.addRange('0', 1);

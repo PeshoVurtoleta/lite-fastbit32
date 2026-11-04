@@ -250,6 +250,8 @@ export class FastBit32 {
      * @param start - Lowest bit of the range (inclusive).
      * @param end - Highest bit of the range (inclusive).
      * @returns Active bit count within the range (0-32).
+     *
+     * INCLUSIVE [start, end], unlike FastBit1024.addRange / removeRange [lo, hi).
      */
     countRange(start: number, end: number): number;
 
@@ -361,6 +363,7 @@ export class FastBit32 {
      * The inclusive `[start, end]` mask -- the bit pattern `countRange` uses --
      * as a SIGNED int32 (`rangeMask(0, 31) === -1`, `rangeMask(31, 31) === -2147483648`).
      * COLD and validated: build it once, outside the hot loop.
+     * INCLUSIVE [start, end], unlike FastBit1024.addRange / removeRange [lo, hi).
      *
      * @param start - Lowest bit (integer, 0-31).
      * @param end - Highest bit (integer, start-31).
@@ -636,7 +639,10 @@ export function forEachMaskUnion(
  * via `capacity`, for slot pools and dense id sets. Storage is an `Int32Array(32)`
  * plus two 32-bit summaries (`_active`: word non-empty; `_full`: word all ones) and
  * an exact count, kept up to date by every mutator. Every op is loop-free except
- * `forEach`, `hasAll`, `hasAny` and `clear` (O(non-empty words)). No coupling to
+ * forEach/hasAll/hasAny/clear/copy/equals/intersectionSize/unionSize/differenceSize (O(non-empty words)),
+ * saveInto/loadFrom (O(image words), and loadFrom rewrites all 32 words; the cold
+ * serialize/deserialize reuse them, clone reuses copy) and addRange/removeRange
+ * (O(words touched)). No coupling to
  * `FastBit32`.
  *
  * **Input law (SC-5; differs from FastBit32, whose hot ops trust the caller -- SC-3, open, decided in S6):** every method
@@ -822,6 +828,32 @@ export class FastBit1024 {
 
     /** Clears every bit. O(non-empty words). */
     clear(): this;
+
+    /**
+     * Sets bits `lo .. hi - 1` (half-open `[lo, hi)`). O(words touched), zero allocation.
+     * `lo === hi` is a valid no-op that touches no word.
+     *
+     * @param lo - First bit to set (integer).
+     * @param hi - One past the last bit to set (integer).
+     * @throws RangeError unless both are integers with `0 <= lo <= hi <= capacity`
+     *   (fractions, `NaN`, strings, `null`, `undefined` included); thrown before any
+     *   write, so the receiver is unchanged. A Symbol or BigInt bound throws TypeError.
+     * @returns `this`.
+     */
+    addRange(lo: number, hi: number): this;
+
+    /**
+     * Clears bits `lo .. hi - 1` (half-open `[lo, hi)`). O(words touched), zero allocation.
+     * `lo === hi` is a valid no-op that touches no word.
+     *
+     * @param lo - First bit to clear (integer).
+     * @param hi - One past the last bit to clear (integer).
+     * @throws RangeError unless both are integers with `0 <= lo <= hi <= capacity`;
+     *   thrown before any write, so the receiver is unchanged. A Symbol or BigInt
+     *   bound throws TypeError.
+     * @returns `this`.
+     */
+    removeRange(lo: number, hi: number): this;
 
     /**
      * Words in this set's image: 1 header word + `ceil(capacity / 32)` data words (2..33).
