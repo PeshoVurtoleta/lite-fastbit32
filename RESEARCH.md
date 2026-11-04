@@ -1478,3 +1478,49 @@ What this package lacks:
 3. FastBitSet's category names (`-card`, `-inplace`), so readers can map rows.
 4. A column FastBitSet does not measure: scavenges per op, from the torture
    machinery. That is this package's differentiator.
+
+## 16. What FastBit1024 can take from its siblings (2026-11-04)
+
+The maintainer asked the reverse question: several suite modules borrowed from
+fastbit; can fastbit borrow from them? Read: lite-o1 `BitSet` (O1.js:3739, eaa46e3),
+lite-o1 `RankSelect` (O1.js:5269), lite-loglogn `StratifiedBitset`
+(LogLogN.js:124, eda355c) and its `test/Count.test.js`, and the RULED RoaringSet
+PROPOSAL (LiteLogLogN/.handoff/PROPOSAL-roaringset.md, sha256/8 95713727, ruled
+2026-11-04; R1, version slot 0.6.0, not yet built). Code read only; no probe ran.
+
+### 16.1 Worth taking
+
+| # | From | What | For | Verdict |
+| --- | --- | --- | --- | --- |
+| T1 | StratifiedBitset `Count.test.js`; RoaringSet 2.3 | COUNT gate: a Proxy swapped into the word array after construction counts every word read / write; an exact table per op and state, upper bounds on seeded random ops, a must-fail naive-scan control, one Worker per case so a hang is a FAIL. RoaringSet adds a worst-case search (sweep + hill-climb), reported as a LOWER bound | `FastBit1024` loops over `_data` (forEach, hasAll / hasAny, nextSetBit, nextClearBit): bounds become DETERMINISTIC gates instead of STATISTICAL witness rows | CANDIDATE, test-only, no public surface, no PROPOSAL needed. Not for `FastBit32` (one number, no array): there the deterministic tool is the LiteUtils bytecode-budget script |
+| T2 | RoaringSet R1 surface | Counting set ops `intersects` / `intersectionSize` / `unionSize` / `differenceSize`: cold, 0 B, neither set changes, TypeError on a wrong type, RangeError on a universe mismatch | G2 (15.1): take the suite's names | CANDIDATE, joins the G1 research burst. `hasAny` is already `intersects` under fastbit's name |
+| T3 | RoaringSet `addRange(lo, hi)` (Q-3) | Range set: precount, RangeError before any write, allocates nothing, returns this | `FastBit1024` set / clear range: fill middle words with -1, mask the two ends, update `_active` / `_full` / `_n`. With `findClearRun` (14.2) it reserves a contiguous slot block in one step | CANDIDATE, joins the G1 research burst |
+| T4 | StratifiedBitset `predecessor` | The summary descent run in reverse | `FastBit1024.prevSetBit` (already a 14.2 candidate; `FastBit32` has `prevSetBit`) | CANDIDATE, joins the G1 research burst |
+| T5 | RoaringSet 1 (P-5) | Hot bodies measured against V8's 460 B inlining limit (successor 621 B, predecessor 759 B on V8 14.6, so a shrink task) | Shows the limit bites in practice | Already the NEXT.md LiteUtils engine-gates unit; no new item |
+| T6 | lite-o1 `BitSet` | Input law: `typeof` guard before `>>>`; `(i >>> 0) !== i` rejects bad indexes; queries never throw (test -> false, firstSet / nextSet -> -1) | S6 / SC-3 | Prior art for the S6 research burst, not a copy |
+
+### 16.2 Questions the G1 research burst must put to the maintainer
+
+- Q (T2) Capacity mismatch in cross-set ops: today `hasAll` / `hasAny` accept
+  different capacities; RoaringSet throws RangeError on a universe mismatch.
+  Keep fastbit's rule for the counts, or follow RoaringSet.
+- Q (T3) Range convention: RoaringSet `addRange` is half-open [lo, hi) (ruled
+  2026-11-04, as CRoaring `add_range` and JS `slice`); fastbit `countRange` and
+  `rangeMask` are inclusive [start, end]. Two conventions in one suite invite
+  off-by-one bugs, so this is a ruling, not a planner choice.
+- Q (G1) Serialization format: RoaringSet R1 ships no serialization (only a cold
+  `dump()`), so `FastBit1024` save / restore would be the suite's first. Define
+  the format so RoaringSet R2 can reuse it instead of inventing a second one.
+
+### 16.3 Where fastbit is ahead (nothing to take)
+
+- `FastBit32.select` is a branchless 5-step descent; `RankSelect`'s in-word select
+  loops up to 31 times.
+- Signed int32 results (SC-2): `StratifiedBitset` and RoaringSet R1 return keys
+  >= 2^31 boxed (RoaringSet: ~16-32 B per non-inlined call, REPORTED) and defer
+  a signed / `successorInto` API to R2. SC-2 is the precedent for that R2 work.
+- `FastBit1024._full` makes `nextClearBit` a summary lookup; `BitSet` has no
+  `firstClear` / `nextClear`.
+- Roaring containers pay off per 2^16-key chunk; at 1024 bits (128 B of data)
+  they buy nothing. The ROADMAP already names `FastBit1024` as the design-parity
+  source for RoaringSet's in-container summary.

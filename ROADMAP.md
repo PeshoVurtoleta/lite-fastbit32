@@ -395,6 +395,15 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
   `_full` / the count and fails closed above capacity, plus `copy` / `equals`).
   Then G2 cross-set counts without a result set (O(non-empty words), zero
   allocation). G3 bulk set ops stay consumer-gated; G4 checked add is minor.
+- **From the siblings (2026-11-04, RESEARCH 16).** The G1 research burst also
+  covers, in one handshake: G2 under RoaringSet's names (`intersects` /
+  `intersectionSize` / `unionSize` / `differenceSize`), a `FastBit1024` set /
+  clear range (pairs with `findClearRun`), and `FastBit1024.prevSetBit`. Its
+  PROPOSAL must rule three Q-ids: the capacity-mismatch rule, the range
+  convention (RoaringSet half-open vs fastbit inclusive), and a save format
+  RoaringSet R2 can reuse. Separately, a test-only unit with no PROPOSAL: a
+  `FastBit1024` COUNT gate (Proxy word-read ledger, as lite-loglogn
+  `Count.test.js`) that moves its loop bounds from STATISTICAL to DETERMINISTIC.
 
 ---
 
