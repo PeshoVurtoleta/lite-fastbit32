@@ -722,7 +722,7 @@ describe('S5 QA parity vs 1.4.0 (' + BASE14 + ')', () => {
         assert.strictEqual(baseErr, null, 'git show ' + BASE14 + ' failed: ' + (baseErr && baseErr.message));
     });
 
-    it('the surface is additive: exactly select + nextSubset + nextCombination are new', () => {
+    it('the surface is additive: exactly select + nextSubset + nextCombination (1.5.0) and the FastBit1024 1.6.0 G1 members are new', () => {
         assert.ok(OLD14);
         assert.deepStrictEqual(Object.keys(NEW).sort(), Object.keys(OLD14).sort());
         const diff = (a, b) => a.filter((n) => !b.includes(n)).sort();
@@ -732,7 +732,14 @@ describe('S5 QA parity vs 1.4.0 (' + BASE14 + ')', () => {
         const ns = Object.getOwnPropertyNames(NEW.FastBit32), os = Object.getOwnPropertyNames(OLD14.FastBit32);
         assert.deepStrictEqual(diff(os, ns), []);
         assert.deepStrictEqual(diff(ns, os), ['nextCombination', 'nextSubset']);
-        for (const C2 of ['FastBit1024', 'BitMapper']) {
+        // FastBit1024 is additive (exact lists); L2 / L3 extend these lists (C-13).
+        const n1p = ownMethods(NEW.FastBit1024.prototype), o1p = ownMethods(OLD14.FastBit1024.prototype);
+        assert.deepStrictEqual(diff(o1p, n1p), []);
+        assert.deepStrictEqual(diff(n1p, o1p), ['clone', 'copy', 'equals', 'loadFrom', 'saveInto', 'serialize']);
+        const n1s = Object.getOwnPropertyNames(NEW.FastBit1024), o1s = Object.getOwnPropertyNames(OLD14.FastBit1024);
+        assert.deepStrictEqual(diff(o1s, n1s), []);
+        assert.deepStrictEqual(diff(n1s, o1s), ['deserialize']);
+        for (const C2 of ['BitMapper']) {
             assert.deepStrictEqual(ownMethods(NEW[C2].prototype).sort(), ownMethods(OLD14[C2].prototype).sort());
             assert.deepStrictEqual(Object.getOwnPropertyNames(NEW[C2]).sort(), Object.getOwnPropertyNames(OLD14[C2]).sort());
         }

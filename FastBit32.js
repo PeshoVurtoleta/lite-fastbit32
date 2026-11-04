@@ -537,7 +537,51 @@ function fb1024BadIndex(bit, limit) {
     throw new RangeError('FastBit1024: bit index must be an integer 0..' + (limit - 1) + ', got ' + fb1024Show(bit));
 }
 
+// Image format (saveInto / loadFrom): word 0 = FB1024_IMG_TAG | capacity ('FB'
+// in bits 16..31, format version 1 in bits 11..15, capacity in bits 0..10), then
+// ceil(capacity / 32) data words, LSB-first. FB1024_IMG_MASK selects bits 11..31.
+const FB1024_IMG_TAG = 0x46420800;
+const FB1024_IMG_MASK = -2048;
+
+// The intrinsic %TypedArray%.prototype `length` and @@toStringTag getters,
+// captured at module init: a subclass getter, an own `length` property or a
+// getter patched after import is never called. The tag is the internal
+// [[TypedArrayName]] (a re-prototyped Uint8Array reads 'Uint8Array'); both
+// return without allocating.
+const fb1024TaLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), 'length').get;
+const fb1024TaTag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), Symbol.toStringTag).get;
+
+// SWAR popcount for the COLD loadFrom rebuild only. Hot bodies inline the three
+// lines instead, so no int32 outside Smi range crosses a call.
+function fb1024Pop(v) {
+    v = v - ((v >>> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+    return Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+}
+
+function fb1024BadBuf(what) {
+    throw new TypeError('FastBit1024: ' + what + ' must be an Int32Array');
+}
+
+function fb1024BadOffset(off) {
+    throw new RangeError('FastBit1024: offset must be a non-negative integer that fits the image, got ' + fb1024Show(off));
+}
+
+function fb1024BadImage(why) {
+    throw new RangeError('FastBit1024: bad image: ' + why);
+}
+
+function fb1024BadFit(cap) {
+    throw new RangeError('FastBit1024: a set bit is at or above capacity ' + cap);
+}
+
 export class FastBit1024 {
+    // Private-name brand, stamped by the base constructor (subclass instances
+    // carry it). Every method that takes another set checks `#brand in other`:
+    // a Proxy, an Object.create(FastBit1024.prototype) forgery or an instance
+    // from a second copy of this module throws TypeError.
+    #brand;
+
     constructor(capacity = 1024) {
         if (typeof capacity !== 'number' || (capacity & 2047) !== capacity || capacity < 1 || capacity > 1024) {
             throw new RangeError('FastBit1024: capacity must be an integer 1..1024, got ' + fb1024Show(capacity));
@@ -665,7 +709,7 @@ export class FastBit1024 {
      * Anything that is not a FastBit1024 throws TypeError.
      */
     hasAll(other) {
-        if (!(other instanceof FastBit1024)) fb1024BadOther(other);
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
         if ((other._active & ~this._active) !== 0) return false;
         const od = other._data, td = this._data;
         for (let a = other._active; a !== 0; a &= a - 1) {
@@ -677,13 +721,29 @@ export class FastBit1024 {
 
     /** Some bit of `other` (a FastBit1024) is set here. Capacities may differ. */
     hasAny(other) {
-        if (!(other instanceof FastBit1024)) fb1024BadOther(other);
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
         const od = other._data, td = this._data;
         for (let a = other._active & this._active; a !== 0; a &= a - 1) {
             const w = 31 - Math.clz32(a & -a);
             if ((od[w] & td[w]) !== 0) return true;
         }
         return false;
+    }
+
+    /**
+     * Same set bits as `other` (a FastBit1024). Capacities may differ: a 500-set
+     * and a 1024-set holding {3} are equal. O(non-empty words); early-out on the
+     * size and the word summary. Neither set changes.
+     */
+    equals(other) {
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
+        if (this._n !== other._n || this._active !== other._active) return false;
+        const d = this._data, od = other._data;
+        for (let a = this._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            if (d[w] !== od[w]) return false;
+        }
+        return true;
     }
 
     /**
@@ -709,5 +769,122 @@ export class FastBit1024 {
         this._full = 0;
         this._n = 0;
         return this;
+    }
+
+    /**
+     * Overwrite this set with `other`'s bits (a FastBit1024; words and summaries
+     * copied, no rebuild). O(non-empty words of both). A differing capacity is
+     * accepted when every set bit of `other` is below this capacity; otherwise
+     * RangeError and nothing is written.
+     */
+    copy(other) {
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
+        if (other === this) return this;
+        const oa = other._active;
+        if (oa !== 0) {
+            const w = 31 - Math.clz32(oa), hi = (w << 5) + (31 - Math.clz32(other._data[w]));
+            if (hi >= this._cap) fb1024BadFit(this._cap);
+        }
+        const d = this._data, od = other._data;
+        for (let a = this._active | oa; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            d[w] = od[w];
+        }
+        this._active = oa;
+        this._full = other._full;
+        this._n = other._n;
+        return this;
+    }
+
+    /** COLD, allocating: a new FastBit1024, same capacity, same bits. */
+    clone() {
+        return new FastBit1024(this._cap).copy(this);
+    }
+
+    /** Words in this set's image: 1 header word + ceil(capacity / 32) data words (2..33). */
+    get imageLength() { return 1 + ((this._cap + 31) >>> 5); }
+
+    /**
+     * Save the image at out[offset .. offset + imageLength); returns
+     * offset + imageLength, so saves chain through one arena. `out` must be a
+     * genuine Int32Array or a subclass (internal tag checked; its length is read
+     * once, through the intrinsic getter). Throws before writing anything.
+     */
+    saveInto(out, offset = 0) {
+        if (!ArrayBuffer.isView(out) || !(out instanceof Int32Array) || fb1024TaTag.call(out) !== 'Int32Array') fb1024BadBuf('out');
+        if ((offset & 0x3FFFFFFF) !== offset) fb1024BadOffset(offset);
+        const L = (this._cap + 31) >>> 5;
+        if (offset + 1 + L > fb1024TaLength.call(out)) fb1024BadOffset(offset);
+        const d = this._data;
+        out[offset] = FB1024_IMG_TAG | this._cap;
+        for (let w = 0; w < L; w++) out[offset + 1 + w] = d[w];
+        return offset + 1 + L;
+    }
+
+    /**
+     * Restore from the image at src[offset..]; returns the offset just past it.
+     * Validates the WHOLE image first (tag and version, capacity 1..1024, length,
+     * no bit at or above the image capacity, every set bit below THIS capacity),
+     * then writes all 32 words and rebuilds _active / _full / _n from them (a
+     * stored count is never trusted). Any failure throws with this set unchanged.
+     * Under a concurrent writer on a shared buffer the invariants still hold and
+     * the result is an unspecified (torn) image; no bit at or above the capacity
+     * is ever stored.
+     */
+    loadFrom(src, offset = 0) {
+        if (!ArrayBuffer.isView(src) || !(src instanceof Int32Array) || fb1024TaTag.call(src) !== 'Int32Array') fb1024BadBuf('src');
+        if ((offset & 0x3FFFFFFF) !== offset) fb1024BadOffset(offset);
+        const len = fb1024TaLength.call(src);
+        if (offset >= len) fb1024BadOffset(offset);
+        const h = src[offset];
+        if ((h & FB1024_IMG_MASK) !== FB1024_IMG_TAG) fb1024BadImage('header');
+        const icap = h & 2047;
+        if (icap < 1 || icap > 1024) fb1024BadImage('capacity');
+        const L = (icap + 31) >>> 5, base = offset + 1;
+        if (base + L > len) fb1024BadImage('length');
+        const r = icap & 31;
+        if (r !== 0 && (src[base + L - 1] & (-1 << r)) !== 0) fb1024BadImage('bit >= image capacity');
+        const cap = this._cap;
+        if (icap > cap) {
+            const cw = cap >>> 5, cr = cap & 31;
+            if (cr !== 0 && (src[base + cw] & (-1 << cr)) !== 0) fb1024BadFit(cap);
+            for (let w = cr !== 0 ? cw + 1 : cw; w < L; w++) if (src[base + w] !== 0) fb1024BadFit(cap);
+        }
+        const lim = icap < cap ? icap : cap, lw = (lim + 31) >>> 5, lm = ~(-2 << ((lim - 1) & 31));
+        const d = this._data;
+        let act = 0, full = 0, n = 0;
+        for (let w = 0; w < 32; w++) {
+            const v = w < lw ? (w === lw - 1 ? src[base + w] & lm : src[base + w] | 0) : 0;
+            d[w] = v;
+            n += fb1024Pop(v);
+            act |= ((Math.clz32(v) >>> 5) ^ 1) << w;
+            full |= (Math.clz32(~v) >>> 5) << w;
+        }
+        this._active = act;
+        this._full = full;
+        this._n = n;
+        return base + L;
+    }
+
+    /** COLD, allocating: a fresh image of exactly imageLength words. */
+    serialize() {
+        const out = new Int32Array(this.imageLength);
+        this.saveInto(out, 0);
+        return out;
+    }
+
+    /**
+     * COLD, allocating: a new FastBit1024 whose capacity is the image's. Throws as
+     * loadFrom. Under a concurrent writer on a shared buffer the header is
+     * re-checked against the loaded bits: the result is an unspecified (torn)
+     * image, never a bit at or above its capacity.
+     */
+    static deserialize(src, offset = 0) {
+        const s = new FastBit1024(1024);
+        s.loadFrom(src, offset);
+        const c = src[offset] & 2047, a = s._active, hw = 31 - Math.clz32(a);
+        if (c < 1 || c > 1024 || (a !== 0 && (hw << 5) + (31 - Math.clz32(s._data[hw])) >= c)) fb1024BadImage('header');
+        s._cap = c;
+        return s;
     }
 }
