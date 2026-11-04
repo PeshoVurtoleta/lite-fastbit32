@@ -178,3 +178,16 @@ pool.clone(1);
 
 // @ts-expect-error -- equals takes another FastBit1024, not a raw mask.
 pool.equals(5);
+
+// ---- 1.6.0 L2: prevSetBit + cross-set counts ----
+const l2Prev: number = pool.prevSetBit(499);
+const l2Inter: number = pool.intersectionSize(gClone);
+const l2Union: number = pool.unionSize(gClone);
+const l2Diff: number = pool.differenceSize(gClone);
+void l2Prev; void l2Inter; void l2Union; void l2Diff;
+
+// @ts-expect-error -- intersectionSize takes another FastBit1024, not a raw mask.
+pool.intersectionSize(5);
+
+// @ts-expect-error -- prevSetBit needs a from index.
+pool.prevSetBit();

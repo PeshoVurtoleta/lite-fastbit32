@@ -641,8 +641,8 @@ export function forEachMaskUnion(
  *
  * **Input law (SC-5; differs from FastBit32, whose hot ops trust the caller -- SC-3, open, decided in S6):** every method
  * that takes an index FAILS CLOSED. An index must be an integer `0 <= i < capacity`
- * (`nextSetBit`: `0 <= from <= capacity`); anything else throws `RangeError`
- * (`undefined`, `null`, `NaN`, `1.5`, `'3'`, `true`, `-1`, `capacity`, `2^32`,
+ * (`nextSetBit`: `0 <= from <= capacity`; `prevSetBit`: `-1 <= from <= capacity - 1`); anything else throws `RangeError`
+ * (`undefined`, `null`, `NaN`, `1.5`, `'3'`, `true`, `-1` (except prevSetBit's -1), `capacity`, `2^32`,
  * `{}` ...). A `Symbol`, a `BigInt` or a null-prototype object throws `TypeError`
  * from the index arithmetic itself. `-0` is slot 0. A rejected call writes
  * nothing; the argument's own conversion (`valueOf` / `toString` /
@@ -735,14 +735,24 @@ export class FastBit1024 {
     nextSetBit(from: number): number;
 
     /**
+     * Index of the highest set bit `<= from`, or -1. O(1), loop-free. Inclusive, like
+     * `FastBit32#prevSetBit` and the mirror of `nextSetBit`. Domain:
+     * `-1 <= from <= capacity - 1` (-1 returns -1, so the closure-free reverse cursor
+     * `for (let b = s.prevSetBit(s.capacity - 1); b !== -1; b = s.prevSetBit(b - 1))` ends).
+     * @throws {RangeError} When `from` is outside `-1..capacity - 1` or not an integer.
+     */
+    prevSetBit(from: number): number;
+
+    /**
      * True when every bit set in `other` is set here. O(non-empty words of
      * `other`). Capacities may differ: words above a capacity are always 0, so
      * the answer is exact.
      * @throws {TypeError} When `other` fails the private-name brand: null, a primitive,
      *   `{}`, a FastBit32, a Proxy, an `Object.create(FastBit1024.prototype)` forgery,
      *   or an instance from a second installed copy of the package. A subclass instance
-     *   passes. Every method that takes another set (`copy`, `equals`, `hasAll`, `hasAny`)
-     *   use the same brand; `hasAll` / `hasAny` write to neither instance.
+     *   passes. Every method that takes another set (`copy`, `equals`, `hasAll`, `hasAny`,
+     *   `intersectionSize`, `unionSize`, `differenceSize`)
+     *   uses the same brand; `hasAll` / `hasAny` write to neither instance.
      */
     hasAll(other: FastBit1024): boolean;
 
@@ -753,6 +763,29 @@ export class FastBit1024 {
      *   Neither `hasAll` nor `hasAny` writes to either instance.
      */
     hasAny(other: FastBit1024): boolean;
+
+    /**
+     * Exact `|this AND other|`. O(words non-empty in both). Capacities may differ: words
+     * above a capacity are always 0. `hasAny(other)` is the same question as RoaringSet's
+     * `intersects`; `intersectionSize(other) > 0` is equivalent. Neither set changes.
+     * @throws {TypeError} When `other` fails the private-name brand (as `hasAll`: not a
+     *   FastBit1024, a Proxy, a forgery, an instance from a second copy of the package).
+     */
+    intersectionSize(other: FastBit1024): number;
+
+    /**
+     * Exact `|this OR other|` = `size + other.size - intersectionSize(other)`. Capacities
+     * may differ. Neither set changes.
+     * @throws {TypeError} When `other` fails the private-name brand (as `intersectionSize`).
+     */
+    unionSize(other: FastBit1024): number;
+
+    /**
+     * Exact `|this AND NOT other|` = `size - intersectionSize(other)`. Capacities may
+     * differ. Neither set changes.
+     * @throws {TypeError} When `other` fails the private-name brand (as `intersectionSize`).
+     */
+    differenceSize(other: FastBit1024): number;
 
     /**
      * Zero-GC overwrite from another FastBit1024: `other` passes the private-name brand,
