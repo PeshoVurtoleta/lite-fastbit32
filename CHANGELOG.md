@@ -99,8 +99,11 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   host, --strict): exit 0, 5 rounds valid, 0 HOST, 0 demoted, findings none;
   REPORTED FLAT select (density) FAIL 2 / ok 3, FLAT select (position)
   FAIL 0 / ok 5. Single runs; not a guarantee for other hosts.
-- Tests: `npm test` 726 tests in 85 suites, 726 pass, 0 fail (DETERMINISTIC;
-  `npm run verify` exit 0 on 2026-11-04, test:perf 21/21, torture major 0).
+- Tests: `npm test` 734 tests in 86 suites, 734 pass, 0 fail (DETERMINISTIC;
+  qa run 2026-11-04). The 8 new cases (test/WitnessProgramQA.test.mjs) pin
+  the warm-up count at P 5, 11, 12 and 13, and pin it for foilWordScan.
+  `npm run verify` exit 0 on 2026-11-04 at 726 tests, test:perf 21/21,
+  torture major 0.
 
 ### Fixed (docs)
 
