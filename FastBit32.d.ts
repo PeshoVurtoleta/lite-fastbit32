@@ -651,8 +651,9 @@ export function forEachMaskUnion(
  * Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal;
  * writing them voids invariants I1-I4.
  *
- * `hasAll`/`hasAny` check `other instanceof FastBit1024`: a FastBit1024 from a
- * second installed copy of the package is a different class and throws TypeError.
+ * `hasAll`/`hasAny`/`copy`/`equals` check a private-name brand: subclass instances
+ * pass; a FastBit1024 from a second installed copy of the package, a Proxy or a
+ * forgery throws TypeError.
  *
  * @example
  * ```js
@@ -737,21 +738,45 @@ export class FastBit1024 {
      * True when every bit set in `other` is set here. O(non-empty words of
      * `other`). Capacities may differ: words above a capacity are always 0, so
      * the answer is exact.
-     * @throws {TypeError} When `other` is not a FastBit1024 (null, `{}`, a FastBit32 ...).
-     *   The brand is `instanceof`: an `Object.create(FastBit1024.prototype)`
-     *   forgery passes it and is unsupported (no defined answer;
-     *   neither method writes to either instance).
+     * @throws {TypeError} When `other` fails the private-name brand: null, a primitive,
+     *   `{}`, a FastBit32, a Proxy, an `Object.create(FastBit1024.prototype)` forgery,
+     *   or an instance from a second installed copy of the package. A subclass instance
+     *   passes. Every method that takes another set (`copy`, `equals`, `hasAll`, `hasAny`)
+     *   use the same brand; `hasAll` / `hasAny` write to neither instance.
      */
     hasAll(other: FastBit1024): boolean;
 
     /**
      * True when some bit set in `other` is set here. Capacities may differ.
-     * @throws {TypeError} When `other` is not a FastBit1024.
-     *   The brand is `instanceof`: an `Object.create(FastBit1024.prototype)`
-     *   forgery passes it and is unsupported (no defined answer;
-     *   neither method writes to either instance).
+     * @throws {TypeError} When `other` fails the private-name brand (as `hasAll`: not a
+     *   FastBit1024, a Proxy, a forgery, an instance from a second copy of the package).
+     *   Neither `hasAll` nor `hasAny` writes to either instance.
      */
     hasAny(other: FastBit1024): boolean;
+
+    /**
+     * Zero-GC overwrite from another FastBit1024: `other` passes the private-name brand,
+     * then the words and summaries are copied (no rebuild). O(non-empty words of both).
+     * A differing capacity is accepted when every set bit of `other` is below this
+     * capacity; otherwise RangeError and nothing is written. `copy(this)` is a no-op.
+     * @returns This set.
+     * @throws {TypeError} When `other` fails the private-name brand (not a FastBit1024, a
+     *   Proxy, an `Object.create(FastBit1024.prototype)` forgery, an instance from a second
+     *   copy of the package). A subclass instance passes.
+     * @throws {RangeError} When a set bit of `other` is at or above this capacity; this set is unchanged.
+     */
+    copy(other: FastBit1024): this;
+
+    /** COLD, allocating: a new set with the same capacity and the same bits. */
+    clone(): FastBit1024;
+
+    /**
+     * True when both sets hold the same bits. Capacities may differ (a 500-set and a
+     * 1024-set holding {3} are equal). O(non-empty words); early-out on size and the
+     * word summary. Neither set changes.
+     * @throws {TypeError} When `other` fails the private-name brand (as `copy`).
+     */
+    equals(other: FastBit1024): boolean;
 
     /**
      * Calls `callback(bit)` for every set bit, ascending. O(k + non-empty words).
@@ -764,4 +789,55 @@ export class FastBit1024 {
 
     /** Clears every bit. O(non-empty words). */
     clear(): this;
+
+    /**
+     * Words in this set's image: 1 header word + `ceil(capacity / 32)` data words (2..33).
+     * Sizes a snapshot arena: `new Int32Array(k * s.imageLength)`.
+     */
+    readonly imageLength: number;
+
+    /**
+     * Zero-GC save. Writes the image at `out[offset .. offset + imageLength)`: word 0 is the
+     * header `0x46420800 | capacity` ('FB' tag in bits 16..31, format version 1 in bits 11..15,
+     * capacity in bits 0..10), then the data words LSB-first (bit k is bit `k & 31` of data
+     * word `k >>> 5`). Returns `offset + imageLength`, so saves chain through one arena. 0 B/op.
+     * `out` must be a genuine Int32Array or a subclass (internal tag checked); a re-prototyped
+     * view or a Proxy throws TypeError. Its length is read once, through the intrinsic getter.
+     * @param offset - An integer 0..2^30-1; default 0.
+     * @throws {TypeError} Unless `out` is an Int32Array of this realm or a subclass of it.
+     * @throws {RangeError} On a bad `offset`, when the image does not fit, or when `out` is
+     *   detached; nothing is written.
+     */
+    saveInto(out: Int32Array, offset?: number): number;
+
+    /**
+     * Zero-GC restore. Validates the WHOLE image before any write -- tag and version, capacity
+     * 1..1024, length, no bit at or above the image's capacity, and every set bit below THIS
+     * capacity -- then overwrites all words and rebuilds the summaries and the count. A
+     * differing image capacity is accepted when every set bit fits. Returns the offset just
+     * past the image. 0 B/op. `src` must be a genuine Int32Array or a subclass (internal tag
+     * checked); a re-prototyped view, an Array or a Proxy throws TypeError. JSON: save
+     * `Array.from(img)`, load `new Int32Array(arr)`.
+     *
+     * Shared memory: an Int32Array over a SharedArrayBuffer is accepted. If another thread
+     * writes it during `loadFrom` / `deserialize` the result is an unspecified (torn) image,
+     * but the set's invariants hold and no bit at or above the capacity is ever stored.
+     * @param offset - An integer 0..2^30-1; default 0.
+     * @throws {TypeError} Unless `src` is an Int32Array of this realm or a subclass of it.
+     * @throws {RangeError} On a bad offset, a bad image, a bit that does not fit, or a detached
+     *   `src`; this set is unchanged.
+     */
+    loadFrom(src: Int32Array, offset?: number): number;
+
+    /** COLD, allocating: a fresh Int32Array of exactly `imageLength` words holding the image. */
+    serialize(): Int32Array;
+
+    /**
+     * COLD, allocating: a new set whose capacity is the image's. Throws as `loadFrom`
+     * (TypeError for a bad `src`; RangeError for a bad offset, image or detached `src`).
+     * Always returns a base FastBit1024. The same shared-memory note as `loadFrom` applies:
+     * the header is re-checked against the loaded bits, so a race yields an unspecified
+     * (torn) image, never a bit at or above its capacity.
+     */
+    static deserialize(src: Int32Array, offset?: number): FastBit1024;
 }

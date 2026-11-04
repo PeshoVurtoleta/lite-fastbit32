@@ -139,3 +139,42 @@ pool.hasAll(5);
 
 // @ts-expect-error -- capacity is a read-only getter.
 pool.capacity = 64;
+
+// --- FastBit1024 G1 (1.6.0): save / restore, copy, clone, equals -------------
+const gImg: Int32Array = new Int32Array(pool.imageLength * 2);
+const gLen: number = pool.imageLength;
+const gEnd: number = pool.saveInto(gImg);
+const gEnd2: number = pool.saveInto(gImg, gEnd);
+const gLoad: number = poolDefault.loadFrom(gImg);
+const gLoad2: number = poolDefault.loadFrom(gImg, gLen);
+const gSer: Int32Array = pool.serialize();
+const gDes: FastBit1024 = FastBit1024.deserialize(gSer);
+const gDes2: FastBit1024 = FastBit1024.deserialize(gImg, 1);
+const gCopy: FastBit1024 = poolDefault.copy(pool);
+const gClone: FastBit1024 = pool.clone();
+const gEq: boolean = pool.equals(gClone);
+void gLen; void gEnd; void gEnd2; void gLoad; void gLoad2; void gDes; void gDes2; void gCopy; void gEq;
+
+// @ts-expect-error -- imageLength is a read-only getter.
+pool.imageLength = 3;
+
+// @ts-expect-error -- saveInto takes an Int32Array, not a plain array.
+pool.saveInto([0, 0, 0]);
+
+// @ts-expect-error -- loadFrom takes an Int32Array, not a plain array.
+pool.loadFrom([0, 0, 0]);
+
+// @ts-expect-error -- serialize takes no argument.
+pool.serialize(gImg);
+
+// @ts-expect-error -- deserialize takes an Int32Array, not a number.
+FastBit1024.deserialize(5);
+
+// @ts-expect-error -- copy takes another FastBit1024, not a raw mask.
+pool.copy(5);
+
+// @ts-expect-error -- clone takes no argument.
+pool.clone(1);
+
+// @ts-expect-error -- equals takes another FastBit1024, not a raw mask.
+pool.equals(5);

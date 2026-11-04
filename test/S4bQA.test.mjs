@@ -12,7 +12,7 @@
 //     checked to leave the state byte-identical (fields, buffer identity, keys);
 //   - the ctor throws before ANY write (a receiver with recording setters);
 //   - a valueOf that re-enters the instance (the method itself writes nothing);
-//   - the cross-copy instanceof brand (a second module instance via ?copy=);
+//   - the cross-copy private-name brand (a second module instance via ?copy=);
 //   - cursor ends (nextSetBit(cap), cap - 1, cap + 1, 2047, 2048) at every cap;
 //   - I1-I4 after every op of word-31 / bit-31 heavy mixed sequences;
 //   - forEach under re-entrant writes, clear() and a throw mid-walk;
@@ -356,8 +356,8 @@ describe('S4b QA: every throw happens before any write', () => {
     });
 });
 
-// ---- the cross-copy instanceof brand -----------------------------------------
-describe('S4b QA: the instanceof brand', () => {
+// ---- the cross-copy private-name brand ---------------------------------------
+describe('S4b QA: the private-name brand', () => {
     it('a FastBit1024 from a second module instance throws TypeError both ways, state unchanged', async () => {
         const copy = await import(new URL('FastBit32.js?s4bqa-copy=' + process.pid, ROOT).href);
         const Other = copy.FastBit1024;
@@ -377,18 +377,13 @@ describe('S4b QA: the instanceof brand', () => {
         assert.equal(new Sub(64).add(2).hasAny(mine), false);
     });
 
-    it('a prototype-forged object passes the brand (instanceof is the settled check): never true, never corrupts', () => {
-        // SC-5 c chose `instanceof`; a forged prototype is the documented limit of that brand.
+    it('a prototype-forged object fails the private-name brand: TypeError, never an answer, nothing corrupted', () => {
+        // 1.6.0 (Q-8): `#brand in other` replaced instanceof; Object.create(FastBit1024.prototype) has no #brand.
         const s = new FastBit1024(64).add(5);
-        const before = snap(s);
         const forged = Object.create(FastBit1024.prototype);
-        let any;
-        try { any = s.hasAny(forged); } catch (e) { any = e instanceof TypeError ? 'TypeError' : e; }
-        assert.notEqual(any, true, 'hasAny(forged) answered true');
-        let all;
-        try { all = s.hasAll(forged); } catch (e) { all = e instanceof TypeError ? 'TypeError' : e; }
-        assert.ok(all === 'TypeError' || all === false || all === true, 'hasAll(forged) -> ' + String(all));
-        assert.equal(snap(s), before);
+        const msg = 'FastBit1024: expected a FastBit1024, got object';
+        expectReject(s, () => s.hasAny(forged), { name: 'TypeError', message: msg }, 'hasAny(forged)');
+        expectReject(s, () => s.hasAll(forged), { name: 'TypeError', message: msg }, 'hasAll(forged)');
     });
 });
 
