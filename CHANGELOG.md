@@ -58,6 +58,57 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   failure alone exits 2, a NOISE failure plus a finding exits 1.
 - Tests: test/WitnessSubsetQA.test.mjs now runs serially and pins the
   malformed-subset behaviour (fails 1, hostSuppressed 1).
+- Release gate (170481d): `npm run gate:release` (test/witness-release.mjs)
+  runs witness:fast K = 5 times, serially, each round a separate process,
+  and votes per row: a strict majority (3 of 5) of FAIL is a FINDING, a
+  majority of ok passes, anything else is INCONCLUSIVE. Rounds are classed
+  HOST / valid / HARNESS. One witness:fast run is a STATISTICAL gate and
+  false-failed 14 of 58 fast rounds (REPORTED: pooled earlier local single
+  runs on the builds before 170481d; not re-measured this cycle), so `npm run
+  verify` no longer runs `witness:fast`: it keeps only the DETERMINISTIC gates
+  (npm test, test:types, torture, torture:controls, test:perf).
+  `prepublishOnly` is now `npm run
+  verify && node test/witness-release.mjs --if-stale && npm run bundle-check`
+  (it was `npm run verify && npm run bundle-check`; verify ended with
+  `witness:fast` at 1.5.0). `--if-stale` skips the gate only on an exact
+  stamp match (.gate-release.json, gitignored, written on exit 0 only).
+- Release gate (22693ef): `--keep <dir>` saves the evidence of a run. <dir>
+  must not exist and its parent must; after each round, before it is parsed,
+  round-N.stdout.txt and round-N.json are written with flag `wx`, and
+  decision.json is written at the end. Any write error is a HARNESS failure
+  (exit 1). `--keep` with `--if-stale` exits 1 (a skipped gate keeps
+  nothing). Without `--keep` the log is unchanged.
+- Release gate (36d6b73): the `FLAT select (density)` and `FLAT select
+  (position)` rows are now REPORTED, not gated. flat-sel H (2026-10-21) found
+  30 of 60 select processes reading a spread > 0.132 ns with no code change.
+  The rows are still required in every round (a missing one is HARNESS);
+  their FAIL / ok counts print as `REPORTED` lines and are kept in
+  decision.json `reported`. They never become a FINDING or an INCONCLUSIVE,
+  so a select flatness regression no longer blocks a release; witness.mjs
+  still prints and fails select per run.
+- Witness: run-one slot mode (FastBit1024 pool rows), lane HOT only, runs
+  `ceil(12 / P)` unrecorded warm-up passes before pass 0 (12 cells; P = number
+  of params; same reshape / fill / best-of path; PRESSURE lane and the scalar /
+  slope modes have none). The first cells of a fresh process read cold. Pinned
+  by test/WitnessWarmup.test.mjs (27e4ac0). STATISTICAL tier, one run, local,
+  quiet host (load1 1.06 -> 1.15, baseline 2.21), Node v26.8.2, 2026-11-04,
+  480 processes: acceptance arm H (no warm-up) vs arm N (warm-up), K10 count
+  (processes whose flat spread exceeds 0.132 ns AND whose fitted step sits
+  at cell 10) H 18 vs N 1, Fisher p 2.836e-5, verdict PASS (rows
+  fb1024.nextClearBit and fb1024.highest). A following `gate:release` on that tree (one run, same
+  host, --strict): exit 0, 5 rounds valid, 0 HOST, 0 demoted, findings none;
+  REPORTED FLAT select (density) FAIL 2 / ok 3, FLAT select (position)
+  FAIL 0 / ok 5. Single runs; not a guarantee for other hosts.
+- Tests: `npm test` 726 tests in 85 suites, 726 pass, 0 fail (DETERMINISTIC;
+  `npm run verify` exit 0 on 2026-11-04, test:perf 21/21, torture major 0).
+
+### Fixed (docs)
+
+- llms.txt (FB-14): three lines (11, 252, 408) sent users who need more than
+  32 bits to `@zakkster/lite-bits`, a package that does not exist. They now
+  name `@zakkster/lite-o1` `BitSet` (fixed capacity, an integer in
+  [1, 2^25] bits) and say it has no clear-bit search (no firstClear /
+  nextClear), so it does not replace FastBit1024 for pool allocation.
 
 ## [1.5.0] - 2026-10-11
 

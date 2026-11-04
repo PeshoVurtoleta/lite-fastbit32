@@ -105,7 +105,9 @@ Proportionate proof: the code takes minutes, so proving it must not take hours.
 - Research: draft + oracle fuzz + one timing, documented (the FastBit1024 model).
 - No new gate infrastructure and no threshold calibration inside a feature
   session. The full witness runs once before a release on a quiet host;
-  `verify` keeps witness:fast.
+  `verify` is DETERMINISTIC gates only (170481d dropped witness:fast); the
+  STATISTICAL witness:fast runs K = 5 serial rounds inside `gate:release`,
+  per release and via `prepublishOnly --if-stale`.
 - coder-medium for mechanical sessions; coder (high) for design-heavy ones.
 
 ---
@@ -132,7 +134,7 @@ re-run with `node -e`.
 | **FB-11** | S3 | **No closure-free iteration.** `forEach` with a capturing callback allocates per call: **425 scavenges over 2e6 calls** with a capturing closure, **0** with a hoisted function (measured). The README markets `forEach` as a zero-GC hot path, and the API offers no cursor alternative. | `perf_hooks` gc entries over `m.forEach(b => { a += b + i })` vs `m.forEach(noop)`, 2e6 calls; becomes S0's T6/T9 control |
 | **FB-12** | S3 | **(unmeasured) Browser Smi boundary.** Under pointer compression (Chrome, Electron, Deno), Smis are 31-bit, so any word with bit 30 or 31 is a HeapNumber. On Node (32-bit Smis) `add/remove` at bits 30 and 31 measured **0 scavenges over 2e7 ops**. Chrome is unmeasured, and S7's `#measure` mode answers it. | -- |
 | **FB-13** | S3 | **d.ts drift.** `value` is documented as "unsigned". `forEachMapped` types its callback name as `string` but can pass `undefined` (FB-06). `clone()` and `forEach` are not marked as allocating / closure-sensitive. `countRange` claims a return of "0-32" for any input. | read `FastBit32.d.ts` |
-| **FB-14** | S2 | **Phantom package in a shipped file.** `llms.txt` sends users who need more than 32 (or 1024) bits to `@zakkster/lite-bits`, which does not exist and was never planned. It has been there since the initial commit (1052881) and shipped in every release through 1.5.0. RESEARCH.md section 11 item 9 found it on 2026-10-10 and parked the fix in S8. Pulled forward (maintainer, 2026-10-13) into the next docs batch: repoint the three sites to lite-o1 `BitSet` (multi-word, fixed capacity up to 2^25 bits) and say it has no `firstClear` / `nextClear` yet (RESEARCH 11.4 handoff). | `grep -n lite-bits llms.txt` -> lines 11, 252, 408 |
+| **FB-14** | S2 | **Phantom package in a shipped file.** `llms.txt` sends users who need more than 32 (or 1024) bits to `@zakkster/lite-bits`, which does not exist and was never planned. It has been there since the initial commit (1052881) and shipped in every release through 1.5.0. RESEARCH.md section 11 item 9 found it on 2026-10-10 and parked the fix in S8. Pulled forward (maintainer, 2026-10-13) into the next docs batch: repoint the three sites to lite-o1 `BitSet` (multi-word, fixed capacity up to 2^25 bits) and say it has no `firstClear` / `nextClear` yet (RESEARCH 11.4 handoff). **FIXED (unreleased, docs, 2026-11-04):** the three llms.txt sites now name `@zakkster/lite-o1` `BitSet` (fixed capacity, [1, 2^25] bits, no clear-bit search); CHANGELOG [Unreleased] "Fixed (docs)". | `grep -n lite-bits llms.txt` -> lines 11, 252, 408 (before the fix) |
 | **FB-15** | S3 | **`FastBit1024.toggle` pays twice.** It validates the index, reads the word, then branches to `add` / `remove`, which validate and read again (`FastBit32.js:572-575`). The 2026-10-14 external audit proposes a single-load form that keeps I1-I4 with the same `clz32` terms `add` / `remove` use (RESEARCH 14.1 row 3). A speed claim: STATISTICAL tier, adopt only with an interleaved A/B plus torture T0 on I1-I4. Low priority. | read `FastBit32.js:572-575` |
 
 **Clean, and pinned so it stays clean:** `has`, `hasAny`, `hasNone`, `isEmpty`
@@ -1062,6 +1064,26 @@ and NOT blocking any release: the maintainer moved to a lighter process
     (b)), not built. Stage-1 baseline on the slope-confirm build: fast flat
     FAIL 3/20, all select HOT (ES/qa-slope/runs/table.txt:3-5).
     Never a wider K. The slope half is adopted (next item).
+    STATUS 2026-11-04 (unreleased, test-only; STATISTICAL, one run, local,
+    quiet host): CLOSED for FastBit1024 HOT nextClearBit / highest. The HOT
+    slot warm-up (27e4ac0, run-one: ceil(12 / P) unrecorded passes) passed
+    its acceptance, flat-wu run.log STEP 27 (K10 H 18 vs N 1, Fisher
+    p 2.836e-5, verdict PASS; load1 1.06 -> 1.15 under quiet-lock --strict).
+    A gate:release on that tree (5 rounds valid, 0 HOST, 0 demoted)
+    returned findings none, i.e. every gated row passed the 3-of-5 vote in
+    that one run; acquire / lowest are not separately claimed fixed.
+    HOT select is REPORTED, not gated (36d6b73): FLAT select (density) FAIL
+    2 / ok 3 and (position) FAIL 0 / ok 5 in that run, printed and kept in
+    decision.json, never a finding. witness:fast no longer runs in verify
+    (170481d), so the 11/28 figure above describes the 1.5.0 build.
+  - OPEN (SEL2, after the release; maintainer M11 option (c), 2026-10-21,
+    plan-witness-stability.md addendum 30): diagnose the select flatness
+    spread. flat-sel H found 30 of 60 select processes reading a spread
+    > 0.132 ns with no code change, so a per-release select gate was a coin
+    flip and select became REPORTED (36d6b73). Find the cause (in-process
+    level shift or placement vs the estimator), then decide whether any
+    select flatness claim can be gated. Needs a quiet host; no code change
+    until a diagnosis exists.
   - CLOSED 2026-10-11 (unreleased, test-only): the full witness FAILed on
     1.5.0 at PRESSURE select (density) 5.2-6.2 N > 4.5 N, caused by the
     d0/d32 one-word corpora (METHODOLOGY). PRESSURE density is now gated over

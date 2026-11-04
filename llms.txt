@@ -8,7 +8,7 @@ FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise 
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
-**When NOT to use FastBit32:** You need more than 32 flags (up to 1024: `FastBit1024` below, fail-closed; more: `@zakkster/lite-bits`), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
+**When NOT to use FastBit32:** You need more than 32 flags (up to 1024: `FastBit1024` below, fail-closed; more: `@zakkster/lite-o1` `BitSet`, fixed capacity [1, 2^25] bits, no clear-bit search), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
 
 ## Import
 
@@ -249,7 +249,7 @@ Measured, 1.5.0 (two fast witness runs, node v26.8.2, Apple M4 Pro, load ~4-5, n
 
 3. **No input validation.** Floats are truncated. Negative bit indices are coerced. NaN becomes 0. FastBit32 trusts the caller for maximum performance.
 
-4. **32-bit limit.** Only bits 0-31 are addressable. Up to 1024 bits: `FastBit1024` (fixed geometry, fails closed). For larger bitfields, use `@zakkster/lite-bits`.
+4. **32-bit limit.** Only bits 0-31 are addressable. Up to 1024 bits: `FastBit1024` (fixed geometry, fails closed). For larger bitfields, use `@zakkster/lite-o1` `BitSet` (fixed capacity, an integer in [1, 2^25] bits; it has no clear-bit search -- no firstClear / nextClear -- so it does not replace the FastBit1024 pool).
 
 ## Correct Usage Patterns
 
@@ -405,7 +405,7 @@ flags.value === 2147483648; // false -- value is -2147483648 (signed)
 (flags.value >>> 0) === 2147483648; // true -- correct unsigned comparison
 
 // WRONG: Using FastBit32 for more than 32 flags
-// Use @zakkster/lite-bits instead
+// Use @zakkster/lite-o1 BitSet instead (fixed capacity, [1, 2^25] bits; no clear-bit search: no firstClear / nextClear)
 
 // WRONG: Expecting add() to return a boolean
 const result = flags.add(5); // returns `this`, not true/false

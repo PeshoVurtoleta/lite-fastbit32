@@ -329,15 +329,26 @@ qa-slope/runs/table.txt:3-5): the baseline for that redesign.
 
 ### Verify integration
 
-`npm run verify` runs `witness:fast` (HOT lane only; density 8 cells, position 8
-cells; the 4 HOT foils + foilSubEps; ctlRead; broken-floor and self-check
-controls; forEach + forEachMaskUnion + the three iterator foils): 13.8 s
-median (n=20, wall 13.5-14.1 s; qa-slope/runs/table.txt:30, meta.tsv). The full
-`npm run witness` (both lanes, full sweeps incl. the PRESSURE position sweep,
-all 8 iterators, the RESEARCH table) is 116.2-123.1 s wall (n=5, with the
-slope confirm; qa-slope/runs/meta.tsv) and stays out of verify: it is
-timing-heavy and needs a quiet host. The PRESSURE position sweep and the LUT16
-PRESSURE teeth are proven by the full run only.
+`npm run verify` is DETERMINISTIC gates only (npm test, test:types, torture,
+torture:controls, test:perf). Since 170481d it does NOT run `witness:fast`: one
+witness run is a STATISTICAL gate that false-failed 14 of 58 fast rounds
+(REPORTED: pooled earlier single runs, rowtable.txt:120-130 +
+qa-slope/runs/table.txt:3-5; plan-release-gate.md). The
+`witness:fast` config (HOT lane only; density 8 cells, position 8 cells; the 4
+HOT foils + foilSubEps; ctlRead; broken-floor and self-check controls; forEach
++ forEachMaskUnion + the three iterator foils) runs K = 5 serial rounds inside
+`npm run gate:release` (test/witness-release.mjs): per release, and from
+`prepublishOnly` as `--if-stale` (skipped on an exact stamp match). Per row, a
+strict majority (3 of 5) of FAIL is a finding; the select flatness rows are
+REPORTED only (their counts are printed and kept, never voted). Historical
+measurements, from the earlier build that ran it inside verify: 13.8 s median
+per witness:fast run (n=20, wall 13.5-14.1 s; qa-slope/runs/table.txt:30,
+meta.tsv). The full `npm run witness` (both lanes, full sweeps incl. the
+PRESSURE position sweep, all 8 iterators, the RESEARCH table) was 116.2-123.1 s
+wall (n=5, with the slope confirm; qa-slope/runs/meta.tsv); it stays out of
+verify and out of gate:release: it is timing-heavy and needs a quiet host. The
+PRESSURE position sweep and the LUT16 PRESSURE teeth are proven by the full run
+only.
 
 ## SC-1 -- guarded `clz32 ^ 31` vs branchless `31 - clz32`
 (`benchmark/experiments/sc1-scans.mjs`, scratch bodies, RESEARCH section 7)
@@ -416,6 +427,21 @@ in 32 instances spread 2.50-6.54 ns, and reversing the allocation order moved th
 - SLOT_SLOW (acquire and has only): median of 5 passes of best-of-8 reps at outer / 4 (acquire) or outer / 2 (has).
   This is an estimator change, not a threshold change. The foil and a deliberate word step read the same with and
   without it.
+- Warm-up (27e4ac0, lane HOT only): `run-one.mjs` slot mode runs
+  `ceil(WARM_CELLS / P)` UNRECORDED passes before pass 0 (WARM_CELLS = 12; P 6
+  -> 2 passes, P 32 -> 1), over the same reshape / fill / best-of path; they
+  feed no recorded net, minimum or `rounds`. Why: the first cells of a fresh
+  process read cold (the flat-cp probe put the in-process step near cell 10),
+  which the flat-row spread read as a step on FastBit1024 HOT rows. The
+  PRESSURE lane and the scalar / slope modes have no warm-up. Acceptance
+  (STATISTICAL, one run, local, quiet host: load1 1.06 -> 1.15, baseline 2.21;
+  Node v26.8.2; 2026-11-04T07:01:48Z; 480 processes, wall 92.9 s, under
+  quiet-lock --strict): arm H (no warm-up) vs arm N (warm-up), same
+  FastBit32.js. K10 (processes flagged C and J with a step at cell k* = 10; plan-witness-stability.md 31-1) H 18 vs N 1, Fisher
+  p 2.836e-5; verdict PASS. Per row (INFO), K10 H -> N: fb1024.nextClearBit
+  9 -> 0, fb1024.highest 9 -> 1. The following gate:release (07:05:45 to
+  07:07:00Z, one run): exit 0, 5 rounds valid, findings none. Not a law: one
+  run on one host. (.handoff/evidence/stability/flat-wu/result.txt.)
 - REJECTED 2026-10-11: a SELECT_SLOW estimator for the HOT FastBit32 `select` rows (the witness:fast flake). On a
   quiet host (load 1.1-1.7) div 1 (best of 8, median of 5, full outer) did not lower the probe's median spread vs
   the lane config and still failed witness:fast 2/23 (HEAD 7/28). A div 4 trial under a decision rule fixed in
