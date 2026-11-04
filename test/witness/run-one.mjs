@@ -17,6 +17,11 @@
  * per-cell dispersion `disp` is max - min of the per-pass nets -- the in-process
  * noise of THAT cell, which the driver turns into the noise floor (the flatness
  * spread is also measured in-process, so in-process dispersion is its comparator).
+ * Warm-up (slot mode, lane HOT ONLY): before pass 0 the slot block runs
+ * `warm = ceil(WARM_CELLS / P)` UNRECORDED passes over the same reshape / fill /
+ * bestPair path; they feed none of the per-pass nets, minima or `rounds`, and
+ * nothing (no sleep, await, I/O or gc) runs between the last of them and pass 0.
+ * The PRESSURE lane and the scalar / slope modes have no warm-up.
  * The result of every op is XORed into `acc` and sunk into an Int32Array slot
  * (SINK) at the end, so a dead-code-eliminated loop cannot read ~0 silently. The
  * PRESSURE lane also streams a 32 MB Int32Array at a 4099-word (prime) stride
@@ -206,6 +211,11 @@ const SLOT = {
   foilWordScan: 'r=0; while(inst._data[r]===-1) r++;',
   _floor: 'r=w;',
 };
+// Slot-mode warm-up, lane HOT only: ceil(WARM_CELLS / P) unrecorded passes
+// before pass 0 (P 6 -> 2, P 32 -> 1). CP1 (W arm; evidence
+// .handoff/evidence/stability/flat-cp/cp1.txt, verdict PRESENT INDEX WORK) put the
+// in-process step near cell 10, so 12 warm cells keep it out of every recorded pass.
+const WARM_CELLS = 12;
 function reshapeSlot(s, op, p) {
   const free = (p << 5) + 17;
   s.clear();
@@ -350,7 +360,9 @@ function main() {
     const totalOps = CORPUS * outer;
     const inst = new FastBit1024();
     const corpus = new Int32Array(CORPUS);
-    for (let ri = 0; ri < rounds; ri++) {
+    // passes ri < 0 are the warm-up: same path, nothing recorded.
+    const warm = lane === 'HOT' && P > 0 ? Math.ceil(WARM_CELLS / P) : 0;
+    for (let ri = -warm; ri < rounds; ri++) {
       const rn = [];
       for (let pi = 0; pi < P; pi++) {
         reshapeSlot(inst, op, params[pi]);
@@ -358,11 +370,13 @@ function main() {
         const call = (L) => L(inst, corpus, EMPTY_SETS, EMPTY_LUT, outer, SINK, STREAM, SMASK, SI, null);
         bestPair(() => call(loop), () => call(floorLoop), reps);
         const o = BEST[0] * 1e6 / totalOps, f = BEST[1] * 1e6 / totalOps;
-        if (o < opMin[pi]) opMin[pi] = o;
-        if (f < flMin[pi]) flMin[pi] = f;
-        rn.push(o - f);
+        if (ri >= 0) {
+          if (o < opMin[pi]) opMin[pi] = o;
+          if (f < flMin[pi]) flMin[pi] = f;
+          rn.push(o - f);
+        }
       }
-      roundNets.push(rn);
+      if (ri >= 0) roundNets.push(rn);
     }
     finish(spec, opMin, flMin, roundNets);
     return;
