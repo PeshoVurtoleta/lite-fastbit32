@@ -122,19 +122,20 @@ describe('FastBit1024 1.5.0 -> tree parity (base ' + BASE + ')', () => {
         assert.ok(n > 60, 'compared ' + n);
     });
 
-    // HEAD-only: the eight 1.6.0 G1 members (SPEC: PROPOSAL s1 + C-13); fails on the 1.5.0 build.
-    it('(c2) HEAD-only: the 8 G1 members exist with the spec kind and arity', () => {
+    // HEAD-only: the 1.6.0 L1 + L2 members (SPEC: PROPOSAL s1 + C-13); fails on the 1.5.0 build.
+    it('(c2) HEAD-only: the 12 L1 + L2 members exist with the spec kind and arity', () => {
         const nm = members(NEW, 'FastBit1024');
         assert.strictEqual(kind(nm.get('p:imageLength')), 'accessor:get');
         assert.strictEqual(nm.get('p:imageLength').set, undefined);
-        const want = { 'p:saveInto': 1, 'p:loadFrom': 1, 'p:serialize': 0, 'p:copy': 1, 'p:clone': 0, 'p:equals': 1, 's:deserialize': 1 };
+        const want = { 'p:saveInto': 1, 'p:loadFrom': 1, 'p:serialize': 0, 'p:copy': 1, 'p:clone': 0, 'p:equals': 1, 's:deserialize': 1,
+            'p:prevSetBit': 1, 'p:intersectionSize': 1, 'p:unionSize': 1, 'p:differenceSize': 1 };
         for (const [k, len] of Object.entries(want)) {
             assert.strictEqual(kind(nm.get(k)), 'method', k);
             assert.strictEqual(nm.get(k).value.length, len, k);
         }
-        // exactly these eight were added to FastBit1024 in L1
+        // exactly these were added to FastBit1024 so far: eight in L1, four in L2
         const added = [...nm.keys()].filter((k) => !members(OLD, 'FastBit1024').has(k)).sort();
-        assert.deepStrictEqual(added, ['p:clone', 'p:copy', 'p:equals', 'p:imageLength', 'p:loadFrom', 'p:saveInto', 'p:serialize', 's:deserialize'].sort());
+        assert.deepStrictEqual(added, ['p:clone', 'p:copy', 'p:differenceSize', 'p:equals', 'p:imageLength', 'p:intersectionSize', 'p:loadFrom', 'p:prevSetBit', 'p:saveInto', 'p:serialize', 'p:unionSize', 's:deserialize'].sort());
     });
 });
 

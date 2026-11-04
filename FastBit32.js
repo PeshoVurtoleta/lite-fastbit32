@@ -537,6 +537,10 @@ function fb1024BadIndex(bit, limit) {
     throw new RangeError('FastBit1024: bit index must be an integer 0..' + (limit - 1) + ', got ' + fb1024Show(bit));
 }
 
+function fb1024BadFrom(from, cap) {
+    throw new RangeError('FastBit1024: from must be an integer -1..' + (cap - 1) + ', got ' + fb1024Show(from));
+}
+
 // Image format (saveInto / loadFrom): word 0 = FB1024_IMG_TAG | capacity ('FB'
 // in bits 16..31, format version 1 in bits 11..15, capacity in bits 0..10), then
 // ceil(capacity / 32) data words, LSB-first. FB1024_IMG_MASK selects bits 11..31.
@@ -704,6 +708,23 @@ export class FastBit1024 {
     }
 
     /**
+     * Highest set bit <= from (inclusive), or -1. Domain: from in -1..capacity-1
+     * (-1 returns -1, so `prevSetBit(b - 1)` ends a reverse walk); anything else
+     * throws. Loop-free: the mirror of nextSetBit and of the 32-bit prevSetBit.
+     */
+    prevSetBit(from) {
+        if (from !== -1 && ((from & 1023) !== from || from >= this._cap)) fb1024BadFrom(from, this._cap);
+        if (from < 0) return -1;
+        const w = from >>> 5;
+        const d = this._data[w] & ~(-2 << (from & 31));
+        if (d !== 0) return (w << 5) + (31 - Math.clz32(d));
+        const a = this._active & ~(-1 << w);
+        if (a === 0) return -1;
+        const w2 = 31 - Math.clz32(a);
+        return (w2 << 5) + (31 - Math.clz32(this._data[w2]));
+    }
+
+    /**
      * Every bit of `other` (a FastBit1024) is set here. O(non-empty words of
      * other). Capacities may differ: words above a capacity are always 0.
      * Anything that is not a FastBit1024 throws TypeError.
@@ -744,6 +765,38 @@ export class FastBit1024 {
             if (d[w] !== od[w]) return false;
         }
         return true;
+    }
+
+    /**
+     * Number of bits set both here and in `other` (a FastBit1024). Capacities
+     * may differ; the answer is exact. O(non-empty words of both); the SWAR
+     * popcount is inlined. Neither set changes. Anything that is not a
+     * FastBit1024 throws TypeError.
+     */
+    intersectionSize(other) {
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
+        const od = other._data, td = this._data;
+        let n = 0;
+        for (let a = other._active & this._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            let v = od[w] & td[w];
+            v = v - ((v >>> 1) & 0x55555555);
+            v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+            n += Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+        }
+        return n;
+    }
+
+    /** Number of bits set here or in `other` (a FastBit1024). Capacities may differ; exact. Neither set changes. */
+    unionSize(other) {
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
+        return this._n + other._n - this.intersectionSize(other);
+    }
+
+    /** Number of bits set here and not in `other` (a FastBit1024). Capacities may differ; exact. Neither set changes. */
+    differenceSize(other) {
+        if (other === null || typeof other !== 'object' || !(#brand in other)) fb1024BadOther(other);
+        return this._n - this.intersectionSize(other);
     }
 
     /**
