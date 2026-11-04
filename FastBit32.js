@@ -512,7 +512,10 @@ export function forEachMaskUnion(maskA, maskB, callback) {
 // S6), every FastBit1024 method that takes an index FAILS CLOSED (SC-5): a bad
 // index throws RangeError (a Symbol/BigInt throws TypeError on `&`) and writes
 // nothing; the argument's own conversion runs once, before the throw. Every op
-// is loop-free except forEach/hasAll/hasAny/clear (O(non-empty words)).
+// is loop-free except forEach/hasAll/hasAny/clear/copy/equals/intersectionSize/
+// unionSize/differenceSize (O(non-empty words)), saveInto/loadFrom (O(image
+// words), and loadFrom rewrites all 32 words; the cold serialize/deserialize
+// reuse them, clone reuses copy) and addRange/removeRange (O(words touched)).
 //
 // State lives in underscore fields (_cap, _active, _full, _n, _data): they are
 // internal, and writing them voids the invariants below.
@@ -535,6 +538,10 @@ function fb1024BadOther(other) {
 
 function fb1024BadIndex(bit, limit) {
     throw new RangeError('FastBit1024: bit index must be an integer 0..' + (limit - 1) + ', got ' + fb1024Show(bit));
+}
+
+function fb1024BadRange(lo, hi, cap) {
+    throw new RangeError('FastBit1024: range must be integers 0 <= lo <= hi <= ' + cap + ', got ' + fb1024Show(lo) + ', ' + fb1024Show(hi));
 }
 
 function fb1024BadFrom(from, cap) {
@@ -821,6 +828,50 @@ export class FastBit1024 {
         this._active = 0;
         this._full = 0;
         this._n = 0;
+        return this;
+    }
+
+    /** Set every bit in half-open [lo, hi), 0 <= lo <= hi <= capacity; RangeError before any write; returns this. O(words touched). */
+    addRange(lo, hi) {
+        const cap = this._cap;
+        if ((lo & 2047) !== lo || (hi & 2047) !== hi || hi > cap || lo > hi) fb1024BadRange(lo, hi, cap);
+        if (lo === hi) return this;
+        const last = hi - 1, w0 = lo >>> 5, w1 = last >>> 5, data = this._data;
+        let n = this._n, act = this._active, full = this._full;
+        for (let w = w0; w <= w1; w++) {
+            const m = (w === w0 ? -1 << (lo & 31) : -1) & (w === w1 ? ~(-2 << (last & 31)) : -1);
+            const old = data[w], d = old | m;
+            data[w] = d;
+            let v = m & ~old;
+            v = v - ((v >>> 1) & 0x55555555);
+            v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+            n += Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+            act |= 1 << w;
+            full |= (Math.clz32(~d) >>> 5) << w;
+        }
+        this._n = n; this._active = act; this._full = full;
+        return this;
+    }
+
+    /** Clear every bit in half-open [lo, hi), 0 <= lo <= hi <= capacity; RangeError before any write; returns this. O(words touched). */
+    removeRange(lo, hi) {
+        const cap = this._cap;
+        if ((lo & 2047) !== lo || (hi & 2047) !== hi || hi > cap || lo > hi) fb1024BadRange(lo, hi, cap);
+        if (lo === hi) return this;
+        const last = hi - 1, w0 = lo >>> 5, w1 = last >>> 5, data = this._data;
+        let n = this._n, act = this._active, full = this._full;
+        for (let w = w0; w <= w1; w++) {
+            const m = (w === w0 ? -1 << (lo & 31) : -1) & (w === w1 ? ~(-2 << (last & 31)) : -1);
+            const old = data[w], d = old & ~m;
+            data[w] = d;
+            let v = old & m;
+            v = v - ((v >>> 1) & 0x55555555);
+            v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+            n -= Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+            full &= ~(1 << w);
+            act &= ~((Math.clz32(d) >>> 5) << w);
+        }
+        this._n = n; this._active = act; this._full = full;
         return this;
     }
 
