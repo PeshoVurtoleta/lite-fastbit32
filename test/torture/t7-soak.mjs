@@ -16,6 +16,23 @@ function moduleNoop() { /* must not close over the tracked target */ }
 const STASH = [];    // soak-stash control: retains tracked FastBit32 instances
 const RETAIN = [];   // soak-retain control: retains an on-heap array per cycle
 
+// One cycle of the image retention row. A plain (non-async) function: the
+// results must not sit in the registers of run()'s suspended async frame
+// across the drain's awaits (that pinned the last iteration's three objects).
+function imgCycle(ctx, C1024, base, img, tracker, tag0, retain) {
+    let tag = tag0;
+    for (let k = 0; k < 1000; k++) {
+        const c = base.clone();
+        const d = C1024.deserialize(img);
+        const s = c.serialize();
+        ctx.h.SINK[0] = c.size ^ d.size ^ s.length;
+        tracker.track(c, moduleNoop, tag++, { audit: true });
+        tracker.track(d, moduleNoop, tag++, { audit: true });
+        tracker.track(s, moduleNoop, tag++, { audit: true });
+        if (retain) RETAIN.push(c, d, s);
+    }
+}
+
 export async function run(ctx) {
     const FB = ctx.FB;
     const Mapper = ctx.Mapper;
@@ -81,6 +98,30 @@ export async function run(ctx) {
         postDrainKB.push(Math.round(process.memoryUsage().heapUsed / 1024));
         if (live !== 0) fails.push('T7: segment ' + seg + ' did not drain to 0 (live=' + live + ')');
     }
+
+    // ---- G1 (1.6.0) FastBit1024 retention row --------------------------------
+    // 5 cycles of 1,000 x (clone + deserialize + serialize), every result
+    // tracked (number tag, module-scope cleanup); tracker.size() must drain to
+    // 0 after EVERY cycle. Under soak-retain each cycle's results are pinned on
+    // RETAIN, so size() stays >= 1 and this row FAILs too (ASSERTION 4).
+    const imgLive = [];
+    try {
+        const C1024 = ctx.FB1024;
+        const base = new C1024(1000);
+        for (let b = 0; b < 1000; b += 3) base.add(b);
+        const img = new Int32Array(33);
+        img[0] = 0x46420800 | 1000;
+        for (let b = 0; b < 1000; b += 3) img[1 + (b >>> 5)] |= 1 << (b & 31);
+        for (let cyc = 0; cyc < 5; cyc++) {
+            imgCycle(ctx, C1024, base, img, tracker, (1 << 24) + cyc * 3000, retain);
+            const live = await drain(50);
+            imgLive.push(live);
+            if (live !== 0) fails.push('T7: FastBit1024 image cycle ' + cyc + ' did not drain to 0 (live=' + live + '; clone / deserialize / serialize results retained)');
+        }
+    } catch (e) {
+        fails.push('T7: FastBit1024 image retention row threw ' + e.constructor.name + ': ' + e.message);
+    }
+    ctx.measures.fb1024ImgLive = imgLive;
 
     const finalLive = tracker.size();
     const findings = tracker.audit();

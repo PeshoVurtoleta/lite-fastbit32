@@ -201,6 +201,155 @@ function dedupMapper(Mapper) {
     };
 }
 
+// ---- G1 (1.6.0) save / restore / brand mutants ------------------------------
+// fb1024Img(C, m) returns a subclass of the library class whose saveInto,
+// loadFrom, copy, clone and static deserialize are line-for-line copies of the
+// shipped bodies (FastBit32.js 9f7f69c9), each mutation behind one flag of `m`.
+// With m = {} the subclass is FAITHFUL: test/torture.mjs re-runs T0 and T3 on
+// it and requires both green (control fidelity), so a control below fails its
+// tier because of its one flag, not because the copy drifted. The copies
+// cannot read the private brand; the unmutated guard is the library's own,
+// borrowed side-effect free through C.prototype.hasAny.call(this, other).
+// clone / deserialize construct `this` class (the library's construct the base
+// class), so every build form carries the mutation.
+const FB1024_TA = Object.getPrototypeOf(Int32Array.prototype);
+const mTaLength = Object.getOwnPropertyDescriptor(FB1024_TA, 'length').get;
+const mTaTag = Object.getOwnPropertyDescriptor(FB1024_TA, Symbol.toStringTag).get;
+function mShow(v) { return typeof v === 'number' ? String(v) : typeof v; }
+function mBadBuf(what) { throw new TypeError('FastBit1024: ' + what + ' must be an Int32Array'); }
+function mBadOffset(off) { throw new RangeError('FastBit1024: offset must be a non-negative integer that fits the image, got ' + mShow(off)); }
+function mBadImage(why) { throw new RangeError('FastBit1024: bad image: ' + why); }
+function mBadFit(cap) { throw new RangeError('FastBit1024: a set bit is at or above capacity ' + cap); }
+function mBadOther(o) { throw new TypeError('FastBit1024: expected a FastBit1024, got ' + (o === null ? 'null' : typeof o)); }
+function mPop(v) {
+    v = v - ((v >>> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+    return Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+}
+
+function fb1024Img(C, m) {
+    // the Int32Array brand (C-4) and its mutants M3 / M11 / M14
+    const brand = (x) => {
+        if (m.arrayBrand && Array.isArray(x)) return true;                       // M3
+        if (m.instanceofOnly) return x instanceof Int32Array;                     // M11
+        if (!ArrayBuffer.isView(x) || !(x instanceof Int32Array)) return false;
+        return m.noTag === true || mTaTag.call(x) === 'Int32Array';               // M14
+    };
+    // one length read, through the intrinsic getter; M13 reads `.length`
+    const len = (x) => (m.ownLength || Array.isArray(x) ? x.length : mTaLength.call(x));
+    // the set brand (C-3); M12 / M6 / equals use `instanceof` instead
+    const guard = (self, other, inst) => {
+        if (inst) { if (!(other instanceof C)) mBadOther(other); } else C.prototype.hasAny.call(self, other);
+    };
+    class Img extends C {
+        saveInto(out, offset = 0) {
+            if (!brand(out)) mBadBuf('out');
+            if ((offset & 0x3FFFFFFF) !== offset) mBadOffset(offset);
+            const L = (this._cap + 31) >>> 5;
+            if (offset + 1 + L > len(out)) mBadOffset(offset);
+            const d = this._data;
+            out[offset] = 0x46420800 | this._cap;
+            for (let w = 0; w < L; w++) out[offset + 1 + w] = d[w];
+            return offset + 1 + L;
+        }
+
+        loadFrom(src, offset = 0) {
+            if (!brand(src)) mBadBuf('src');
+            if ((offset & 0x3FFFFFFF) !== offset) mBadOffset(offset);
+            const n0 = len(src);
+            if (offset >= n0) mBadOffset(offset);
+            const h = src[offset];
+            if ((h & -2048) !== 0x46420800) mBadImage('header');
+            const icap = h & 2047;
+            if (icap < 1 || icap > 1024) mBadImage('capacity');
+            const L = (icap + 31) >>> 5, base = offset + 1;
+            if (base + L > n0) mBadImage('length');
+            const r = icap & 31;
+            if (m.noTail !== true && r !== 0 && (src[base + L - 1] & (-1 << r)) !== 0) mBadImage('bit >= image capacity'); // M1
+            const cap = this._cap;
+            if (m.noFit !== true && icap > cap) {                                                                       // M2
+                const cw = cap >>> 5, cr = cap & 31;
+                if (cr !== 0 && (src[base + cw] & (-1 << cr)) !== 0) mBadFit(cap);
+                for (let w = cr !== 0 ? cw + 1 : cw; w < L; w++) if (src[base + w] !== 0) mBadFit(cap);
+            }
+            const lim = icap < cap ? icap : cap, lw = (lim + 31) >>> 5, lm = ~(-2 << ((lim - 1) & 31));
+            const d = this._data;
+            let act = 0, full = 0, n = 0;
+            for (let w = 0; w < 32; w++) {
+                const v = w < lw ? (w === lw - 1 && m.noMask !== true ? src[base + w] & lm : src[base + w] | 0) : 0;  // C-14 mask
+                d[w] = v;
+                n += mPop(v);
+                act |= ((Math.clz32(v) >>> 5) ^ 1) << w;
+                if (m.noFull !== true) full |= (Math.clz32(~v) >>> 5) << w;                                             // M5
+            }
+            this._active = act;
+            this._full = full;
+            this._n = n;
+            return base + L;
+        }
+
+        static deserialize(src, offset = 0) {
+            const s = new this(1024);
+            s.loadFrom(src, offset);
+            const c = src[offset] & 2047, a = s._active, hw = 31 - Math.clz32(a);
+            if ((m.noCapRange !== true && (c < 1 || c > 1024)) || (a !== 0 && (hw << 5) + (31 - Math.clz32(s._data[hw])) >= c)) mBadImage('header'); // R6
+            if (m.noCap !== true) s._cap = c;                                                                          // r1 M8
+            return s;
+        }
+
+        copy(other) {
+            guard(this, other, m.copyInstanceof === true);                                                             // M12
+            if (other === this) return this;
+            if (m.copyEarlyN === true) this._n = other._n;                                                             // r1 M3
+            const oa = other._active;
+            if (m.copyNoFit !== true && oa !== 0) {                                                                    // M4
+                const w = 31 - Math.clz32(oa), hi = (w << 5) + (31 - Math.clz32(other._data[w]));
+                if (hi >= this._cap) mBadFit(this._cap);
+            }
+            const d = this._data, od = other._data;
+            for (let a = this._active | oa; a !== 0; a &= a - 1) {
+                const w = 31 - Math.clz32(a & -a);
+                d[w] = od[w];
+            }
+            this._active = oa;
+            this._full = other._full;
+            this._n = other._n;
+            return this;
+        }
+
+        clone() { return new this.constructor(this._cap).copy(this); }
+    }
+    if (m.hasAllInstanceof === true) {                                                                                 // M12
+        Img.prototype.hasAll = function hasAll(other) {
+            guard(this, other, true);
+            if ((other._active & ~this._active) !== 0) return false;
+            const od = other._data, td = this._data;
+            for (let a = other._active; a !== 0; a &= a - 1) { const w = 31 - Math.clz32(a & -a); if ((od[w] & ~td[w]) !== 0) return false; }
+            return true;
+        };
+    }
+    if (m.hasAnyInstanceof === true) {                                                                                 // M12 / r1 M6
+        Img.prototype.hasAny = function hasAny(other) {
+            guard(this, other, true);
+            const od = other._data, td = this._data;
+            for (let a = other._active & this._active; a !== 0; a &= a - 1) { const w = 31 - Math.clz32(a & -a); if ((od[w] & td[w]) !== 0) return true; }
+            return false;
+        };
+    }
+    if (m.equalsInstanceof === true) {
+        Img.prototype.equals = function equals(other) {
+            guard(this, other, true);
+            if (this._n !== other._n || this._active !== other._active) return false;
+            const d = this._data, od = other._data;
+            for (let a = this._active; a !== 0; a &= a - 1) { const w = 31 - Math.clz32(a & -a); if (d[w] !== od[w]) return false; }
+            return true;
+        };
+    }
+    return Img;
+}
+
+export function fb1024Faithful(C) { return fb1024Img(C, {}); }
+
 function flipOracle(oracle) {
     // one corrupted function: popcount off by one -> every T5 count check diverges
     return { ...oracle, oCount: (v) => oracle.oCount(v) + 1 };
@@ -221,6 +370,22 @@ export const CONTROLS = {
     'nextcomb-nosentinel': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextCombNoSentinel(ctx.FB); } },
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },
     'oracle-flip': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.oracle = flipOracle(ctx.oracle); } },
+    // G1 (1.6.0) save / restore / brand, all cheap; C-14 race controls are child-process only
+    'fb1024-img-notail': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTail: true }); } },
+    'fb1024-img-nofit': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noFit: true }); } },
+    'fb1024-img-array': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { arrayBrand: true }); } },
+    'fb1024-copy-nofit': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyNoFit: true }); } },
+    'fb1024-img-nofull': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noFull: true }); } },
+    'fb1024-img-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { instanceofOnly: true }); } },
+    'fb1024-set-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyInstanceof: true, hasAllInstanceof: true, hasAnyInstanceof: true }); } },
+    'fb1024-img-length': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { ownLength: true }); } },
+    'fb1024-img-notag': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTag: true }); } },
+    'fb1024-copy-early-n': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyEarlyN: true }); } },
+    'fb1024-hasany-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { hasAnyInstanceof: true }); } },
+    'fb1024-equals-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { equalsInstanceof: true }); } },
+    'fb1024-deser-nocap': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCap: true }); } },
+    'fb1024-img-nomask': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noMask: true }); } },
+    'fb1024-deser-norange': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCapRange: true }); } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },
     'budget-major': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.budgetMajor = true; } },
     'bop-box': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.bopBox = true; } },

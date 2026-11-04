@@ -14,7 +14,7 @@
 
 import * as h from './torture/harness.mjs';
 import { buildBaseCtx } from './torture/context.mjs';
-import { CONTROLS, CONTROL_NAMES, suggest } from './torture/controls.mjs';
+import { CONTROLS, CONTROL_NAMES, suggest, fb1024Faithful } from './torture/controls.mjs';
 
 // ---- guard 1: --expose-gc ------------------------------------------------
 if (typeof globalThis.gc !== 'function') {
@@ -147,6 +147,21 @@ for (const name of ORDER) {
     console.error('[' + name + '] fails=' + r.fails.length + ' green=' + r.green);
 }
 
+// ---- control fidelity: the G1 mutant controls subclass a line-for-line copy
+// (controls.mjs fb1024Img). With no flag set that copy must keep T0 and T3
+// green, so each fb1024-img / -copy / -set / -deser control fails its tier
+// because of its one flag, not because the copy drifted from FastBit32.js.
+{
+    const fctx = buildBaseCtx(seed);
+    fctx.FB1024 = fb1024Faithful(fctx.FB1024);
+    for (const name of ['T0', 'T3']) {
+        const r = await runTier(name, fctx);
+        for (const f of r.fails) allFails.push('control fidelity (faithful fb1024Img copy) ' + f);
+        totalGreen += r.green;
+        console.error('[' + name + ' faithful fb1024Img copy] fails=' + r.fails.length + ' green=' + r.green);
+    }
+}
+
 // MEASURE lines (stderr only)
 const m = ctx.measures;
 if (m.bopByLane) {
@@ -176,6 +191,26 @@ if (m.fb1024T0) console.error('MEASURE FastBit1024 T0 coverage ' + JSON.stringif
 if (m.sharedHasAllBop !== undefined) console.error('MEASURE shared-site sharedHasAll = ' + Number(m.sharedHasAllBop).toFixed(3) + ' B/op, sharedForEach = ' + Number(m.sharedForEachBop).toFixed(3) + ' B/op [gated <0.1]');
 if (m.closureScavenges !== undefined) console.error('MEASURE forEach-closure lane scavenges over 2e6 = ' + m.closureScavenges + ' [gated <=2]');
 if (m.budgetBytesPerOp !== undefined) console.error('MEASURE budget bytesPerOp = ' + m.budgetBytesPerOp + ' (diagnostic); manual-gate verdict=' + m.budgetVerdict + ' major=' + m.budgetMajor + ' maxMs=' + Number(m.budgetMaxMs).toFixed(2));
+if (m.fb1024ImgLanes) {
+    for (const lane of m.fb1024ImgLanes) {
+        console.error('MEASURE FastBit1024 image lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
+    }
+}
+if (m.fb1024ImgScavenges !== undefined) console.error('MEASURE FastBit1024 image scavenge lane (saveInto+loadFrom+copy+equals) over 2e6 = ' + m.fb1024ImgScavenges + ' [gated <=2]');
+if (m.fb1024ImgAlloc) {
+    for (const lane of m.fb1024ImgAlloc) {
+        console.error('MEASURE FastBit1024 must-fail lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(1) + ' B/op (K=512, window0 ' + Number(lane.window0).toFixed(1) + ', ' + lane.valid + ' valid) [gated >=100]');
+    }
+}
+if (m.fb1024ImgD8) {
+    const d = m.fb1024ImgD8;
+    if (d.skip !== undefined) console.error('MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: ' + d.skip);
+    else console.error('MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=' + d.loads + ' per 1e5 loads [gated <=2], box control=' + d.box + ' [gated >=2], result=' + d.result);
+}
+if (m.fb1024ImgT0) console.error('MEASURE FastBit1024 T0 image laws ' + JSON.stringify(m.fb1024ImgT0) + ' [gated: 0 failed, fullLoads>=20 crossLoads>=100]');
+if (m.fb1024ImgT3) console.error('MEASURE FastBit1024 T3 image rows ' + JSON.stringify(m.fb1024ImgT3) + ' [gated: 0 failed]');
+if (m.fb1024Sab) console.error('MEASURE FastBit1024 T3 SAB row ' + JSON.stringify(m.fb1024Sab) + ' [gated: br 0, torn>=20 per scenario, rounds>=10]');
+if (m.fb1024ImgLive) console.error('MEASURE FastBit1024 T7 image retention live per cycle=[' + m.fb1024ImgLive.join(',') + '] [gated: 0 each]');
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);
 
 h.stopScavengeWatch();

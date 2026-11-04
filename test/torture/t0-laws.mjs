@@ -165,6 +165,7 @@ export function run(ctx) {
     // a broken variant (T9 control) may throw mid-sequence: that is a FAIL row, never a crash
     try { fb1024Laws(ctx, F); } catch (e) { F('FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     try { s5StaticWalks(ctx, F); } catch (e) { F('S5 static walks threw ' + e.constructor.name + ': ' + e.message); }
+    try { fb1024ImageLaws(ctx, F); } catch (e) { F('FastBit1024 image laws threw ' + e.constructor.name + ': ' + e.message); }
     return { fails, green };
 }
 
@@ -339,4 +340,158 @@ function fb1024Laws(ctx, F) {
     // counts it, so a T0 minimum could never fail. T5 gates it from the oracle.
     if (!(acqHigh >= 100) || !(clearBig >= 3)) F('FB1024 coverage: acquires in words >= 16 ' + acqHigh + ' (need >= 100), clears at cap >= 512 with a high word set ' + clearBig + ' (need >= 3) -- fail closed');
     ctx.measures.fb1024T0 = { fullBig, acqHigh, clearBig };
+}
+
+// ---- G1 (1.6.0) FastBit1024 image laws -------------------------------------
+// Over a PRIVATE xorshift stream (seeded from ctx.seed; the harness stream the
+// other rows read is unchanged): 16 capacities x 7 densities x 2 reps. The
+// truth is a bit list (the model) and a naive image builder (header + LSB-first
+// words), never the class. Per set: imageLength; saveInto at an offset > 0
+// writes exactly the naive image and nothing outside it; loadFrom into a junk
+// receiver; serialize === the naive image; deserialize (and its JSON path)
+// keeps the image capacity; copy; clone (independent of its source); equals
+// both ways, across capacities, after a one-bit change, and against the model
+// for a random second set; cross-capacity loads (into 1024; a fitting
+// 1024-image into this capacity); a three-image arena with chained offsets.
+// fb1024Invariants (I1-I4) after every load / copy / clone / deserialize.
+// Coverage gated (fail closed): >= 20 loads carrying a full (-1) word (the
+// fb1024-img-nofull control's teeth) and >= 100 cross-capacity loads.
+const G1_CAPS = [1, 2, 31, 32, 33, 63, 64, 65, 500, 511, 512, 513, 993, 1000, 1023, 1024];
+const G1_DENS = [0, 5, 100, 500, 900, 995, 1000];
+
+function g1Image(cap, bits) {
+    const a = new Int32Array(1 + ((cap + 31) >>> 5));
+    a[0] = 0x46420800 | cap;
+    for (let i = 0; i < bits.length; i++) a[1 + (bits[i] >>> 5)] |= 1 << (bits[i] & 31);
+    return a;
+}
+
+function fb1024ImageLaws(ctx, F) {
+    const C = ctx.FB1024;
+    const inv = ctx.oracle.fb1024Invariants;
+    const KEY = new Int32Array(1);
+    KEY[0] = (ctx.seed ^ 0x3c6ef372) | 0 || 0x2545f491;
+    const rnd = (n) => { let x = KEY[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; KEY[0] = x; return (x >>> 0) % n; };
+    const model = (cap, dens) => { const b = []; for (let i = 0; i < cap; i++) if (rnd(1000) < dens) b.push(i); return b; };
+    const mk = (cap, bits) => { const s = new C(cap); for (let i = 0; i < bits.length; i++) s.add(bits[i]); return s; };
+    const failed = Object.create(null);
+    const bad = (law, msg) => { if (failed[law] === undefined) { failed[law] = 0; F('FB1024 image law ' + law + ': ' + msg); } failed[law]++; };
+    // raw bits of s equal the model list, capacity is `cap`, I1-I4 hold
+    const same = (s, cap, bits) => {
+        if (s._cap !== cap) return '_cap ' + s._cap + ' want ' + cap;
+        const want = new Uint8Array(1024);
+        for (let i = 0; i < bits.length; i++) want[bits[i]] = 1;
+        for (let b = 0; b < 1024; b++) if (((s._data[b >>> 5] >>> (b & 31)) & 1) !== want[b]) return 'bit ' + b + ' is ' + (want[b] ^ 1);
+        return inv(s);
+    };
+    const sameList = (x, y) => { if (x.length !== y.length) return false; for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false; return true; };
+    let laws = 0, fullLoads = 0, crossLoads = 0;
+    const law = (name, cap, fn) => {
+        laws++;
+        let why;
+        try { why = fn(); } catch (e) { why = 'threw ' + (e && e.constructor ? e.constructor.name : typeof e) + ' "' + (e && e.message) + '"'; }
+        if (why !== null) bad(name, why + ' (cap ' + cap + ')');
+    };
+    for (let rep = 0; rep < 14; rep++) {
+        for (const cap of G1_CAPS) {
+            const dens = G1_DENS[rep % 7];
+            const bits = model(cap, dens);
+            const L = (cap + 31) >>> 5;
+            const img = g1Image(cap, bits);
+            let full = false;
+            for (let w = 1; w < img.length; w++) if (img[w] === -1) full = true;
+            const a = mk(cap, bits);
+            law('imageLength', cap, () => (a.imageLength === 1 + L ? null : 'imageLength ' + a.imageLength + ' want ' + (1 + L)));
+            law('saveInto writes exactly the image', cap, () => {
+                const off = 1 + rnd(3);
+                const out = new Int32Array(off + 1 + L + 2).fill(0x5A5A5A5A);
+                const ret = a.saveInto(out, off);
+                if (ret !== off + 1 + L) return 'returned ' + ret + ' want ' + (off + 1 + L);
+                for (let i = 0; i < out.length; i++) {
+                    const want = i >= off && i < off + 1 + L ? img[i - off] : 0x5A5A5A5A;
+                    if (out[i] !== want) return 'out[' + i + '] = ' + out[i] + ' want ' + want;
+                }
+                return null;
+            });
+            law('loadFrom into a junk receiver', cap, () => {
+                const r = mk(cap, model(cap, rnd(1001)));
+                const ret = r.loadFrom(img, 0);
+                if (ret !== img.length) return 'returned ' + ret;
+                if (full) fullLoads++;
+                return same(r, cap, bits);
+            });
+            law('serialize is the image', cap, () => {
+                const s = a.serialize();
+                if (!(s instanceof Int32Array) || s.length !== img.length) return 'length ' + s.length;
+                for (let i = 0; i < img.length; i++) if (s[i] !== img[i]) return 'word ' + i;
+                return null;
+            });
+            law('deserialize keeps the image capacity', cap, () => {
+                const d = C.deserialize(img);
+                if (full) fullLoads++;
+                const v = same(d, cap, bits);
+                if (v !== null) return v;
+                const j = C.deserialize(new Int32Array(JSON.parse(JSON.stringify(Array.from(img)))));
+                return same(j, cap, bits);
+            });
+            law('copy', cap, () => {
+                const r = mk(cap, model(cap, rnd(1001)));
+                if (r.copy(a) !== r) return 'copy did not return this';
+                return same(r, cap, bits);
+            });
+            law('clone is equal and independent', cap, () => {
+                const c = a.clone();
+                const v = same(c, cap, bits);
+                if (v !== null) return v;
+                const t = rnd(cap);
+                c.toggle(t);
+                const v2 = same(a, cap, bits);
+                return v2 === null ? null : 'source moved after a clone write: ' + v2;
+            });
+            law('equals', cap, () => {
+                const c = mk(cap, bits);
+                if (!a.equals(c) || !c.equals(a) || !a.equals(a)) return 'equal sets not equal';
+                const wide = mk(1024, bits);
+                if (!a.equals(wide) || !wide.equals(a)) return 'equal bits across capacity 1024 not equal';
+                const t = rnd(cap);
+                c.toggle(t);
+                if (a.equals(c) || c.equals(a)) return 'equal after toggling bit ' + t;
+                const bb = model(cap, G1_DENS[rnd(7)]);
+                const b = mk(cap, bb);
+                if (a.equals(b) !== sameList(bits, bb)) return 'equals vs the model for a random set';
+                return null;
+            });
+            law('cross-capacity loads', cap, () => {
+                const big = mk(1024, model(1024, rnd(1001)));
+                big.loadFrom(img);
+                crossLoads++;
+                const v = same(big, 1024, bits);
+                if (v !== null) return 'into 1024: ' + v;
+                const wideImg = g1Image(1024, bits);
+                const r = mk(cap, model(cap, rnd(1001)));
+                r.loadFrom(wideImg);
+                crossLoads++;
+                const v2 = same(r, cap, bits);
+                if (v2 !== null) return 'fitting 1024-image: ' + v2;
+                const r2 = mk(cap, model(cap, rnd(1001)));
+                r2.copy(mk(1024, bits));
+                const v3 = same(r2, cap, bits);
+                return v3 === null ? null : 'copy from a fitting 1024-set: ' + v3;
+            });
+            law('arena', cap, () => {
+                const cap2 = G1_CAPS[rnd(G1_CAPS.length)];
+                const bits2 = model(cap2, G1_DENS[rnd(7)]);
+                const b = mk(cap2, bits2);
+                const arena = new Int32Array(1 + a.imageLength * 2 + b.imageLength);
+                const o1 = a.saveInto(arena, 1), o2 = b.saveInto(arena, o1), o3 = a.saveInto(arena, o2);
+                if (o3 !== arena.length) return 'chained save ends at ' + o3 + ' want ' + arena.length;
+                const x = new C(cap), y = new C(cap2), z = new C(cap);
+                const p1 = x.loadFrom(arena, 1), p2 = y.loadFrom(arena, p1), p3 = z.loadFrom(arena, p2);
+                if (p1 !== o1 || p2 !== o2 || p3 !== o3) return 'chained load offsets ' + [p1, p2, p3] + ' want ' + [o1, o2, o3];
+                return same(x, cap, bits) || same(y, cap2, bits2) || same(z, cap, bits);
+            });
+        }
+    }
+    if (!(fullLoads >= 20) || !(crossLoads >= 100)) F('FB1024 image laws coverage: loads with a full word ' + fullLoads + ' (need >= 20), cross-capacity loads ' + crossLoads + ' (need >= 100) -- fail closed');
+    ctx.measures.fb1024ImgT0 = { laws, fullLoads, crossLoads, failedLaws: Object.keys(failed).length };
 }

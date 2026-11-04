@@ -35,6 +35,11 @@
 //     (foreach-closure control) churns dozens. Gate <= 2.
 
 import { measureOps, GcProfiler, checkNoGc } from '@zakkster/lite-gc-profiler';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MASK = 0x0F0F0F0F;       // int32 mask (no bit 31): signedness-safe
 const BOX = [{}];              // tagged-elements array: forces a HeapNumber box
@@ -281,6 +286,9 @@ export async function run(ctx) {
     }
     measures.fb1024ByLane = fb1024ByLane;
 
+    // ---- G1 (1.6.0) image lanes (see fb1024ImageLanes) ----------------------
+    try { await fb1024ImageLanes(ctx, fails, baseline, bopBox); } catch (e) { fails.push('T6 FB1024 img: lanes threw ' + e.constructor.name + ': ' + e.message); }
+
     // ---- shared megamorphic site: actually measured, NaN fails closed -------
     const si = new FB(0).union(h.LANE_INT32[2]); // -1
     const shHasAll = (i) => { h.SINK[0] = h.sharedHasAll(si, MASK) ? 1 : 0; };
@@ -304,4 +312,159 @@ export async function run(ctx) {
 
     void green;
     return { fails, green };
+}
+
+// ---- G1 (1.6.0) FastBit1024 image lanes ------------------------------------
+// Zero lanes (measureBop, gated < 0.1 B/op with >= 3 valid windows, NaN fails
+// closed; the bop-box control turns each red): saveInto (offset 3), loadFrom
+// (offset 2; the image holds -1, bit-30, bit-31, 0x7FFFFFFF and 0x55555555
+// words, values outside the 31-bit Smi range), copy (alternating two sources,
+// so every op writes), equals (a twin: the full scan; and a set differing in
+// one word). Scavenge lane: the four mixed, 2e6 ops, gated <= 2. Must-fail
+// lanes: serialize / deserialize / clone allocate by contract; a small-K
+// window (K = 512, so a window stays far below the 4 MB semi-space) must read
+// >= 100 B/op, else the lane is blind. d8 lane: test/torture/d8-loadfrom.mjs
+// on a pointer-compressed d8 (`FASTBIT_D8` or ~/.jsvu/engines/v8/d8),
+// scavenges counted between MARK lines: loadFrom <= 2 per 1e5 loads, the
+// box control >= 2; no d8 (or not pointer-compressed) prints SKIP, never PASS.
+const IMG_WORDS = new Int32Array([-1, 0x40000000, -0x80000000, 0x7FFFFFFF, 0x55555555, -0x55555556, 0x40000001, 0]);
+const IMG_HOLD = [null, null, null, null];   // small-K results escape here
+const SMALL_K = 512;
+
+async function smallKWindow(h, fn, K) {
+    const before = h.newSpaceUsed();
+    const m0 = h.minorCount();
+    for (let i = 0; i < K; i++) fn(i);
+    const after = h.newSpaceUsed();
+    await h.settle(10);
+    return { delta: after - before, scav: h.minorCount() - m0 };
+}
+
+async function measureSmallK(h, fn, base, K) {
+    let valid = 0, min = Infinity, window0 = NaN;
+    for (let w = 0; w < 8; w++) {
+        const b = await smallKWindow(h, base, K);
+        const r = await smallKWindow(h, fn, K);
+        const per = (r.delta - b.delta) / K;
+        if (w === 0) { window0 = per; continue; }
+        if (!(r.delta >= 0) || !(b.delta >= 0) || r.scav > 0 || b.scav > 0) continue;
+        valid++;
+        if (per < min) min = per;
+    }
+    return { perOp: valid >= 3 ? min : NaN, valid, window0 };
+}
+
+function d8Lane() {
+    const bin = process.env.FASTBIT_D8 || join(homedir(), '.jsvu', 'engines', 'v8', 'd8');
+    if (!existsSync(bin)) return { skip: 'no d8 on this host (' + bin + '; set FASTBIT_D8 or install jsvu v8)' };
+    let pc = null;
+    try { pc = JSON.parse(readFileSync(join(dirname(bin), 'v8_build_config.json'), 'utf8')).pointer_compression; } catch (e) { pc = null; }
+    if (pc !== true) return { skip: 'd8 at ' + bin + ' is not a pointer-compressed build (v8_build_config.json pointer_compression=' + pc + ')' };
+    const script = fileURLToPath(new URL('./d8-loadfrom.mjs', import.meta.url));
+    const r = spawnSync(bin, ['--expose-gc', '--trace-gc', '--min-semi-space-size=1', '--max-semi-space-size=1', script], { encoding: 'utf8', timeout: 60000 });
+    const out = (r.stdout || '') + (r.stderr || '');
+    const counts = {};
+    let cur = null;
+    let result = null;
+    for (const line of out.split('\n')) {
+        const mb = /^MARK begin (\S+)/.exec(line);
+        if (mb) { cur = mb[1]; counts[cur] = 0; continue; }
+        if (line.startsWith('MARK end')) { cur = null; continue; }
+        if (cur !== null && line.includes('Scavenge')) counts[cur]++;
+        const rm = /^RESULT size=(\d+) want=(\d+)/.exec(line);
+        if (rm) result = rm[1] === rm[2];
+    }
+    return { loads: counts.loadFrom, box: counts.box, result, tail: out.split('\n').filter((l) => l && !l.includes('Scavenge')).slice(-3).join(' | ') };
+}
+
+async function fb1024ImageLanes(ctx, fails, baseline, bopBox) {
+    const C = ctx.FB1024;
+    const h = ctx.h;
+    const o = ctx.oracle;
+    const lanes = [];
+    const fill = (s, rot) => { for (let w = 0; w < 32; w++) for (let b = 0; b < 32; b++) if (((IMG_WORDS[(w + rot) & 7] >>> b) & 1) === 1) s.add((w << 5) + b); return s; };
+    const lane = async (name, op, after) => {
+        let m;
+        try { m = await h.measureBop(op, baseline); } catch (e) { fails.push('T6 FB1024 img: lane ' + name + ' threw ' + e.constructor.name + ': ' + e.message); return; }
+        lanes.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
+        if (m.valid < 3 || !(m.perOp < 0.1)) fails.push('T6 FB1024 img: lane ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        const v = after();
+        if (v !== null) fails.push('T6 FB1024 img: lane ' + name + ' ' + v);
+    };
+    const src = fill(new C(1024), 0);
+    const src2 = fill(new C(1024), 3);
+    const twin = fill(new C(1024), 0);
+    const snapSrc = o.fb1024Snapshot(src);
+    // the image, built naively at offset 2 (header + LSB-first words)
+    const IMG = new Int32Array(40);
+    IMG[2] = 0x46420800 | 1024;
+    for (let w = 0; w < 32; w++) IMG[3 + w] = IMG_WORDS[w & 7];
+    const OUT = new Int32Array(40);
+
+    await lane('saveInto', (i) => {
+        h.SINK[0] = src.saveInto(OUT, 3);
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    }, () => {
+        for (let w = 0; w < 33; w++) if (OUT[3 + w] !== IMG[2 + w]) return 'wrote word ' + w + ' = ' + OUT[3 + w] + ' want ' + IMG[2 + w];
+        return o.fb1024Snapshot(src) === snapSrc ? null : 'moved its source';
+    });
+    const recv = new C(1024);
+    await lane('loadFrom (-1 / bit-30 / bit-31 words)', (i) => {
+        h.SINK[0] = recv.loadFrom(IMG, 2);
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    }, () => {
+        const r = o.fb1024Snapshot(recv);
+        return r === snapSrc ? null : 'loaded a wrong state';
+    });
+    const dst = new C(1024);
+    await lane('copy', (i) => {
+        dst.copy((i & 1) === 0 ? src : src2);
+        h.SINK[0] = dst._n;
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    }, () => {
+        const v = o.fb1024Invariants(dst);
+        return v === null ? null : 'left ' + v;
+    });
+    await lane('equals', (i) => {
+        h.SINK[0] = (src.equals(twin) ? 1 : 0) ^ (src.equals(src2) ? 2 : 0);
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    }, () => (h.SINK[0] === 1 ? null : 'answered ' + h.SINK[0] + ' want 1'));
+    ctx.measures.fb1024ImgLanes = lanes;
+
+    // scavenge lane: the four mixed, 2e6 ops
+    try {
+        const mix = (i) => {
+            h.SINK[0] = src.saveInto(OUT, 3);
+            h.SINK[1] = recv.loadFrom(IMG, 2);
+            dst.copy((i & 1) === 0 ? src : src2);
+            h.SINK[2] = src.equals(twin) ? 1 : 0;
+        };
+        const scav = await h.measureScavenges(mix, 2000000);
+        ctx.measures.fb1024ImgScavenges = scav;
+        if (!(scav <= 2)) fails.push('T6 FB1024 img: scavenge lane (saveInto + loadFrom + copy + equals) churned ' + scav + ' scavenges over 2e6 ops (expected <= 2)');
+    } catch (e) {
+        fails.push('T6 FB1024 img: scavenge lane threw ' + e.constructor.name + ': ' + e.message);
+    }
+
+    // must-fail lanes: allocating by contract, the detector must see >= 100 B/op
+    const alloc = [];
+    for (const [name, fn] of [
+        ['serialize', (i) => { IMG_HOLD[i & 3] = src.serialize(); }],
+        ['deserialize', (i) => { IMG_HOLD[i & 3] = C.deserialize(IMG, 2); }],
+        ['clone', (i) => { IMG_HOLD[i & 3] = src.clone(); }]
+    ]) {
+        let m;
+        try { m = await measureSmallK(h, fn, baseline, SMALL_K); } catch (e) { fails.push('T6 FB1024 img: must-fail lane ' + name + ' threw ' + e.constructor.name + ': ' + e.message); continue; }
+        alloc.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
+        if (m.valid < 3 || !(m.perOp >= 100)) fails.push('T6 FB1024 img: must-fail lane ' + name + ' = ' + Number(m.perOp).toFixed(1) + ' B/op, valid=' + m.valid + ' (expected >= 100 with >= 3 valid: the B/op detector is blind)');
+    }
+    IMG_HOLD.fill(null);
+    ctx.measures.fb1024ImgAlloc = alloc;
+
+    // d8 pointer-compressed lane
+    const d = d8Lane();
+    ctx.measures.fb1024ImgD8 = d;
+    if (d.skip === undefined) {
+        if (d.result !== true || !(d.loads <= 2) || !(d.box >= 2)) fails.push('T6 FB1024 img: d8 lane loadFrom scavenges=' + d.loads + ' (expected <= 2 per 1e5), box control=' + d.box + ' (expected >= 2), result=' + d.result + ' -- ' + d.tail);
+    }
 }
