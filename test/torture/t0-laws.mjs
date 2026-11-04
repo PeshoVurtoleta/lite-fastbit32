@@ -261,11 +261,15 @@ function s5StaticWalks(ctx, F) {
 // cap >= 128, >= 100 acquires in words >= 16, and >= 3 clears at cap >= 512
 // while a raw word >= 16 is non-zero (read from _data directly, not a method).
 // The fb1024-nofull (no _full summary) and fb1024-clear-low16 controls break I1/I2 here.
+// G2 (1.6.0) laws at the same checkpoints (fb1024G2 below), over a PRIVATE
+// xorshift seeded KEY[0] ^ 0x9e3779b9 before the first key() draw, so the h
+// and KEY streams -- and measures.fb1024T0 -- are unchanged.
 function fb1024Laws(ctx, F) {
     const C = ctx.FB1024;
     const h = ctx.h;
     const KEY = new Int32Array(1);
     KEY[0] = (h.nextU32() | 0) || 0x2545f491;
+    const g2 = fb1024G2(C, F, (KEY[0] ^ 0x9e3779b9) | 0);
     const key = (n) => { let x = KEY[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; KEY[0] = x; return (x >>> 0) % n; };
     const cb = (b) => { LIST.push(b); };
     let LIST = [];
@@ -334,12 +338,109 @@ function fb1024Laws(ctx, F) {
             if (s.isEmpty() !== (s.size === 0) || s.isFull() !== (s.size === cap)) F('FB1024 isEmpty/isFull vs size cap ' + cap);
             if ((s.nextClearBit() === -1) !== s.isFull()) F('FB1024 nextClearBit -1 iff isFull cap ' + cap);
             if (!s.hasAll(s) || s.hasAny(s) !== !s.isEmpty()) F('FB1024 hasAll/hasAny(self) cap ' + cap);
+            g2.check(s, cap, LIST);
         }
     }
     // fullBig is reported, not gated here: the forced pre-fill to capacity always
     // counts it, so a T0 minimum could never fail. T5 gates it from the oracle.
     if (!(acqHigh >= 100) || !(clearBig >= 3)) F('FB1024 coverage: acquires in words >= 16 ' + acqHigh + ' (need >= 100), clears at cap >= 512 with a high word set ' + clearBig + ' (need >= 3) -- fail closed');
     ctx.measures.fb1024T0 = { fullBig, acqHigh, clearBig };
+    ctx.measures.fb1024CountsT0 = g2.finish();
+}
+
+// ---- G2 (1.6.0) FastBit1024 prevSetBit + count laws ------------------------
+// check(s, cap, list) runs at every fb1024Laws checkpoint; list is s's forEach
+// list (ascending), the truth. prevSetBit: the bounded reverse walk
+// (prevSetBit(cap - 1), then prevSetBit(b - 1), at most cap + 1 steps) ===
+// list reversed; prevSetBit(cap - 1) === highest(); prevSetBit(-1) === -1;
+// prevSetBit(q) === the largest list bit <= q for a random q. Self: inter =
+// union = size, diff = 0. Pair (partner t, cap from G2_PCAPS; 1 in 4 a random
+// subset of s, else a density from G2_PDENS): inter symmetric; inter === a
+// naive t.has count over the list; union + inter === size + t.size; diff +
+// inter === size; hasAny === inter > 0; hasAll(t) === (t.differenceSize(s) ===
+// 0). Coverage, gated (fail closed): reverse walks over a non-empty set,
+// pairs with differing capacities, pairs sharing a non-empty word where t
+// holds a bit s lacks (a popcount of od[w] alone over-counts there), and
+// non-empty subset pairs (hasAll true). A COVERAGE miss (never a broken law)
+// gets up to 3 top-up rounds of 256 fresh random pairs from the same stream,
+// then fails closed. Controls: fb1024-prev-strict (M8) and
+// fb1024-inter-other-only (M9).
+const G2_PCAPS = [1, 33, 500, 1024];
+const G2_PDENS = [0, 10, 300, 700, 1000];
+const G2_SCAPS = [1, 31, 32, 33, 500, 1023, 1024];
+const G2_FLOOR = { walks: 300, diffCap: 300, sharedMiss: 100, subset: 50 };
+
+function fb1024G2(C, F, seed) {
+    const PK = new Int32Array(1);
+    PK[0] = seed || 0x2545f491;
+    const pk = (n) => { let x = PK[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; PK[0] = x; return (x >>> 0) % n; };
+    const cnt = { checks: 0, pairs: 0, walks: 0, diffCap: 0, sharedMiss: 0, subset: 0, topUp: 0, failedLaws: 0 };
+    const failed = Object.create(null);
+    const bad = (law, msg) => { if (failed[law] === undefined) { failed[law] = 0; cnt.failedLaws++; F('FB1024 G2 law ' + law + ': ' + msg); } failed[law]++; };
+    const check = (s, cap, list) => {
+        const L = list.length;
+        cnt.checks++;
+        const rev = [];
+        for (let b = s.prevSetBit(cap - 1), n = 0; b !== -1 && n <= cap; b = s.prevSetBit(b - 1), n++) rev.push(b);
+        let same = rev.length === L;
+        for (let i = 0; same && i < L; i++) if (rev[i] !== list[L - 1 - i]) same = false;
+        if (!same) bad('prevSetBit reverse walk', rev.length + ' bits, want ' + L + ' (forEach reversed) cap ' + cap);
+        if (L > 0) cnt.walks++;
+        if (s.prevSetBit(cap - 1) !== s.highest()) bad('prevSetBit(cap - 1) === highest', 'got ' + s.prevSetBit(cap - 1) + ' want ' + s.highest() + ' cap ' + cap);
+        if (s.prevSetBit(-1) !== -1) bad('prevSetBit(-1) === -1', 'got ' + s.prevSetBit(-1) + ' cap ' + cap);
+        const q = pk(cap);
+        let want = -1;
+        for (let i = 0; i < L && list[i] <= q; i++) want = list[i];
+        if (s.prevSetBit(q) !== want) bad('prevSetBit(q) === largest bit <= q', 'q ' + q + ' got ' + s.prevSetBit(q) + ' want ' + want + ' cap ' + cap);
+        if (s.intersectionSize(s) !== L || s.unionSize(s) !== L || s.differenceSize(s) !== 0) bad('self inter = union = size, diff = 0', 'inter ' + s.intersectionSize(s) + ' union ' + s.unionSize(s) + ' diff ' + s.differenceSize(s) + ' size ' + L + ' cap ' + cap);
+        const tcap = G2_PCAPS[pk(4)];
+        const t = new C(tcap);
+        if (pk(4) === 0) {
+            for (let i = 0; i < L && list[i] < tcap; i++) if (pk(2) === 0) t.add(list[i]);
+        } else {
+            const dens = G2_PDENS[pk(5)];
+            for (let b = 0; b < tcap; b++) if (pk(1000) < dens) t.add(b);
+        }
+        cnt.pairs++;
+        if (tcap !== cap) cnt.diffCap++;
+        const tn = t.size;
+        const inter = s.intersectionSize(t), back = t.intersectionSize(s);
+        let naive = 0;
+        for (let i = 0; i < L && list[i] < tcap; i++) if (t.has(list[i])) naive++;
+        for (let a = s._active & t._active; a !== 0; a &= a - 1) {
+            const w = 31 - Math.clz32(a & -a);
+            if ((t._data[w] & ~s._data[w]) !== 0) { cnt.sharedMiss++; break; }
+        }
+        const at = ' (caps ' + cap + ' / ' + tcap + ', sizes ' + L + ' / ' + tn + ')';
+        if (inter !== back) bad('inter symmetric', inter + ' vs ' + back + at);
+        if (inter !== naive) bad('inter === naive count', inter + ' want ' + naive + at);
+        if (s.unionSize(t) + inter !== L + tn) bad('union + inter === size + t.size', 'union ' + s.unionSize(t) + ' inter ' + inter + at);
+        if (s.differenceSize(t) + inter !== L) bad('diff + inter === size', 'diff ' + s.differenceSize(t) + ' inter ' + inter + at);
+        if (s.hasAny(t) !== inter > 0) bad('hasAny === inter > 0', 'hasAny ' + s.hasAny(t) + ' inter ' + inter + at);
+        const all = s.hasAll(t);
+        if (all !== (t.differenceSize(s) === 0)) bad('hasAll(t) === (t.differenceSize(s) === 0)', 'hasAll ' + all + ' t.diff ' + t.differenceSize(s) + at);
+        if (all && tn > 0) cnt.subset++;
+    };
+    const short = () => !(cnt.walks >= G2_FLOOR.walks) || !(cnt.diffCap >= G2_FLOOR.diffCap) || !(cnt.sharedMiss >= G2_FLOOR.sharedMiss) || !(cnt.subset >= G2_FLOOR.subset);
+    const finish = () => {
+        const list = [];
+        const push = (b) => { list.push(b); };
+        while (short() && cnt.failedLaws === 0 && cnt.topUp < 3) {
+            cnt.topUp++;
+            for (let r = 0; r < 256; r++) {
+                const cap = G2_SCAPS[pk(G2_SCAPS.length)];
+                const dens = G2_PDENS[pk(5)];
+                const s = new C(cap);
+                for (let b = 0; b < cap; b++) if (pk(1000) < dens) s.add(b);
+                list.length = 0;
+                s.forEach(push);
+                check(s, cap, list);
+            }
+        }
+        if (short()) F('FB1024 G2 coverage: non-empty reverse walks ' + cnt.walks + ' (need >= ' + G2_FLOOR.walks + '), differing-cap pairs ' + cnt.diffCap + ' (need >= ' + G2_FLOOR.diffCap + '), shared-word over-count pairs ' + cnt.sharedMiss + ' (need >= ' + G2_FLOOR.sharedMiss + '), non-empty subset pairs ' + cnt.subset + ' (need >= ' + G2_FLOOR.subset + ') after ' + cnt.topUp + ' top-up round(s) -- fail closed');
+        return cnt;
+    };
+    return { check, finish };
 }
 
 // ---- G1 (1.6.0) FastBit1024 image laws -------------------------------------

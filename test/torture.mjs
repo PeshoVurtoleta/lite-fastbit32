@@ -147,9 +147,9 @@ for (const name of ORDER) {
     console.error('[' + name + '] fails=' + r.fails.length + ' green=' + r.green);
 }
 
-// ---- control fidelity: the G1 mutant controls subclass a line-for-line copy
+// ---- control fidelity: the G1 / G2 mutant controls subclass a line-for-line copy
 // (controls.mjs fb1024Img). With no flag set that copy must keep T0 and T3
-// green, so each fb1024-img / -copy / -set / -deser control fails its tier
+// green, so each fb1024-img / -copy / -set / -deser / -prev / -inter control fails its tier
 // because of its one flag, not because the copy drifted from FastBit32.js.
 {
     const fctx = buildBaseCtx(seed);
@@ -186,7 +186,13 @@ if (m.fb1024ByLane) {
         console.error('MEASURE FastBit1024 acquire+release/has/nextClearBit/lowest/highest/cursor/hasAll/hasAny lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
     }
 }
+if (m.fb1024CountsByLane) {
+    for (const lane of m.fb1024CountsByLane) {
+        console.error('MEASURE FastBit1024 counts+prev (intersectionSize/unionSize/differenceSize vs sig1024 and a cap-500 set, prevSetBit walk) lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
+    }
+}
 if (m.fb1024Coverage) console.error('MEASURE FastBit1024 T5 coverage ' + JSON.stringify(m.fb1024Coverage) + ' [gated: fullBig>=50 acqHigh>=10000 fullHigh>=1000 rel31>=1000 clearBig>=20]');
+if (m.fb1024CountsT0) console.error('MEASURE FastBit1024 T0 prevSetBit/count laws ' + JSON.stringify(m.fb1024CountsT0) + ' [gated: 0 failed, walks>=300 diffCap>=300 sharedMiss>=100 subset>=50, <=3 top-up rounds]');
 if (m.fb1024T0) console.error('MEASURE FastBit1024 T0 coverage ' + JSON.stringify(m.fb1024T0) + ' [gated: acqHigh>=100 clearBig>=3; fullBig reported only, T5 gates it]');
 if (m.sharedHasAllBop !== undefined) console.error('MEASURE shared-site sharedHasAll = ' + Number(m.sharedHasAllBop).toFixed(3) + ' B/op, sharedForEach = ' + Number(m.sharedForEachBop).toFixed(3) + ' B/op [gated <0.1]');
 if (m.closureScavenges !== undefined) console.error('MEASURE forEach-closure lane scavenges over 2e6 = ' + m.closureScavenges + ' [gated <=2]');

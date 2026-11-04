@@ -96,7 +96,9 @@ export function run(ctx) {
 // matrix; the instance snapshot (_cap, _active, _full, _n, all 32 _data words) must not
 // move. Symbol, BigInt and a null-proto object must throw TypeError (from `&`
 // itself); every other row must be a RangeError. release() of a free slot
-// throws too. hasAll/hasAny throw TypeError on anything but a FastBit1024.
+// throws too. hasAll/hasAny and the three G2 counts throw TypeError on anything
+// but a FastBit1024. G2 prevSetBit takes the index rows except '-1' (its domain
+// is -1..cap-1, so '-1' is valid there and 'cap' is not).
 function fb1024BadInput(ctx, F) {
     const C = ctx.FB1024;
     const o = ctx.oracle;
@@ -106,8 +108,9 @@ function fb1024BadInput(ctx, F) {
         s.add(0).add(cap - 1).add(cap >> 1);
         const snap = o.fb1024Snapshot(s);
         for (const [tag, v] of o.fb1024BadInputs(cap)) {
-            for (const op of ['add', 'remove', 'toggle', 'has', 'release', 'nextSetBit']) {
+            for (const op of ['add', 'remove', 'toggle', 'has', 'release', 'nextSetBit', 'prevSetBit']) {
                 if (op === 'nextSetBit' && (tag === 'cap' || (tag === '1024' && cap === 1024))) continue; // from = cap is in domain
+                if (op === 'prevSetBit' && tag === '-1') continue; // from = -1 is in domain
                 let err = null;
                 try { s[op](v); } catch (e) { err = e; }
                 if (err === null) F('FB1024 ' + op + '(' + tag + ') did not throw (cap ' + cap + ')');
@@ -118,7 +121,7 @@ function fb1024BadInput(ctx, F) {
         // hasAll/hasAny take a FastBit1024 only: anything else is a TypeError, state unchanged
         for (const [tag, v] of [['undefined', undefined], ['null', null], ['{}', {}], ['{active:0}', { active: 0 }],
             ['{_active:0}', { _active: 0, _data: new Int32Array(32) }], ['FastBit32', new ctx.FB(2)], ['number', 5]]) {
-            for (const op of ['hasAll', 'hasAny']) {
+            for (const op of ['hasAll', 'hasAny', 'intersectionSize', 'unionSize', 'differenceSize']) {
                 let err = null;
                 try { s[op](v); } catch (e) { err = e; }
                 if (!(err instanceof TypeError)) F('FB1024 ' + op + '(' + tag + ') ' + (err === null ? 'returned' : 'threw ' + err.constructor.name) + ', want TypeError');
@@ -278,8 +281,8 @@ function fb1024ImageBadInput(ctx, F) {
         }
     }
 
-    // ---- Q-8: forgery / Proxy / lying-_active x copy / equals / hasAll / hasAny ----
-    for (const op of ['copy', 'equals', 'hasAll', 'hasAny']) {
+    // ---- Q-8: forgery / Proxy / lying-_active x copy / equals / hasAll / hasAny (+ G2 counts) ----
+    for (const op of ['copy', 'equals', 'hasAll', 'hasAny', 'intersectionSize', 'unionSize', 'differenceSize']) {
         const forgery = Object.create(C.prototype);
         forgery._cap = 1024; forgery._active = 1; forgery._full = 0; forgery._n = 1; forgery._data = new Int32Array(32); forgery._data[0] = 8;
         const real = mk(1024, [3, 900]);

@@ -286,6 +286,45 @@ export async function run(ctx) {
     }
     measures.fb1024ByLane = fb1024ByLane;
 
+    // ---- G2 (1.6.0) FastBit1024 counts + prevSetBit lane (its own measure key,
+    // so fb1024ByLane keeps its 2 lanes): the same two pool shapes; the three
+    // counts vs sig1024 and vs a cap-500 partner (full -1 words, bit-31 words,
+    // a 0x55555555 word: every SWAR input outside the 31-bit Smi range), plus
+    // the bounded prevSetBit reverse walk over sig1024 and one prevSetBit probe
+    // into the pool. Pool, sig1024 and partner snapshots are re-checked
+    // unchanged; the six counts are re-checked against a naive has() count. Gated
+    // < 0.1 B/op with >= 3 valid windows, NaN fails closed; bop-box turns it red.
+    const fb1024CountsByLane = [];
+    const part500 = new C1024(500);
+    for (let b = 0; b < 500; b++) if ((b >>> 5) === 3 || (b >>> 5) === 9 ? true : (b >>> 5) === 6 ? (b & 1) === 0 : (b % 3) === 0 || (b & 31) === 31) part500.add(b);
+    const snapSig = ctx.oracle.fb1024Snapshot(sig1024), snapPart = ctx.oracle.fb1024Snapshot(part500);
+    for (const freeSlot of [5, 1000]) {
+        const pool = new C1024();
+        for (let i = 0; i < 1024; i++) if (i !== freeSlot) pool.add(i);
+        const snap = ctx.oracle.fb1024Snapshot(pool);
+        const op = (i) => {
+            let acc = pool.intersectionSize(sig1024) ^ (pool.unionSize(sig1024) << 11) ^ (pool.differenceSize(sig1024) << 22);
+            acc = (acc + (pool.intersectionSize(part500) ^ (pool.unionSize(part500) << 11) ^ (part500.differenceSize(pool) << 22))) | 0;
+            for (let b = sig1024.prevSetBit(1023), n = 0; b !== -1 && n <= 1024; b = sig1024.prevSetBit(b - 1), n++) acc = (acc + b) | 0; // bounded
+            h.SINK[0] = acc ^ pool.prevSetBit(i & 1023);
+            if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+        };
+        const m = await h.measureBop(op, baseline);
+        const name = 'free slot ' + freeSlot + ' (word ' + (freeSlot >>> 5) + ')';
+        if (ctx.oracle.fb1024Snapshot(pool) !== snap || ctx.oracle.fb1024Snapshot(sig1024) !== snapSig || ctx.oracle.fb1024Snapshot(part500) !== snapPart) fails.push('T6 FB1024 counts+prev: ' + name + ' a set moved during measurement');
+        let ni = 0, np = 0;
+        for (let b = 0; b < 1024; b++) { if (b !== freeSlot && sig1024.has(b)) ni++; if (b < 500 && b !== freeSlot && part500.has(b)) np++; }
+        if (pool.intersectionSize(sig1024) !== ni || pool.unionSize(sig1024) !== 1023 + sig1024.size - ni || pool.differenceSize(sig1024) !== 1023 - ni ||
+            pool.intersectionSize(part500) !== np || pool.unionSize(part500) !== 1023 + part500.size - np || part500.differenceSize(pool) !== part500.size - np) {
+            fails.push('T6 FB1024 counts+prev: ' + name + ' counts disagree with a naive has() count (inter ' + ni + ' / ' + np + ')');
+        }
+        fb1024CountsByLane.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
+        if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 FB1024 counts+prev: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        }
+    }
+    measures.fb1024CountsByLane = fb1024CountsByLane;
+
     // ---- G1 (1.6.0) image lanes (see fb1024ImageLanes) ----------------------
     try { await fb1024ImageLanes(ctx, fails, baseline, bopBox); } catch (e) { fails.push('T6 FB1024 img: lanes threw ' + e.constructor.name + ': ' + e.message); }
 

@@ -203,8 +203,9 @@ function dedupMapper(Mapper) {
 
 // ---- G1 (1.6.0) save / restore / brand mutants ------------------------------
 // fb1024Img(C, m) returns a subclass of the library class whose saveInto,
-// loadFrom, copy, clone and static deserialize are line-for-line copies of the
-// shipped bodies (FastBit32.js 9f7f69c9), each mutation behind one flag of `m`.
+// loadFrom, copy, clone and static deserialize (G1) and prevSetBit,
+// intersectionSize, unionSize and differenceSize (G2) are line-for-line copies
+// of the shipped bodies (FastBit32.js 9bf93553), each mutation behind one flag of `m`.
 // With m = {} the subclass is FAITHFUL: test/torture.mjs re-runs T0 and T3 on
 // it and requires both green (control fidelity), so a control below fails its
 // tier because of its one flag, not because the copy drifted. The copies
@@ -221,6 +222,7 @@ function mBadOffset(off) { throw new RangeError('FastBit1024: offset must be a n
 function mBadImage(why) { throw new RangeError('FastBit1024: bad image: ' + why); }
 function mBadFit(cap) { throw new RangeError('FastBit1024: a set bit is at or above capacity ' + cap); }
 function mBadOther(o) { throw new TypeError('FastBit1024: expected a FastBit1024, got ' + (o === null ? 'null' : typeof o)); }
+function mBadFrom(from, cap) { throw new RangeError('FastBit1024: from must be an integer -1..' + (cap - 1) + ', got ' + mShow(from)); }
 function mPop(v) {
     v = v - ((v >>> 1) & 0x55555555);
     v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
@@ -318,6 +320,44 @@ function fb1024Img(C, m) {
         }
 
         clone() { return new this.constructor(this._cap).copy(this); }
+
+        // G2: the in-word mask keeps bit `from` (`-2 <<`); M8 drops it (`-1 <<`)
+        prevSetBit(from) {
+            if (from !== -1 && ((from & 1023) !== from || from >= this._cap)) mBadFrom(from, this._cap);
+            if (from < 0) return -1;
+            const w = from >>> 5;
+            const d = this._data[w] & (m.prevStrict === true ? ~(-1 << (from & 31)) : ~(-2 << (from & 31)));      // M8
+            if (d !== 0) return (w << 5) + (31 - Math.clz32(d));
+            const a = this._active & ~(-1 << w);
+            if (a === 0) return -1;
+            const w2 = 31 - Math.clz32(a);
+            return (w2 << 5) + (31 - Math.clz32(this._data[w2]));
+        }
+
+        // G2: M9 popcounts od[w] alone instead of od[w] & td[w]
+        intersectionSize(other) {
+            guard(this, other, false);
+            const od = other._data, td = this._data;
+            let n = 0;
+            for (let a = other._active & this._active; a !== 0; a &= a - 1) {
+                const w = 31 - Math.clz32(a & -a);
+                let v = m.interOtherOnly === true ? od[w] : od[w] & td[w];                                           // M9
+                v = v - ((v >>> 1) & 0x55555555);
+                v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+                n += Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+            }
+            return n;
+        }
+
+        unionSize(other) {
+            guard(this, other, false);
+            return this._n + other._n - this.intersectionSize(other);
+        }
+
+        differenceSize(other) {
+            guard(this, other, false);
+            return this._n - this.intersectionSize(other);
+        }
     }
     if (m.hasAllInstanceof === true) {                                                                                 // M12
         Img.prototype.hasAll = function hasAll(other) {
@@ -384,6 +424,9 @@ export const CONTROLS = {
     'fb1024-hasany-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { hasAnyInstanceof: true }); } },
     'fb1024-equals-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { equalsInstanceof: true }); } },
     'fb1024-deser-nocap': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCap: true }); } },
+    // G2 (1.6.0) prevSetBit / counts
+    'fb1024-prev-strict': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { prevStrict: true }); } },
+    'fb1024-inter-other-only': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { interOtherOnly: true }); } },
     'fb1024-img-nomask': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noMask: true }); } },
     'fb1024-deser-norange': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCapRange: true }); } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },

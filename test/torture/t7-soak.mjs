@@ -5,6 +5,10 @@
 // C3: no onLeak is registered (owner-less finalizations would fire it on every
 // clean drop); the gate is size() === 0 && audit().length === 0. The soak-stash
 // control pins instances on a module array -> size() never returns to 0.
+// G2 (1.6.0): each cycle also churns one FastBit1024 (the three counts vs a
+// long-lived partner, a prevSetBit reverse walk), tracked with tags from
+// FB1024_TAG0 (disjoint from the FastBit32 and image-row ranges) and stashed
+// under soak-stash like the FastBit32 instances.
 
 import {
     createLeakTracker,
@@ -15,6 +19,20 @@ function moduleNoop() { /* must not close over the tracked target */ }
 
 const STASH = [];    // soak-stash control: retains tracked FastBit32 instances
 const RETAIN = [];   // soak-retain control: retains an on-heap array per cycle
+const FB1024_TAG0 = 1 << 23; // 8388608 + cycle: above 4096 * 64 FastBit32 tags, below the image row's 1 << 24
+
+// One G2 churn instance per cycle. A plain (non-async) function, like imgCycle,
+// so the instance never sits in run()'s suspended async frame across a drain.
+function fb1024Churn(ctx, C1024, partner, cyc, tracker, stash) {
+    const cap = 1 + ((cyc * 37) & 1023);
+    const s = new C1024(cap);
+    for (let b = cyc & 7; b < cap; b += 1 + (cyc & 15)) s.add(b);
+    let acc = s.intersectionSize(partner) ^ s.unionSize(partner) ^ s.differenceSize(partner) ^ partner.differenceSize(s);
+    for (let b = s.prevSetBit(cap - 1), n = 0; b !== -1 && n <= cap; b = s.prevSetBit(b - 1), n++) acc = (acc + b) | 0;
+    ctx.h.SINK[0] = acc;
+    tracker.track(s, moduleNoop, FB1024_TAG0 + cyc, { audit: true });
+    if (stash) STASH.push(s);
+}
 
 // One cycle of the image retention row. A plain (non-async) function: the
 // results must not sit in the registers of run()'s suspended async frame
@@ -52,6 +70,9 @@ export async function run(ctx) {
     const SEGMENTS = 4;                 // 1024 cycles each
     const PER_SEG = CYCLES / SEGMENTS;
     const names = Array.from({ length: 16 }, (_, i) => 'C' + i);
+    const C1024 = ctx.FB1024;
+    const partner = new C1024(700);
+    for (let b = 0; b < 700; b += 5) partner.add(b);
 
     // Drain the tracker to 0 (gc + macrotask so FinalizationRegistry fires), up
     // to `rounds` rounds. Returns the live count reached.
@@ -90,6 +111,7 @@ export async function run(ctx) {
             // in external memory and heapUsed would not see it). ~16MB over 4096
             // cycles -> trips the post-drain heap gate while tracker.size() == 0.
             if (retain) RETAIN.push(new Array(512).fill((seg << 16) | c));
+            fb1024Churn(ctx, C1024, partner, seg * PER_SEG + c, tracker, stash);
             void mapper;
         }
         const live = await drain(50);
@@ -106,7 +128,6 @@ export async function run(ctx) {
     // RETAIN, so size() stays >= 1 and this row FAILs too (ASSERTION 4).
     const imgLive = [];
     try {
-        const C1024 = ctx.FB1024;
         const base = new C1024(1000);
         for (let b = 0; b < 1000; b += 3) base.add(b);
         const img = new Int32Array(33);
