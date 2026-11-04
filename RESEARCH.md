@@ -1524,3 +1524,83 @@ PROPOSAL (LiteLogLogN/.handoff/PROPOSAL-roaringset.md, sha256/8 95713727, ruled
 - Roaring containers pay off per 2^16-key chunk; at 1024 bits (128 B of data)
   they buy nothing. The ROADMAP already names `FastBit1024` as the design-parity
   source for RoaringSet's in-container summary.
+
+## 17. FastBit1024 consumer-value set: the G1 research burst (2026-11-04)
+
+The research burst RESEARCH 16.2 asked for, before any planner pass on new
+`FastBit1024` surface: G1 save / restore + copy / equals, G2 cross-set counts
+under RoaringSet's names, a set / clear range, `prevSetBit`. Candidate bodies
+were written as a SUBCLASS of the shipped 1.5.0 class (FastBit32.js
+sha256/8 21b08802, untouched) and probed; the draft surface, the alternatives
+and the Q-ids are in `.handoff/PROPOSAL-fastbit1024.md` (gitignored), the
+probes and logs in `.handoff/research/fastbit1024-g1/`. Apple M4 Pro, Node
+v26.8.2 / V8 14.6; the DETERMINISTIC probes ran untimed on a busy host
+(load1 14-23), which counts and correctness do not depend on.
+
+### 17.1 Findings
+
+- **Every zero-GC shape allocates nothing** (DETERMINISTIC, the torture
+  harness's `measureBop`, K = 65536, 7 / 7 valid windows, 0 scavenges in
+  2e6 ops): `saveInto` into a caller's `Int32Array`, `loadFrom`, `copy`,
+  `equals`, `intersectionSize` / `unionSize` / `differenceSize`,
+  `addRange` + `removeRange`, `prevSetBit` and a reverse `prevSetBit` walk.
+  The allocating shapes are the controls: `serialize()` 200 B,
+  `deserialize` / `clone` 264 B, `Array.from(serialize())` 2,320 B.
+- **The first restore shape failed open.** Validating the image in one pass
+  and writing it in a second pass that re-reads the source broke I4 on a
+  `Proxy` over an `Int32Array` (it passes `instanceof Int32Array`), and
+  accepted a non-int32 element from one. The brand
+  `ArrayBuffer.isView(x) && x instanceof Int32Array` reads an internal slot,
+  so a Proxy fails it; a genuine `Int32Array` has no element accessors, so the
+  two passes read the same words. Accepting a plain Array (the JSON shape)
+  safely would need one read per element into a scratch plus a re-entrancy
+  check; the PROPOSAL recommends the caller's `new Int32Array(arr)` instead
+  (200 B, once).
+- **Two holes remain open (review r1).** `instanceof FastBit1024` also passes a
+  Proxy and an `Object.create(FastBit1024.prototype)` forgery, and `copy`
+  trusts their count and summaries (I3 broken). A subclass `length` getter is
+  user code: a lying length silently truncates a restore. Both are maintainer
+  questions (PROPOSAL Q-8, Q-9): a private-name brand or a rebuild for the
+  first, the intrinsic `length` getter for the second.
+- **Fail-closed restore holds** on the v2 shape: 1,320 hostile cases over 16
+  capacities (bit at capacity, header / length / offset damage, wrong source
+  types, oversize images and copies that do not fit), every one throwing with
+  the receiver unchanged field for field; 19,200 round-trip checks rebuild
+  I1-I4 exactly.
+- **The range ops agree with the shipped single-word helpers**: 1,232,886
+  `addRange` / `removeRange` calls (every half-open range at seven
+  capacities), words equal to the `FastBit32.rangeMask` construction and the
+  count delta equal to `FastBit32#countRange`. `prevSetBit` matched a naive
+  scan on 278,200 queries; the counts matched a naive loop on 4,000 random
+  pairs, differing capacities included. 10 / 10 non-equivalent mutants were
+  killed.
+- **Inlining** (REPORTED, V8 14.6, limit 460 B): every new hot body is under
+  the limit (prevSetBit 225, addRange 315, intersectionSize 130, copy 233,
+  equals 139 B); only the cold `loadFrom` is over it (589 B).
+- **A self-describing image beats raw words.** A headerless restore reads
+  the receiver's word count, so a longer image is silently truncated; one
+  header word (tag, version, capacity) turns that and an arena offset error
+  into a RangeError.
+- **Prior art.** lemire `fromWords` wraps the caller's array unchecked (the
+  aliasing shape this package must not copy); its `equals` and `*_size` ops
+  accept differing lengths, as fastbit's `hasAll` / `hasAny` do. lite-o1
+  `BitSet` throws on a capacity mismatch and has no serialization, copy or
+  equals. StratifiedBitset's `predecessor` is strict (`< x`), unlike
+  `FastBit32.prevSetBit` (`<= from`).
+- **Not measured**: the summary-rebuild timing (PENDING: the quiet lock
+  refused, exit 76, NOISY host).
+
+### 17.2 Open questions (ruled in the PROPOSAL)
+
+Q-1 capacity mismatch in cross-set ops; Q-2 range convention; Q-3 save format
+and its zero-GC shape (reusable by RoaringSet R2); Q-4 copy / equals / clone;
+Q-5 ship order; Q-6 prevSetBit domain; Q-7 an `intersects` alias; Q-8
+trusting `other` in copy; Q-9 reading an image's length.
+
+RULED by the maintainer 2026-11-04, every one on its recommended option
+(quoted in the PROPOSAL, section 7): keep fastbit's capacity rule (exact
+answers across capacities; a write fails closed when a bit does not fit);
+half-open ranges; the versioned `Int32Array` image with `saveInto` /
+`loadFrom`; copy, equals and clone; all four groups in 1.6.0; inclusive
+`prevSetBit`; no `intersects` alias; a private-name brand on every cross-set
+method (hasAll / hasAny included); the intrinsic `length` getter, read once.
