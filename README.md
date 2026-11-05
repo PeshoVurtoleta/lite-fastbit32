@@ -37,9 +37,9 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 2254 B whole module (1.5.0 build; see note) | ~8KB | ~6KB |
+| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 3511 B whole module (see note) | ~8KB | ~6KB |
 
-> Bundle sizes of the 1.5.0 build, measured 2026-10-11 (not re-measured for 1.6.0, which adds FastBit1024 members): an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2254 B. `{ FastBit32 }` alone: 1059 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1485 B (1302 B in 1.4.0).
+> Bundle sizes of the 1.6.0 build (REPORTED: one run, 2026-11-05): an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 3511 B (2254 B in 1.5.0). `{ FastBit32 }` alone: 1059 B (unchanged; it carries no FastBit1024 code). `{ FastBit1024 }` alone: 2350 B (1006 B in 1.5.0; the 1.6.0 members are on the class, so they ship with it). Every export except FastBit1024 (VERSION included): 1486 B (1485 B in 1.5.0).
 
 > FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0).
 

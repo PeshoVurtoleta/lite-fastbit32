@@ -3,7 +3,7 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
-## [Unreleased]
+## [1.6.0] - 2026-11-05
 
 ### Added
 
@@ -72,12 +72,12 @@ claimed for it.
   exact-fit offsets, shared memory, another realm, the documented recipes
   run from the docs), and test/BundleShake.test.mjs (bundle content: an
   `export { FastBit32 }` bundle carries no FastBit1024 code). `npm test` 822
-  tests in 107 suites, 822 pass, 0 fail (DETERMINISTIC; run 2026-11-05, Node
-  v26.8.2).
-  `npm run torture` exit 0 with 34 / 34 T6 lanes verified TurboFan (a separate
-  run, 2026-11-05, after the tree-shake fix). `npm run test:perf` is PENDING
-  for this cycle (timed, needs a quiet host); no timing figure is claimed for
-  any of the above.
+  tests in 107 suites, 822 pass, 0 fail; `npm run test:types` exit 0;
+  `npm run torture` exit 0 with 34 / 34 T6 lanes verified TurboFan;
+  `npm run torture:controls` exit 0 (43 controls and the unknown-name probe)
+  (DETERMINISTIC; release runs on the 1.6.0 tree, 2026-11-05, Node v26.8.2).
+  `npm run test:perf` and `gate:release` run before publish
+  (`prepublishOnly`); no timing figure is claimed for any of the above.
 
 ### Changed
 
@@ -97,6 +97,10 @@ claimed for it.
   `export { FastBit32 }` bundle is 1059 B min+gz again (1134 B before the
   fix; REPORTED: esbuild 0.28.2 --bundle --format=esm --minify | gzip -9, one
   run, 2026-11-05).
+- Bundle sizes (REPORTED: esbuild 0.28.2 --bundle --format=esm --minify |
+  gzip -9, one run, 2026-11-05, the 1.6.0 tree): whole module 2254 -> 3511 B;
+  `{ FastBit32 }` 1059 -> 1059 B; `{ FastBit1024 }` 1006 -> 2350 B; every
+  export except FastBit1024, VERSION included, 1485 -> 1486 B.
 
 ### Changed (test harness only; no library change)
 
@@ -221,11 +225,9 @@ claimed for it.
   0, 5 rounds valid, 0 HOST, 0 demoted, findings none; REPORTED FLAT select
   (density) FAIL 2 / ok 3, FLAT select (position) FAIL 0 / ok 5. Single runs;
   not a guarantee for other hosts.
-- Tests: `npm test` 734 tests in 86 suites, 734 pass, 0 fail (DETERMINISTIC;
-  qa run 2026-11-04). The 8 new cases (test/WitnessProgramQA.test.mjs) pin
-  the warm-up count at P 5, 11, 12 and 13, and pin it for foilWordScan.
-  `npm run verify` exit 0 on 2026-11-04 at 726 tests, test:perf 21/21,
-  torture major 0.
+- Tests: 8 new cases (test/WitnessProgramQA.test.mjs) pin the warm-up count
+  at P 5, 11, 12 and 13, and pin it for foilWordScan. The release test count
+  and gate results are under Added.
 
 ### Fixed (docs)
 
