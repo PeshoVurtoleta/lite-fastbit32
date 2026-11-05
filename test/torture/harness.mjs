@@ -252,12 +252,134 @@ export function warmShared(FB) {
     }
 }
 
+// ---- verified optimization (T6 measures TurboFan code, never a guess) -----
+// Under host load the CONCURRENT tier-up of a measured op (or of a method it
+// calls without inlining) may not finish before the windows run, and
+// unoptimized code boxes every unsigned-double value: one non-inlined
+// unoptimized callee reads exactly 16.000 B/op (.handoff/evidence/t6-fix/
+// repro.log). So measureBop FORCES optimization synchronously
+// (%OptimizeFunctionOnNextCall compiles on the next call, on this thread, so
+// host load cannot delay it) and VERIFIES it before and after every window.
+// The natives are compiled lazily through `new Function` so this module still
+// PARSES without --allow-natives-syntax (plain `node --test` files import it);
+// without the flag measureBop fails closed with a "needs" reason.
+//
+// %GetOptimizationStatus bits on Node 26.8.2 / V8 14.6.202.34, decoded
+// empirically (.handoff/evidence/t6-fix/status-bits.log): 0x1 is-function,
+// 0x2 never-optimize (seen under --jitless; %NeverOptimizeFunction does not set
+// it here, its op reads 0x4001 / 0x41), 0x8 optimized (any tier), 0x10 Maglev, 0x20 TurboFan,
+// 0x40 interpreted, 0x80 marked for optimization on next call, 0x1000 lite
+// mode (--jitless), 0x2000 marked for deoptimization, 0x4000 Sparkplug, 0x20000
+// lazy (never compiled). Maglev does NOT count: only the TurboFan bit verifies.
+export const OPT_NEVER = 0x2;
+export const OPT_MAGLEV = 0x10;
+export const OPT_TURBOFAN = 0x20;
+export const OPT_INTERPRETED = 0x40;
+export const OPT_MARKED = 0x80;
+export const OPT_LITE = 0x1000;
+export const OPT_DEOPT_MARKED = 0x2000;
+export const OPT_BASELINE = 0x4000;
+export const NATIVES_REMEDY = 'node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs';
+
+let NATIVES = null;                        // null = not tried, false = unavailable
+function natives() {
+    if (NATIVES === null) {
+        try {
+            NATIVES = {
+                prep: new Function('f', '%PrepareFunctionForOptimization(f);'),
+                opt: new Function('f', '%OptimizeFunctionOnNextCall(f);'),
+                never: new Function('f', '%NeverOptimizeFunction(f);'),
+                status: new Function('f', 'return %GetOptimizationStatus(f);')
+            };
+        } catch (e) {
+            NATIVES = false;
+        }
+    }
+    return NATIVES;
+}
+
+// Decode a status word for a failure message (cold path).
+export function describeOptStatus(s) {
+    const parts = [];
+    if (s & OPT_TURBOFAN) parts.push('turbofan');
+    if (s & OPT_MAGLEV) parts.push('maglev');
+    if (s & OPT_BASELINE) parts.push('sparkplug');
+    if (s & OPT_INTERPRETED) parts.push('interpreted');
+    if (s & OPT_MARKED) parts.push('marked');
+    if (s & OPT_DEOPT_MARKED) parts.push('marked-for-deopt');
+    if (s & OPT_NEVER) parts.push('never-optimize');
+    if (s & OPT_LITE) parts.push('jitless');
+    return '0x' + s.toString(16) + ' ' + parts.join('+');
+}
+
+// null when T6 can force and verify TurboFan here; else the reason (the entry
+// guard prints it with NATIVES_REMEDY). The probe is a fresh function forced to
+// TurboFan, so --no-opt / --jitless / a disabled TurboFan are refused too.
+export function optimizationUnavailable() {
+    const N = natives();
+    if (N === false) return '--allow-natives-syntax is not set: T6 must force and verify TurboFan optimization of every measured op (needs --allow-natives-syntax).';
+    const probe = new Function('x', 'return (x + 1) | 0; // t6 natives probe');
+    N.prep(probe);
+    probe(1); probe(2);
+    N.opt(probe);
+    probe(3);
+    const s = N.status(probe);
+    if ((s & OPT_TURBOFAN) === 0) return 'TurboFan is unavailable (forced probe status ' + describeOptStatus(s) + '; remove --no-opt / --jitless / --max-opt): T6 measures verified-optimized code only.';
+    return null;
+}
+
+// Every function-valued own property (methods, getters, setters) of each class
+// AND of its prototype, walking both chains (so a control subclass contributes
+// its overrides AND the base methods); constructors and builtins excluded.
+export function collectMethods(...classes) {
+    const out = new Set();
+    const take = (o, stop) => {
+        for (let p = o; p !== null && p !== stop; p = Object.getPrototypeOf(p)) {
+            for (const k of Reflect.ownKeys(p)) {
+                if (k === 'constructor' || k === 'prototype') continue;
+                const d = Object.getOwnPropertyDescriptor(p, k);
+                for (const f of [d.value, d.get, d.set]) {
+                    if (typeof f === 'function' && !/^class[\s{]/.test(Function.prototype.toString.call(f))) out.add(f);
+                }
+            }
+        }
+    };
+    for (const C of classes) {
+        take(C, Function.prototype);
+        take(C.prototype, Object.prototype);
+    }
+    return [...out];
+}
+
+// Verify the tracked set. opFn and baselineFn must carry the TurboFan bit. A
+// callee must carry it OR still be marked (marked = never entered unoptimized
+// since forcing: it was inlined, or this op does not reach it; its first
+// non-inlined call compiles it synchronously). Nothing may be marked for
+// deoptimization. Returns null or the reason (cold).
+function verifyTracked(N, opFn, baselineFn, callees, when) {
+    const so = N.status(opFn);
+    if ((so & OPT_TURBOFAN) === 0 || (so & OPT_DEOPT_MARKED) !== 0) return 'op ' + when + ' (status ' + describeOptStatus(so) + ')';
+    const sb = N.status(baselineFn);
+    if ((sb & OPT_TURBOFAN) === 0 || (sb & OPT_DEOPT_MARKED) !== 0) return 'baseline ' + when + ' (status ' + describeOptStatus(sb) + ')';
+    for (let i = 0; i < callees.length; i++) {
+        const s = N.status(callees[i]);
+        if ((s & (OPT_TURBOFAN | OPT_MARKED)) === 0 || (s & OPT_DEOPT_MARKED) !== 0) {
+            return 'callee ' + (callees[i].name || '#' + i) + ' ' + when + ' and not inlined (status ' + describeOptStatus(s) + ')';
+        }
+    }
+    return null;
+}
+
 // ---- steady-state B/op measurement ----------------------------------------
 // new-space delta over K ops with no scavenge in the window, minus an
 // empty-loop baseline. Minimum over windows 1..n-1; window 0 printed, never
-// floored on. < 3 valid windows => FAIL (perOp = NaN).
+// floored on. < 3 valid windows => FAIL (perOp = NaN). Every window measures
+// VERIFIED TurboFan code (see "verified optimization" above): an unverified
+// lane returns perOp NaN and a `status` reason, never a number.
 const K = 65536;
 const WINDOWS = 8;
+const WARM = 1024;
+const BOP_OPTS = ['callees', 'withhold'];
 
 // A window reads `after` SYNCHRONOUSLY (right after the K-op loop, before any
 // allocation the scavenge count could hide), THEN awaits a settle so the
@@ -277,13 +399,42 @@ async function runWindow(opFn) {
 
 // opFn(i) writes its int result into SINK. baselineFn(i) does the loop + sink
 // write with no op. Both measured across WINDOWS windows.
-export async function measureBop(opFn, baselineFn) {
+// opts.callees: every function opFn may reach (collectMethods of the classes
+//   it touches, plus local callbacks). Each is force-marked and verified, so a
+//   callee TurboFan does not inline still runs TurboFan code.
+// opts.withhold: control only (bop-unoptimized) -- %NeverOptimizeFunction on
+//   opFn before forcing; the lane MUST fail closed with "op not optimized".
+// runWindow itself is not forced: its loop passes a Smi `i` (< K) and calls
+// opFn and baselineFn through the same site, so its own cost cancels in
+// net = op - baseline.
+export async function measureBop(opFn, baselineFn, opts) {
+    const o0 = opts === undefined ? {} : opts;
+    for (const k of Object.keys(o0)) if (!BOP_OPTS.includes(k)) throw new TypeError('measureBop: unknown option "' + k + '" (known: ' + BOP_OPTS.join(', ') + ')');
+    const callees = o0.callees === undefined ? [] : o0.callees;
+    const fail = (why) => ({ perOp: NaN, valid: 0, window0: NaN, status: 'not verified-optimized: ' + why });
+    const N = natives();
+    if (N === false) return fail('needs --allow-natives-syntax (' + NATIVES_REMEDY + ')');
+    if (o0.withhold === true) N.never(opFn);
+    if (o0.withhold === 'callee') N.never(callees[0]);
+    N.prep(opFn);
+    N.prep(baselineFn);
+    for (let i = 0; i < callees.length; i++) N.prep(callees[i]);
+    for (let i = 0; i < WARM; i++) { baselineFn(i); opFn(i); }
+    N.opt(opFn);
+    N.opt(baselineFn);
+    for (let i = 0; i < callees.length; i++) N.opt(callees[i]);
+    baselineFn(0);
+    opFn(0);
+    const pre = verifyTracked(N, opFn, baselineFn, callees, 'not optimized');
+    if (pre !== null) return fail(pre);
     const perWindow = [];
     let window0 = NaN;
     let valid = 0;
     for (let w = 0; w < WINDOWS; w++) {
         const b = await runWindow(baselineFn);
         const o = await runWindow(opFn);
+        const mid = verifyTracked(N, opFn, baselineFn, callees, 'deoptimized during measurement (window ' + w + ')');
+        if (mid !== null) return fail(mid);
         const net = o.delta - b.delta;
         const perOp = net / K;
         if (w === 0) { window0 = perOp; continue; }
@@ -295,7 +446,7 @@ export async function measureBop(opFn, baselineFn) {
     }
     let min = Infinity;
     for (let i = 0; i < perWindow.length; i++) if (perWindow[i] < min) min = perWindow[i];
-    return { perOp: valid >= 3 ? min : NaN, valid, window0 };
+    return { perOp: valid >= 3 ? min : NaN, valid, window0, status: 'optimized' };
 }
 
 export { K as BOP_K, WINDOWS as BOP_WINDOWS };

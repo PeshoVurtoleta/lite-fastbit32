@@ -206,8 +206,11 @@ function dedupMapper(Mapper) {
 // loadFrom, copy, clone and static deserialize (G1) and prevSetBit,
 // intersectionSize, unionSize and differenceSize (G2) are line-for-line copies
 // of the shipped bodies (FastBit32.js 9bf93553), each mutation behind one flag of `m`.
-// With m = {} the subclass is FAITHFUL: test/torture.mjs re-runs T0 and T3 on
-// it and requires both green (control fidelity), so a control below fails its
+// L3 addRange / removeRange (FastBit32.js 929849db) are thin overrides: the
+// library body runs through super, and the flag adds one wrong step after it
+// (M6 sets bit hi too, M7 puts _active back). With m = {} the subclass is
+// FAITHFUL: test/torture.mjs re-runs T0, T3 and T5 on it and requires all green
+// (control fidelity), so a control below fails its
 // tier because of its one flag, not because the copy drifted. The copies
 // cannot read the private brand; the unmutated guard is the library's own,
 // borrowed side-effect free through C.prototype.hasAny.call(this, other).
@@ -358,6 +361,21 @@ function fb1024Img(C, m) {
             guard(this, other, false);
             return this._n - this.intersectionSize(other);
         }
+
+        // L3: M6 makes the range INCLUSIVE ([lo, hi] instead of [lo, hi)); M7
+        // leaves _active stale after a removeRange that empties a word
+        addRange(lo, hi) {
+            const r = super.addRange(lo, hi);
+            if (m.rangeInclusive === true && lo < hi && hi < this._cap) this.add(hi);                                // M6
+            return r;
+        }
+
+        removeRange(lo, hi) {
+            const act = this._active;
+            const r = super.removeRange(lo, hi);
+            if (m.removeKeepsActive === true) this._active = act;                                                     // M7
+            return r;
+        }
     }
     if (m.hasAllInstanceof === true) {                                                                                 // M12
         Img.prototype.hasAll = function hasAll(other) {
@@ -427,11 +445,19 @@ export const CONTROLS = {
     // G2 (1.6.0) prevSetBit / counts
     'fb1024-prev-strict': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { prevStrict: true }); } },
     'fb1024-inter-other-only': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { interOtherOnly: true }); } },
+    // L3 (1.6.0) addRange / removeRange
+    'fb1024-range-inclusive': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { rangeInclusive: true }); } },
+    'fb1024-remove-keeps-active': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { removeKeepsActive: true }); } },
     'fb1024-img-nomask': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noMask: true }); } },
     'fb1024-deser-norange': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCapRange: true }); } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },
     'budget-major': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.budgetMajor = true; } },
     'bop-box': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.bopBox = true; } },
+    // T6-FIX: %NeverOptimizeFunction on every measured op. measureBop must refuse
+    // the lane ("op not optimized") rather than measure it -- such an op reads
+    // 0 B/op here (Sparkplug op, TurboFan callees), so only the check can fail it.
+    'bop-unoptimized': { tiers: ['T6'], cheap: false, expect: /T6 B\/op: unsigned lane 0xFFFFFFFF = NaN B\/op, valid=0 \(expected < 0\.1, >= 3 valid\) -- not verified-optimized: op not optimized \(status 0x[0-9a-f]+ (?![^)]*turbofan)/, apply(ctx) { ctx.control.bopUnoptimized = true; } },
+    'bop-unoptimized-callee': { tiers: ['T6'], cheap: false, expect: /T6 B\/op: unsigned lane 0xFFFFFFFF = NaN B\/op, valid=0 \(expected < 0\.1, >= 3 valid\) -- not verified-optimized: callee [^(]+ not optimized and not inlined \(status 0x[0-9a-f]+ (?![^)]*turbofan)/, apply(ctx) { ctx.control.bopUnoptimizedCallee = true; } },
     'soak-stash': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakStash = true; } },
     'soak-retain': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakRetain = true; } }
 };

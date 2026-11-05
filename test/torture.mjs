@@ -1,4 +1,4 @@
-// test/torture.mjs -- node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs
+// test/torture.mjs -- node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs
 //
 // Ten tiers over a seeded harness. Prints exactly "ok" on stdout when every
 // gate passes AND every expected-red (FB-01) row is actually red; all diagnostic
@@ -11,6 +11,9 @@
 //   2. both semi-space pins set    else exit 1
 //   3. devDeps importable          else exit 2 ("npm install")
 //   4. known TORTURE_CONTROL       else exit 2 (did-you-mean)
+//   5. young-GC detector sees      else exit 1
+//   6. --allow-natives-syntax and a working TurboFan, when T6 will run
+//                                  else exit 1 (T6 measures verified-optimized code)
 
 import * as h from './torture/harness.mjs';
 import { buildBaseCtx } from './torture/context.mjs';
@@ -19,7 +22,7 @@ import { CONTROLS, CONTROL_NAMES, suggest, fb1024Faithful } from './torture/cont
 // ---- guard 1: --expose-gc ------------------------------------------------
 if (typeof globalThis.gc !== 'function') {
     console.error('torture: globalThis.gc is missing.');
-    console.error('  remedy: node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs');
+    console.error('  remedy: node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs');
     console.error('  or run: npm run torture');
     process.exit(1);
 }
@@ -96,6 +99,22 @@ h.startScavengeWatch();
     }
 }
 
+// ---- guard 6: natives + TurboFan (only when T6 will run) -----------------
+// T6 forces every measured op to TurboFan and verifies it (harness
+// measureBop); without --allow-natives-syntax it could only fail every lane.
+// Placed after guards 4 / 5 so their exits (and test/TortureGuards.test.mjs,
+// which runs non-T6 paths without the flag) keep their meaning.
+if (!controlName || CONTROLS[controlName].tiers.includes('T6')) {
+    const why = h.optimizationUnavailable();
+    if (why !== null) {
+        console.error('torture: ' + why);
+        console.error('  remedy: ' + h.NATIVES_REMEDY);
+        console.error('  or run: npm run torture');
+        h.stopScavengeWatch();
+        process.exit(1);
+    }
+}
+
 const TIERS = {
     T0: (await import('./torture/t0-laws.mjs')).run,
     T1: (await import('./torture/t1-degenerate.mjs')).run,
@@ -148,13 +167,13 @@ for (const name of ORDER) {
 }
 
 // ---- control fidelity: the G1 / G2 mutant controls subclass a line-for-line copy
-// (controls.mjs fb1024Img). With no flag set that copy must keep T0 and T3
-// green, so each fb1024-img / -copy / -set / -deser / -prev / -inter control fails its tier
-// because of its one flag, not because the copy drifted from FastBit32.js.
+// (controls.mjs fb1024Img). With no flag set that copy must keep T0, T3 and T5
+// green, so each fb1024-img / -copy / -set / -deser / -prev / -inter / -range / -remove
+// control fails its tier because of its one flag, not because the copy drifted from FastBit32.js.
 {
     const fctx = buildBaseCtx(seed);
     fctx.FB1024 = fb1024Faithful(fctx.FB1024);
-    for (const name of ['T0', 'T3']) {
+    for (const name of ['T0', 'T3', 'T5']) {
         const r = await runTier(name, fctx);
         for (const f of r.fails) allFails.push('control fidelity (faithful fb1024Img copy) ' + f);
         totalGreen += r.green;
@@ -191,6 +210,12 @@ if (m.fb1024CountsByLane) {
         console.error('MEASURE FastBit1024 counts+prev (intersectionSize/unionSize/differenceSize vs sig1024 and a cap-500 set, prevSetBit walk) lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid) [gated <0.1]');
     }
 }
+if (m.fb1024RangeByLane) {
+    for (const lane of m.fb1024RangeByLane) {
+        console.error('MEASURE FastBit1024 addRange/removeRange lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid, ' + lane.status + ') [gated <0.1]');
+    }
+}
+if (m.fb1024RangeCoverage) console.error('MEASURE FastBit1024 T5 range coverage ' + JSON.stringify(m.fb1024RangeCoverage) + ' [gated: rangeMulti>=3064 rangeFill>=684 rangeEmpty>=635 rangeTail>=1619 rangeNoop>=650]');
 if (m.fb1024Coverage) console.error('MEASURE FastBit1024 T5 coverage ' + JSON.stringify(m.fb1024Coverage) + ' [gated: fullBig>=50 acqHigh>=10000 fullHigh>=1000 rel31>=1000 clearBig>=20]');
 if (m.fb1024CountsT0) console.error('MEASURE FastBit1024 T0 prevSetBit/count laws ' + JSON.stringify(m.fb1024CountsT0) + ' [gated: 0 failed, walks>=300 diffCap>=300 sharedMiss>=100 subset>=50, <=3 top-up rounds]');
 if (m.fb1024T0) console.error('MEASURE FastBit1024 T0 coverage ' + JSON.stringify(m.fb1024T0) + ' [gated: acqHigh>=100 clearBig>=3; fullBig reported only, T5 gates it]');

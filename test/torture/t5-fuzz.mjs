@@ -159,11 +159,25 @@ export function run(ctx) {
 // releases of bit 31 of a word, and clears at cap >= 512 while a word >= 16 holds
 // a bit (the clear-low16 control's teeth). Strict: 3000 trials; TORTURE_FAST=1: 400. The fb1024-sparse (first
 // EMPTY word) and fb1024-nofull controls MUST fail here.
+// L3 (1.6.0) ranges: when the clear draw does not fire, a SECOND key draw fires a
+// range op 1 in RANGE_ODDS: lo = key(cap + 1), hi = lo + key(min(cap - lo, 96) + 1),
+// addRange or removeRange by key(2), applied to O1024 bit by bit. After EVERY
+// range op: the return value is the receiver, I1-I4 hold and size === the
+// oracle count. Range coverage is counted (from the ORACLE, before the op) and
+// fails closed: rangeMulti (the range spans > 1 word), rangeFill (addRange
+// covers a whole word that had a clear bit), rangeEmpty (removeRange covers a
+// whole word that held a bit), rangeTail (addRange with hi < cap and bit hi
+// clear: the fb1024-range-inclusive control's teeth), rangeNoop (lo === hi).
+// fb1024-range-inclusive and fb1024-remove-keeps-active MUST fail here.
 const CLEARBIG_MIN = 20;
+const RANGE_ODDS = 32;
 const FB1024_CAPS = [1, 2, 31, 32, 33, 63, 64, 65, 500, 991, 992, 993, 1023, 1024];
 // Minimums sit ~3x below the TORTURE_FAST counts measured over 5 seeds (see
 // CHANGELOG [Unreleased]; strict runs read ~7x those).
 const FB1024_MIN = { fullBig: 50, acqHigh: 10000, fullHigh: 1000, rel31: 1000, clearBig: CLEARBIG_MIN };
+// L3 R-5: floor(lowest TORTURE_FAST count / 3) over seeds 12345, 777001..777004 at
+// RANGE_ODDS 32 (lowest 9194 / 2053 / 1907 / 4859 / 1951); strict runs read ~7x.
+const FB1024_RANGE_MIN = { rangeMulti: 3064, rangeFill: 684, rangeEmpty: 635, rangeTail: 1619, rangeNoop: 650 };
 function fb1024Fuzz(ctx, fails) {
     const C = ctx.FB1024;
     const O = ctx.oracle.O1024;
@@ -173,6 +187,7 @@ function fb1024Fuzz(ctx, fails) {
     KEY[0] = (h.nextU32() | 0) || 0x2545f491;
     const key = (n) => { let x = KEY[0]; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; KEY[0] = x; return (x >>> 0) % n; };
     const cov = { fullBig: 0, acqHigh: 0, fullHigh: 0, rel31: 0, clearBig: 0 };
+    const rcov = { rangeMulti: 0, rangeFill: 0, rangeEmpty: 0, rangeTail: 0, rangeNoop: 0 };
     let bad = 0;
     const F = (m) => { if (bad++ < 5) fails.push('T5 FB1024: ' + m); };
     const LIST = [];
@@ -199,6 +214,27 @@ function fb1024Fuzz(ctx, fails) {
             if (key(clearOdds) === 0) {
                 if (cap >= 512 && o.next(512) !== -1) cov.clearBig++;
                 s.clear(); o.b.fill(0);
+            } else if (key(RANGE_ODDS) === 0) {
+                const lo = key(cap + 1);
+                const span = cap - lo < 96 ? cap - lo : 96;
+                const hi = lo + key(span + 1);
+                const add = key(2) === 0;
+                if (lo === hi) rcov.rangeNoop++;
+                else if (((hi - 1) >>> 5) > (lo >>> 5)) rcov.rangeMulti++;
+                if (add && hi < cap && o.b[hi] === 0 && lo < hi) rcov.rangeTail++;
+                for (let w = (lo + 31) >>> 5; (w << 5) + 32 <= hi; w++) {
+                    let ones = 0;
+                    for (let b = w << 5; b < (w << 5) + 32; b++) ones += o.b[b];
+                    if (add ? ones < 32 : ones > 0) { if (add) rcov.rangeFill++; else rcov.rangeEmpty++; break; }
+                }
+                const got = add ? s.addRange(lo, hi) : s.removeRange(lo, hi);
+                for (let b = lo; b < hi; b++) o.b[b] = add ? 1 : 0;
+                const what = (add ? 'addRange(' : 'removeRange(') + lo + ', ' + hi + ') cap ' + cap;
+                if (got !== s) F(what + ' did not return the receiver');
+                const rinv = ctx.oracle.fb1024Invariants(s);
+                if (rinv !== null) F(what + ': ' + rinv);
+                const rn = o.count();
+                if (s.size !== rn) F(what + ': size ' + s.size + ' want ' + rn);
             } else if (r < 20) { s.add(i); o.b[i] = 1; }
             else if (r < 32) { s.remove(i); o.b[i] = 0; }
             else if (r < 40) { s.toggle(i); o.b[i] ^= 1; }
@@ -257,5 +293,9 @@ function fb1024Fuzz(ctx, fails) {
     for (const k of Object.keys(FB1024_MIN)) {
         if (!(cov[k] >= FB1024_MIN[k])) fails.push('T5 FB1024 coverage: ' + k + ' = ' + cov[k] + ' < ' + FB1024_MIN[k] + ' (fail closed: the fuzz did not reach near-full pools)');
     }
+    for (const k of Object.keys(FB1024_RANGE_MIN)) {
+        if (!(rcov[k] >= FB1024_RANGE_MIN[k])) fails.push('T5 FB1024 range coverage: ' + k + ' = ' + rcov[k] + ' < ' + FB1024_RANGE_MIN[k] + ' (fail closed: the fuzz did not reach that range shape)');
+    }
     ctx.measures.fb1024Coverage = cov;
+    ctx.measures.fb1024RangeCoverage = rcov;
 }

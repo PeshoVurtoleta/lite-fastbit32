@@ -5,7 +5,10 @@
 // behaved. (A control that lists a tier it does not actually break would leave
 // that gate decorative -- hence `every`, not `some`.)
 //
-// node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs
+// A control may also carry `expect` (a RegExp): its stderr must match it, so a
+// control that must fail for ONE reason cannot pass by failing for another.
+//
+// node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +17,7 @@ import { CONTROLS, CONTROL_NAMES } from './controls.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, '..', 'torture.mjs');
-const NODE_FLAGS = ['--expose-gc', '--min-semi-space-size=4', '--max-semi-space-size=4'];
+const NODE_FLAGS = ['--allow-natives-syntax', '--expose-gc', '--min-semi-space-size=4', '--max-semi-space-size=4'];
 
 function runControl(name) {
     return spawnSync(process.execPath, [...NODE_FLAGS, ENTRY], {
@@ -31,11 +34,12 @@ for (const name of CONTROL_NAMES) {
     const stderr = res.stderr || '';
     const code = res.status;
     const missing = control.tiers.filter((t) => !stderr.includes('FAIL ' + t));
-    const ok = code === 1 && missing.length === 0;
+    const expectOk = control.expect === undefined || control.expect.test(stderr);
+    const ok = code === 1 && missing.length === 0 && expectOk;
     console.error('[control ' + name + '] exit=' + code + ' tiers=' + control.tiers.join(',') + ' -> ' + (ok ? 'ok' : 'BAD'));
     if (!ok) {
         bad++;
-        console.error('  expected exit 1 with "FAIL <tier>" for EVERY one of ' + control.tiers.join(',') + (missing.length ? ' (missing: ' + missing.join(',') + ')' : ''));
+        console.error('  expected exit 1 with "FAIL <tier>" for EVERY one of ' + control.tiers.join(',') + (missing.length ? ' (missing: ' + missing.join(',') + ')' : '') + (expectOk ? '' : ' and stderr matching ' + control.expect));
         if (stderr) console.error('  stderr tail: ' + stderr.split('\n').slice(-6).join(' | '));
     }
 }

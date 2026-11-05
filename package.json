@@ -75,8 +75,8 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:types": "tsc -p test/types/tsconfig.json",
-    "torture": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs",
-    "torture:controls": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs",
+    "torture": "node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs",
+    "torture:controls": "node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs",
     "test:perf": "node --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 --test test/perf/PerfGate.test.mjs",
     "witness": "node test/witness.mjs",
     "witness:fast": "WITNESS_FAST=1 node test/witness.mjs",

@@ -42,6 +42,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MASK = 0x0F0F0F0F;       // int32 mask (no bit 31): signedness-safe
+// a lane whose code was not verified-optimized names the reason (cold path)
+const optNote = (m) => (m.status === 'optimized' ? '' : ' -- ' + m.status);
 const BOX = [{}];              // tagged-elements array: forces a HeapNumber box
 
 export async function run(ctx) {
@@ -106,6 +108,25 @@ export async function run(ctx) {
     function sinkCb(bit) { h.SINK[3] = bit; }
     const baseline = (i) => { h.SINK[0] = i | 0; };
     const bopBox = ctx.control.bopBox === true;
+    // Verified optimization (harness measureBop): every lane's op, the baseline
+    // and EVERY function an op can reach -- all methods / getters / statics of
+    // FB, FB1024, BitMapper and the look-alikes, the shared call sites and
+    // sinkCb -- are forced to TurboFan and verified before and after each
+    // window; an unverified lane fails closed with the reason. bop-unoptimized
+    // withholds optimization of each op and MUST fail every lane that way.
+    const bopOpts = {
+        callees: [...h.collectMethods(FB, ctx.FB1024, ctx.Mapper, ...h.LOOKALIKES), h.sharedHasAll, h.sharedForEach, sinkCb],
+        withhold: ctx.control.bopUnoptimized === true ? true : (ctx.control.bopUnoptimizedCallee === true ? 'callee' : false)
+    };
+    const bopOpt = { lanes: 0, verified: 0, tracked: 2 + bopOpts.callees.length, first: null };
+    measures.bopOpt = bopOpt;
+    const bop = async (op) => {
+        const m = await h.measureBop(op, baseline, bopOpts);
+        bopOpt.lanes++;
+        if (m.status === 'optimized') bopOpt.verified++;
+        else if (bopOpt.first === null) bopOpt.first = m.status;
+        return m;
+    };
 
     // ---- per-lane composite B/op (signed gated, unsigned read-only/printed) -
     const bopByLane = [];
@@ -147,7 +168,7 @@ export async function run(ctx) {
                 h.SINK[1] = inst.countRange(0, 15) | 0;
                 if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
             };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         if (!Object.is(inst.value, want)) {
             fails.push('T6 B/op: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');
         }
@@ -156,7 +177,7 @@ export async function run(ctx) {
         // threshold must not change under a control). The bop-box control injects
         // one HeapNumber per op -> ~16 B/op -> every lane fails.
         if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 B/op: ' + (signed ? 'SIGNED' : 'unsigned') + ' lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+            fails.push('T6 B/op: ' + (signed ? 'SIGNED' : 'unsigned') + ' lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         }
     }
     measures.bopByLane = bopByLane;
@@ -167,12 +188,12 @@ export async function run(ctx) {
         const inst = new FB(0).union(h.LANE_INT32[li]);
         const bit31Clear = ((inst.value >>> 31) & 1) === 0; // ~value has bit 31 -> boxes
         const op = (i) => { h.SINK[0] = inst.highestClearBit() | 0; };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         hcbByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, valid: m.valid, red: bit31Clear });
-        if (m.valid < 3) { fails.push('T6 hcb: lane ' + h.LANE_NAMES[li] + ' had < 3 valid windows (NaN fails closed)'); continue; }
+        if (m.valid < 3) { fails.push('T6 hcb: lane ' + h.LANE_NAMES[li] + ' had < 3 valid windows (NaN fails closed)' + optNote(m)); continue; }
         // Flipped in S3 (FB-09): the bit-31-clear rows were expected-red
         // (~32 B/op) under the 1.2.1 `~value >>> 0` body; now every row is gated.
-        if (!(m.perOp < 0.1)) fails.push('T6 hcb: bit-31-' + (bit31Clear ? 'clear' : 'set') + ' lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op (expected < 0.1)');
+        if (!(m.perOp < 0.1)) fails.push('T6 hcb: bit-31-' + (bit31Clear ? 'clear' : 'set') + ' lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op (expected < 0.1)' + optNote(m));
     }
     measures.hcbByLane = hcbByLane;
 
@@ -204,13 +225,13 @@ export async function run(ctx) {
                 s4Mapper.bit(S4_NAMES[i & 31]) ^ s4Mapper.size;
             if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
         };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         if (!Object.is(inst.value, want)) {
             fails.push('T6 S4: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');
         }
         s4ByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, window0: m.window0, valid: m.valid, signed });
         if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 S4: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+            fails.push('T6 S4: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         }
     }
     measures.s4ByLane = s4ByLane;
@@ -242,13 +263,13 @@ export async function run(ctx) {
             h.SINK[3] = FB.nextCombination(inst.value);
             if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
         };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         if (!Object.is(inst.value, want)) {
             fails.push('T6 S5: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');
         }
         s5ByLane.push({ name: h.LANE_NAMES[li], perOp: m.perOp, window0: m.window0, valid: m.valid, signed });
         if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 S5: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+            fails.push('T6 S5: lane ' + h.LANE_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         }
     }
     measures.s5ByLane = s5ByLane;
@@ -276,12 +297,12 @@ export async function run(ctx) {
             h.SINK[0] = acc ^ (pool.hasAll(sig1024) ? 2 : 0) ^ (pool.hasAny(sig1024) ? 4 : 0);
             if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
         };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         const name = 'free slot ' + freeSlot + ' (word ' + (freeSlot >>> 5) + ')';
         if (ctx.oracle.fb1024Snapshot(pool) !== snap) fails.push('T6 FB1024: ' + name + ' pool state moved during measurement');
         fb1024ByLane.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
         if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 FB1024: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+            fails.push('T6 FB1024: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         }
     }
     measures.fb1024ByLane = fb1024ByLane;
@@ -309,7 +330,7 @@ export async function run(ctx) {
             h.SINK[0] = acc ^ pool.prevSetBit(i & 1023);
             if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
         };
-        const m = await h.measureBop(op, baseline);
+        const m = await bop(op);
         const name = 'free slot ' + freeSlot + ' (word ' + (freeSlot >>> 5) + ')';
         if (ctx.oracle.fb1024Snapshot(pool) !== snap || ctx.oracle.fb1024Snapshot(sig1024) !== snapSig || ctx.oracle.fb1024Snapshot(part500) !== snapPart) fails.push('T6 FB1024 counts+prev: ' + name + ' a set moved during measurement');
         let ni = 0, np = 0;
@@ -320,24 +341,67 @@ export async function run(ctx) {
         }
         fb1024CountsByLane.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
         if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 FB1024 counts+prev: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+            fails.push('T6 FB1024 counts+prev: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         }
     }
     measures.fb1024CountsByLane = fb1024CountsByLane;
 
+    // ---- L3 (1.6.0) FastBit1024 addRange / removeRange lane (its own measure
+    // key): capacity 1024, lo = i & 511, hi = lo + (i & 255) (so 1 in 256 ops is
+    // the lo === hi early-out, and ranges span 1..9 words, partial edges both
+    // ends). "empty base" runs addRange then removeRange on an empty set, "full
+    // base" removeRange then addRange on a full one, so each op returns the set
+    // to its base: the snapshot is re-checked unchanged after measuring, plus the
+    // base fields read directly (empty: _n 0, _active 0, every word 0; full:
+    // _n 1024, _full -1, every word -1). Gated < 0.1 B/op with >= 3 valid
+    // windows, NaN fails closed, verified-optimized like every lane; bop-box
+    // turns both red.
+    const fb1024RangeByLane = [];
+    for (const full of [false, true]) {
+        const pool = new C1024();
+        if (full) for (let b = 0; b < 1024; b++) pool.add(b);
+        const snap = ctx.oracle.fb1024Snapshot(pool);
+        const op = full
+            ? (i) => {
+                const lo = i & 511, hi = lo + (i & 255);
+                pool.removeRange(lo, hi);
+                h.SINK[1] = pool.size;
+                h.SINK[0] = pool.addRange(lo, hi).size;
+                if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+            }
+            : (i) => {
+                const lo = i & 511, hi = lo + (i & 255);
+                pool.addRange(lo, hi);
+                h.SINK[1] = pool.size;
+                h.SINK[0] = pool.removeRange(lo, hi).size;
+                if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+            };
+        const m = await bop(op);
+        const name = full ? 'full base (removeRange then addRange)' : 'empty base (addRange then removeRange)';
+        let words = true;
+        for (let w = 0; w < 32; w++) if (pool._data[w] !== (full ? -1 : 0)) words = false;
+        const base = full ? pool._n === 1024 && pool._full === -1 : pool._n === 0 && pool._active === 0;
+        if (ctx.oracle.fb1024Snapshot(pool) !== snap || !base || !words) fails.push('T6 FB1024 range: ' + name + ' pool state moved during measurement (_n ' + pool._n + ', _active ' + pool._active + ', _full ' + pool._full + ')');
+        fb1024RangeByLane.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid, status: m.status });
+        if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 FB1024 range: ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
+        }
+    }
+    measures.fb1024RangeByLane = fb1024RangeByLane;
+
     // ---- G1 (1.6.0) image lanes (see fb1024ImageLanes) ----------------------
-    try { await fb1024ImageLanes(ctx, fails, baseline, bopBox); } catch (e) { fails.push('T6 FB1024 img: lanes threw ' + e.constructor.name + ': ' + e.message); }
+    try { await fb1024ImageLanes(ctx, fails, baseline, bopBox, bop); } catch (e) { fails.push('T6 FB1024 img: lanes threw ' + e.constructor.name + ': ' + e.message); }
 
     // ---- shared megamorphic site: actually measured, NaN fails closed -------
     const si = new FB(0).union(h.LANE_INT32[2]); // -1
     const shHasAll = (i) => { h.SINK[0] = h.sharedHasAll(si, MASK) ? 1 : 0; };
     const shForEach = (i) => { h.sharedForEach(si, sinkCb); };
-    const mha = await h.measureBop(shHasAll, baseline);
-    const mfe = await h.measureBop(shForEach, baseline);
+    const mha = await bop(shHasAll);
+    const mfe = await bop(shForEach);
     measures.sharedHasAllBop = mha.perOp;
     measures.sharedForEachBop = mfe.perOp;
-    if (mha.valid < 3 || !(mha.perOp < 0.1)) fails.push('T6 shared: sharedHasAll = ' + Number(mha.perOp).toFixed(3) + ' B/op, valid=' + mha.valid + ' (expected < 0.1, >= 3 valid)');
-    if (mfe.valid < 3 || !(mfe.perOp < 0.1)) fails.push('T6 shared: sharedForEach = ' + Number(mfe.perOp).toFixed(3) + ' B/op, valid=' + mfe.valid + ' (expected < 0.1, >= 3 valid)');
+    if (mha.valid < 3 || !(mha.perOp < 0.1)) fails.push('T6 shared: sharedHasAll = ' + Number(mha.perOp).toFixed(3) + ' B/op, valid=' + mha.valid + ' (expected < 0.1, >= 3 valid)' + optNote(mha));
+    if (mfe.valid < 3 || !(mfe.perOp < 0.1)) fails.push('T6 shared: sharedForEach = ' + Number(mfe.perOp).toFixed(3) + ' B/op, valid=' + mfe.valid + ' (expected < 0.1, >= 3 valid)' + optNote(mfe));
 
     // ---- closure scavenge lane (FB-11 shape, direct forEach) ----------------
     const fcInst = new FB(0x0F0F0F0F);
@@ -348,6 +412,8 @@ export async function run(ctx) {
     const scav = await h.measureScavenges(sharedOp, 2000000);
     measures.closureScavenges = scav;
     if (!(scav <= 2)) fails.push('T6 scavenge: forEach closure lane churned ' + scav + ' scavenges over 2e6 ops (expected <= 2)');
+
+    console.error('MEASURE T6 verified-optimized (TurboFan) measureBop lanes ' + bopOpt.verified + '/' + bopOpt.lanes + ', ' + bopOpt.tracked + ' functions forced + verified per lane' + (bopOpt.first === null ? '' : ' -- first unverified: ' + bopOpt.first) + ' [gated: every lane verified]');
 
     void green;
     return { fails, green };
@@ -416,7 +482,7 @@ function d8Lane() {
     return { loads: counts.loadFrom, box: counts.box, result, tail: out.split('\n').filter((l) => l && !l.includes('Scavenge')).slice(-3).join(' | ') };
 }
 
-async function fb1024ImageLanes(ctx, fails, baseline, bopBox) {
+async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
     const C = ctx.FB1024;
     const h = ctx.h;
     const o = ctx.oracle;
@@ -424,9 +490,9 @@ async function fb1024ImageLanes(ctx, fails, baseline, bopBox) {
     const fill = (s, rot) => { for (let w = 0; w < 32; w++) for (let b = 0; b < 32; b++) if (((IMG_WORDS[(w + rot) & 7] >>> b) & 1) === 1) s.add((w << 5) + b); return s; };
     const lane = async (name, op, after) => {
         let m;
-        try { m = await h.measureBop(op, baseline); } catch (e) { fails.push('T6 FB1024 img: lane ' + name + ' threw ' + e.constructor.name + ': ' + e.message); return; }
+        try { m = await bop(op); } catch (e) { fails.push('T6 FB1024 img: lane ' + name + ' threw ' + e.constructor.name + ': ' + e.message); return; }
         lanes.push({ name, perOp: m.perOp, window0: m.window0, valid: m.valid });
-        if (m.valid < 3 || !(m.perOp < 0.1)) fails.push('T6 FB1024 img: lane ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)');
+        if (m.valid < 3 || !(m.perOp < 0.1)) fails.push('T6 FB1024 img: lane ' + name + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
         const v = after();
         if (v !== null) fails.push('T6 FB1024 img: lane ' + name + ' ' + v);
     };
