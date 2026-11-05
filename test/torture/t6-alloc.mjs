@@ -46,6 +46,91 @@ const MASK = 0x0F0F0F0F;       // int32 mask (no bit 31): signedness-safe
 const optNote = (m) => (m.status === 'optimized' ? '' : ' -- ' + m.status);
 const BOX = [{}];              // tagged-elements array: forces a HeapNumber box
 
+// ---- T6-FIX2 feedback-poisoning pre-pass (harness poisonCallFeedback) ------
+// One row per FB method that feeds this.value to a Math.* call: [name, args
+// source] (args see only literals and `cb`, the harness no-op callback that
+// forEach gets). The rows must equal harness mathFieldCensus(ctx.FB) both
+// ways -- a method added or removed without its row fails T6 closed. The
+// census excludes `constructor` explicitly (its source is the class text).
+const POISON_ROWS = [
+    ['count', ''],
+    ['countMasked', '0x0F0F0F0F'],
+    ['lowest', ''],
+    ['highest', ''],
+    ['forEach', 'cb'],
+    ['nextClearBit', ''],
+    ['highestClearBit', ''],
+    ['nextSetBit', '0'],
+    ['prevSetBit', '31'],
+    ['rank', '31'],
+    ['toArray', '']
+];
+
+// The poison witness: a byte copy of the 9f57c7c (1.6.0) FastBit32
+// constructor + highest in its own class. After the same pre-pass (tag
+// 'witness') its unsigned lanes MUST read >= 15.9 B/op (the old body boxes
+// through the poisoned clz32 slot) and its 0x40000000 lane < 0.1 (an int32
+// passes as a Smi): proof, every run, that the pre-pass mechanism poisons a
+// clz32 slot on this V8. It is a fresh class, so it does NOT see FB's feedback
+// history (R1, the 1.6.0 body in a full run, is the check for that).
+class OldHighestWitness {
+    constructor(initial = 0) {
+        this.value = initial >>> 0;
+    }
+
+    highest() {
+        return 31 - Math.clz32(this.value);
+    }
+}
+const WITNESS_LANES = new Float64Array([0xFFFFFFFF, 2 ** 31, 0x40000000]);
+const WITNESS_NAMES = ['0xFFFFFFFF', '2**31', '0x40000000'];
+
+// Measured ops come from module-scope factories, each called once with a
+// throwaway instance before its first measured lane: the op literal's
+// feedback cell is then "many closures", so TurboFan cannot specialize a
+// measured op on its context (the first closure of a literal would fold
+// `inst.value` to a constant and read 0 B/op even through a poisoned slot --
+// orch-confirm: 2**31 first = -0.017, 0xFFFFFFFF second = 16.000).
+function witnessOp(h, inst) {
+    return (i) => { h.SINK[0] = inst.highest() | 0; };
+}
+
+// composite ops: bodies identical to the pre-T6-FIX2 inline literals
+function compositeSigned(h, inst, bopBox) {
+    return (i) => {
+        const b = i & 31;
+        h.SINK[0] = inst.count() | 0;
+        h.SINK[1] = inst.lowest() | 0;
+        h.SINK[2] = inst.highest() | 0;
+        h.SINK[3] = inst.nextClearBit() | 0;
+        h.SINK[0] = inst.has(b) ? 1 : 0;
+        h.SINK[1] = inst.hasAll(MASK) ? 1 : 0;
+        h.SINK[2] = inst.hasAny(MASK) ? 1 : 0;
+        h.SINK[3] = inst.hasNone(MASK) ? 1 : 0;
+        h.SINK[0] = inst.countMasked(MASK) | 0;
+        h.SINK[1] = inst.countRange(0, 15) | 0;
+        inst.toggle(b); inst.toggle(b);           // WORD-PRESERVING
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    };
+}
+
+function compositeUnsigned(h, inst, bopBox) {
+    return (i) => {                                     // unsigned: READ-ONLY
+        const b = i & 31;
+        h.SINK[0] = inst.count() | 0;
+        h.SINK[1] = inst.lowest() | 0;
+        h.SINK[2] = inst.highest() | 0;
+        h.SINK[3] = inst.nextClearBit() | 0;
+        h.SINK[0] = inst.has(b) ? 1 : 0;
+        h.SINK[1] = inst.hasAll(MASK) ? 1 : 0;
+        h.SINK[2] = inst.hasAny(MASK) ? 1 : 0;
+        h.SINK[3] = inst.hasNone(MASK) ? 1 : 0;
+        h.SINK[0] = inst.countMasked(MASK) | 0;
+        h.SINK[1] = inst.countRange(0, 15) | 0;
+        if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
+    };
+}
+
 export async function run(ctx) {
     const FB = ctx.FB;
     const h = ctx.h;
@@ -120,16 +205,63 @@ export async function run(ctx) {
     };
     const bopOpt = { lanes: 0, verified: 0, tracked: 2 + bopOpts.callees.length, first: null };
     measures.bopOpt = bopOpt;
-    const bop = async (op) => {
-        const m = await h.measureBop(op, baseline, bopOpts);
+    const bop = async (op, opts = bopOpts) => {
+        const m = await h.measureBop(op, baseline, opts);
         bopOpt.lanes++;
         if (m.status === 'optimized') bopOpt.verified++;
         else if (bopOpt.first === null) bopOpt.first = m.status;
         return m;
     };
 
+    // ---- T6-FIX2 pre-pass: census check, then poison FB and the witness ----
+    // Setup only (no window is open): census + callers allocate here, never in
+    // a measured window. measures.poison holds strings / ints only.
+    const census = h.mathFieldCensus(FB);
+    const rowNames = POISON_ROWS.map((r) => r[0]);
+    const missing = census.filter((n) => !rowNames.includes(n));
+    const extra = rowNames.filter((n) => !census.includes(n));
+    if (missing.length > 0 || extra.length > 0) {
+        fails.push('T6 poison census: POISON_ROWS != mathFieldCensus(FB) (constructor excluded): missing rows [' + missing.join(',') + '], rows not in the census [' + extra.join(',') + '] -- fail closed');
+    }
+    const pz = h.poisonCallFeedback(FB, POISON_ROWS, 't6poison_fb');
+    if (pz.fail !== null) fails.push('T6 poison pre-pass: ' + pz.fail);
+    const pw = h.poisonCallFeedback(OldHighestWitness, [['highest', '']], 't6poison_witness');
+    if (pw.fail !== null) fails.push('T6 poison pre-pass (witness): ' + pw.fail);
+    measures.poison = {
+        rows: POISON_ROWS.length | 0,
+        census: census.length | 0,
+        censusNames: census.join(','),
+        maglev: pz.maglev | 0,
+        deopted: pz.deopted.join(','),
+        witnessMaglev: pw.maglev | 0,
+        witnessDeopted: pw.deopted.join(','),
+        fail: (pz.fail === null ? '' : pz.fail) + (pw.fail === null ? '' : (pz.fail === null ? '' : ' | ') + pw.fail)
+    };
+    console.error('MEASURE T6 poison pre-pass rows=' + POISON_ROWS.length + ' census=' + census.length + ' (constructor excluded) maglev=' + pz.maglev + '/' + POISON_ROWS.length +
+        ' deopted=[' + measures.poison.deopted + ']; witness maglev=' + pw.maglev + '/1 deopted=[' + measures.poison.witnessDeopted + '] [gated: rows == census both ways, every caller Maglev-compiled]');
+
+    // ---- poison witness (1.6.0 highest body), measured before the composite lane
+    const witnessOpts = { callees: [...bopOpts.callees, OldHighestWitness.prototype.highest], withhold: bopOpts.withhold };
+    witnessOp(h, new OldHighestWitness(0));                // throwaway first closure
+    const witnessByLane = [];
+    for (let li = 0; li < WITNESS_LANES.length; li++) {
+        const inst = new OldHighestWitness(WITNESS_LANES[li]);
+        const m = await bop(witnessOp(h, inst), witnessOpts);
+        const boxes = li < 2;                              // unsigned lanes box, 0x40000000 does not
+        witnessByLane.push({ name: WITNESS_NAMES[li], perOp: m.perOp, window0: m.window0, valid: m.valid, boxes });
+        console.error('MEASURE T6 poison witness (1.6.0 highest body, poisoned slot) lane ' + WITNESS_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op (window0 ' + Number(m.window0).toFixed(3) + ', ' + m.valid + ' valid, ' + m.status + ') [gated ' + (boxes ? '>=15.9' : '<0.1') + ']');
+        if (boxes) {
+            if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 poison witness: lane ' + WITNESS_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: the 1.6.0 highest body boxes through a poisoned clz32 slot) -- the pre-pass did not take' + optNote(m));
+        } else if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 poison witness: lane ' + WITNESS_NAMES[li] + ' = ' + Number(m.perOp).toFixed(3) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid: an int32 passes a poisoned slot as a Smi)' + optNote(m));
+        }
+    }
+    measures.witnessByLane = witnessByLane;
+
     // ---- per-lane composite B/op (signed gated, unsigned read-only/printed) -
     const bopByLane = [];
+    compositeSigned(h, new FB(0), bopBox);                 // throwaway first closures
+    compositeUnsigned(h, new FB(0), bopBox);
     for (let li = 0; li < h.LANE_VALUES.length; li++) {
         const signed = h.LANE_SIGNED[li] === 1;
         const want = signed ? h.LANE_INT32[li] : h.LANE_VALUES[li];
@@ -138,36 +270,7 @@ export async function run(ctx) {
             fails.push('T6 B/op: lane ' + h.LANE_NAMES[li] + ' built value ' + inst.value + ' !== ' + want + ' (fail closed)');
             continue;
         }
-        const op = signed
-            ? (i) => {
-                const b = i & 31;
-                h.SINK[0] = inst.count() | 0;
-                h.SINK[1] = inst.lowest() | 0;
-                h.SINK[2] = inst.highest() | 0;
-                h.SINK[3] = inst.nextClearBit() | 0;
-                h.SINK[0] = inst.has(b) ? 1 : 0;
-                h.SINK[1] = inst.hasAll(MASK) ? 1 : 0;
-                h.SINK[2] = inst.hasAny(MASK) ? 1 : 0;
-                h.SINK[3] = inst.hasNone(MASK) ? 1 : 0;
-                h.SINK[0] = inst.countMasked(MASK) | 0;
-                h.SINK[1] = inst.countRange(0, 15) | 0;
-                inst.toggle(b); inst.toggle(b);           // WORD-PRESERVING
-                if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
-            }
-            : (i) => {                                     // unsigned: READ-ONLY
-                const b = i & 31;
-                h.SINK[0] = inst.count() | 0;
-                h.SINK[1] = inst.lowest() | 0;
-                h.SINK[2] = inst.highest() | 0;
-                h.SINK[3] = inst.nextClearBit() | 0;
-                h.SINK[0] = inst.has(b) ? 1 : 0;
-                h.SINK[1] = inst.hasAll(MASK) ? 1 : 0;
-                h.SINK[2] = inst.hasAny(MASK) ? 1 : 0;
-                h.SINK[3] = inst.hasNone(MASK) ? 1 : 0;
-                h.SINK[0] = inst.countMasked(MASK) | 0;
-                h.SINK[1] = inst.countRange(0, 15) | 0;
-                if (bopBox) { BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; }
-            };
+        const op = signed ? compositeSigned(h, inst, bopBox) : compositeUnsigned(h, inst, bopBox);
         const m = await bop(op);
         if (!Object.is(inst.value, want)) {
             fails.push('T6 B/op: lane ' + h.LANE_NAMES[li] + ' value moved to ' + inst.value + ' during measurement (expected ' + want + ')');

@@ -15,6 +15,7 @@
 //       the tree throws TypeError 'FastBit1024: expected a FastBit1024, got object'.
 // Expected values come from the SPEC, or are derived by hand (see each comment);
 // the differential's oracle is the BASE build itself.
+// PATCHES (below) is the ONE maintainer-ruled 1.6.1 change (T6-FIX2: highest() `| 0`, never boxes) applied to the BASE side of (a) / (b); nothing else is accepted.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -34,6 +35,8 @@ try {
 const headSrc = readFileSync(new URL('../FastBit32.js', import.meta.url), 'utf8');
 
 const norm = (s) => s.replace(/export const VERSION = '[^']*';/, 'export const VERSION = X;');
+const PATCHES = [['return 31 - Math.clz32(this.value);', 'return 31 - Math.clz32(this.value | 0);', '1.6.1 T6-FIX2: highest() never boxes (HighestParity161.test.mjs proves identical results)']];
+const patched = (text) => { for (const [from, to] of PATCHES) text = text.split(from).join(to); return text; };
 const SKIP = new Set(['FastBit1024.hasAll', 'FastBit1024.hasAny']);
 
 function kind(d) {
@@ -64,25 +67,34 @@ function arities(d) {
 describe('FastBit1024 1.5.0 -> tree parity (base ' + BASE + ')', () => {
     it('the base is available', () => { assert.strictEqual(baseErr, null, String(baseErr)); });
 
+    it('(a0) every PATCHES from occurs once in the base prefix; every to once (from zero times) in the head prefix', () => {
+        const bp = baseSrc.slice(0, baseSrc.indexOf(MARK)), hp = headSrc.slice(0, headSrc.indexOf(MARK));
+        for (const [from, to, why] of PATCHES) {
+            assert.strictEqual(bp.split(from).length - 1, 1, 'base: from x1 -- ' + why);
+            assert.strictEqual(hp.split(to).length - 1, 1, 'head: to x1 -- ' + why);
+            assert.strictEqual(hp.split(from).length - 1, 0, 'head: from x0 -- ' + why);
+        }
+    });
+
     it('(a) bytes before the FastBit1024 marker are equal (VERSION line normalized)', () => {
         const bi = baseSrc.indexOf(MARK), hi = headSrc.indexOf(MARK);
         assert.ok(bi > 0 && hi > 0);
         assert.strictEqual(headSrc.indexOf(MARK, hi + 1), -1);
-        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(baseSrc.slice(0, bi)));
+        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(patched(baseSrc.slice(0, bi))));
     });
 
     it('(b) Function#toString equal for every 1.5.0 export and member except hasAll / hasAny', () => {
         let checked = 0;
         for (const [name, v] of Object.entries(OLD)) {
             if (typeof v !== 'function') continue;
-            if (name !== 'FastBit1024') { assert.strictEqual(NEW[name].toString(), v.toString(), name); checked++; }
+            if (name !== 'FastBit1024') { assert.strictEqual(NEW[name].toString(), patched(v.toString()), name); checked++; }
         }
         for (const cname of ['FastBit32', 'BitMapper', 'FastBit1024']) {
             for (const [key, d] of members(OLD, cname)) {
                 const id = cname + '.' + key.slice(2);
                 if (SKIP.has(id)) continue;
                 const nd = members(NEW, cname).get(key);
-                assert.deepStrictEqual(fnTexts(nd), fnTexts(d), id);
+                assert.deepStrictEqual(fnTexts(nd), fnTexts(d).map((t) => (typeof t === 'string' ? patched(t) : t)), id);
                 checked++;
             }
         }

@@ -360,8 +360,17 @@ function natives() {
         const interpWord = raw(interpProbe);
         const shift = decodeStatusLayout(tfWord, interpWord);
         const sh = shift === null ? 0 : shift;   // unknown: raw words, and every consumer refuses
+        // T6-FIX2: Maglev forcing for poisonCallFeedback, in its own try. A V8
+        // without it leaves maglev null: the pre-pass returns a reason, while
+        // measureBop (TurboFan only) keeps working.
+        let maglev = null;
+        try {
+            maglev = new Function('f', '%OptimizeMaglevOnNextCall(f);');
+        } catch (e) {
+            maglev = null;
+        }
         NATIVES = {
-            prep, opt, never, raw,
+            prep, opt, never, raw, maglev,
             shift, tfWord, interpWord,
             // normalized (V8 14 layout) word; the raw word stays in STATUS_RAW[0]
             status: (f) => {
@@ -572,6 +581,105 @@ export async function measureBop(opFn, baselineFn, opts) {
 }
 
 export { K as BOP_K, WINDOWS as BOP_WINDOWS };
+
+// ---- deterministic feedback poisoning (T6-FIX2) ---------------------------
+// Root cause of the 1.6.0 load-only T6 red (.handoff/research/t6-load/): a
+// MAGLEV caller of the T0 shape `new FB((~w) >>> 0).<method>()` that meets a
+// word >= 2^31 deopts ("not int32") at the method's Math.* call, which marks
+// that call's feedback slot disallow-speculation; TurboFan then calls the
+// builtin with the float64 field boxed (16 B / call). Under load T0 hits this
+// by chance. The pre-pass hits it on purpose, every run, for every row, so
+// T6 measures the poisoned case deterministically. Cold path (T6 setup, before
+// any window): it allocates (new Function, the callers) and keeps nothing.
+//
+// Per row [name, args]: a caller with UNIQUE source per tag + row (no
+// compilation-cache sharing between rows or tags),
+//   function <tag>_<name>(w) { const x = new C(0); x.value = (~w) >>> 0; return x.<name>(<args>); }
+// prepared with its method. The `>>> 0` and the field store sit in the CALLER
+// (fresh feedback per caller), not in the constructor as in the T0 shape
+// `new C((~w) >>> 0)`: T1 feeds the shared constructor strings / NaN / {} /
+// null, which turns its `>>>` feedback generic, and after that the T0 shape
+// hands the method a tagged value that Maglev truncates WITHOUT a deopt -- the
+// pre-pass then poisoned nothing in a full run (R1 on the 1.6.0 body stayed
+// green; .handoff/evidence/t6-fix2/b2/). The caller-side store gives the
+// inlined method the Uint32 node whatever the constructor has seen;
+// 50 warm calls with w = (0x80000000 | i) >>> 0 (stored word 0x7FFFFFFF - i, a
+// Smi); Maglev on next call, compiled by w = 0x80000001 and REQUIRED to carry
+// the Maglev bit (else the reason, fail closed); then the trigger w = 1
+// (stored 0xFFFFFFFE >= 2^31). A caller that lost the Maglev bit is recorded
+// in `deopted` (reported; the T6 witness lanes gate that the poisoning took).
+// `args` is source text evaluated inside the caller: only literals and `cb`
+// (a no-op callback, for forEach) are in scope. One `new C(0xFFFFFFFF)` runs
+// first so the field representation is Double before any caller compiles
+// (a Smi field would deopt at the caller's store instead).
+// Returns { fail: null | reason, maglev: callers Maglev-compiled, deopted: names }.
+function poisonNoop(bit) { return bit; }
+const POISON_ROW_NAME = /^[A-Za-z_$][\w$]*$/;
+const POISON_ROW_ARGS = /^[\w$, ]*$/;
+export function poisonCallFeedback(C, rows, tag) {
+    if (typeof C !== 'function' || !Array.isArray(rows) || typeof tag !== 'string' || !POISON_ROW_NAME.test(tag)) {
+        throw new TypeError('poisonCallFeedback(C, rows, tag): C a class, rows an array of [name, args], tag an identifier');
+    }
+    const res = { fail: null, maglev: 0, deopted: [] };
+    const N = natives();
+    if (N === false) { res.fail = 'needs --allow-natives-syntax (' + NATIVES_REMEDY + ')'; return res; }
+    if (N.shift === null) { res.fail = layoutUnknownReason(N); return res; }
+    if (N.maglev === null) { res.fail = '%OptimizeMaglevOnNextCall is unavailable on V8 ' + process.versions.v8 + ': the poisoning pre-pass cannot run -- failing closed'; return res; }
+    new C(0xFFFFFFFF);
+    for (let r = 0; r < rows.length; r++) {
+        const row = rows[r];
+        const name = Array.isArray(row) ? row[0] : undefined;
+        const args = Array.isArray(row) ? row[1] : undefined;
+        if (typeof name !== 'string' || !POISON_ROW_NAME.test(name) || typeof args !== 'string' || !POISON_ROW_ARGS.test(args)) {
+            throw new TypeError('poisonCallFeedback: row ' + r + ' must be [identifier, args source of literals / cb], got ' + JSON.stringify(row));
+        }
+        const fn = C.prototype[name];
+        if (typeof fn !== 'function') { res.fail = 'row ' + name + ' is not a method of ' + (C.name || 'the class') + '.prototype'; return res; }
+        const caller = new Function('C', 'cb', 'return function ' + tag + '_' + name + '(w) { const x = new C(0); x.value = (~w) >>> 0; return x.' + name + '(' + args + '); };')(C, poisonNoop);
+        N.prep(caller);
+        N.prep(fn);
+        for (let i = 0; i < 50; i++) caller((0x80000000 | i) >>> 0);
+        N.maglev(caller);
+        caller(0x80000001);
+        const s = N.status(caller);
+        if ((s & OPT_MAGLEV) === 0) {
+            res.fail = 'caller ' + tag + '_' + name + ' is not Maglev-compiled after %OptimizeMaglevOnNextCall (status ' + describeRead(N, s) + '; remove --no-maglev / --jitless / --max-opt)';
+            return res;
+        }
+        res.maglev++;
+        caller(1);
+        if ((N.status(caller) & OPT_MAGLEV) === 0) res.deopted.push(name);
+    }
+    return res;
+}
+
+// The census the poisoning rows must equal (both ways): every method of C's
+// prototype chain (up to Object.prototype, nearest definition wins) whose
+// source matches /\bMath\.\w+\(/ AND /\bthis\.value\b/. `constructor` is
+// EXCLUDED explicitly: its source text is the whole class, so it always
+// matches. A matching getter / setter / Symbol-keyed method is listed as
+// 'get x' / 'set x' / its String() form, which no row can name: fail closed.
+export function mathFieldCensus(C) {
+    const out = [];
+    const seen = new Set();
+    const hit = (f) => {
+        if (typeof f !== 'function') return false;
+        const src = Function.prototype.toString.call(f);
+        return /\bMath\.\w+\(/.test(src) && /\bthis\.value\b/.test(src);
+    };
+    for (let p = C.prototype; p !== null && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
+        for (const k of Reflect.ownKeys(p)) {
+            if (k === 'constructor' || seen.has(k)) continue;
+            seen.add(k);
+            const d = Object.getOwnPropertyDescriptor(p, k);
+            const label = typeof k === 'symbol' ? String(k) : k;
+            if (hit(d.value)) out.push(label);
+            if (hit(d.get)) out.push('get ' + label);
+            if (hit(d.set)) out.push('set ' + label);
+        }
+    }
+    return out;
+}
 
 // ---- scavenge-count lane --------------------------------------------------
 // A per-op closure that ESCAPES (stored, kept live past the op) is NOT reclaimed

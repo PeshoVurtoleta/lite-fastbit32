@@ -124,7 +124,7 @@ export class FastBit32 {
      * Returns -1 if empty.
      */
     highest() {
-        return 31 - Math.clz32(this.value);
+        return 31 - Math.clz32(this.value | 0);
     }
 
     isEmpty() {

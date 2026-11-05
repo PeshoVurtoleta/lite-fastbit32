@@ -422,6 +422,19 @@ function fb1024SabCopy(C, which) {
     };
 }
 
+function highestOld(FB) {
+    // T6-FIX2: reinstalls the 1.6.0 highest body `31 - Math.clz32(this.value)`
+    // ON ctx.FB.prototype (the orch-confirm 3/3 mechanism: a prototype patch,
+    // not a subclass, so every FB the T6 lanes build carries it). A method
+    // (non-constructible, like a class method), non-enumerable as in a class.
+    // cheap: false -- it mutates the shared FastBit32 prototype, so it runs only
+    // in its own child process (t9-controls.mjs skips every non-cheap control).
+    // The T6 pre-pass poisons its clz32 slot: both unsigned composite lanes MUST
+    // read 16 B/op (optimized), no SIGNED lane may fail.
+    const old = { highest() { return 31 - Math.clz32(this.value); } };
+    Object.defineProperty(FB.prototype, 'highest', { value: old.highest, writable: true, enumerable: false, configurable: true });
+}
+
 function flipOracle(oracle) {
     // one corrupted function: popcount off by one -> every T5 count check diverges
     return { ...oracle, oCount: (v) => oracle.oCount(v) + 1 };
@@ -480,6 +493,7 @@ export const CONTROLS = {
     // 0 B/op here (Sparkplug op, TurboFan callees), so only the check can fail it.
     'bop-unoptimized': { tiers: ['T6'], cheap: false, expect: /T6 B\/op: unsigned lane 0xFFFFFFFF = NaN B\/op, valid=0 \(expected < 0\.1, >= 3 valid\) -- not verified-optimized: op not optimized \(status 0x[0-9a-f]+ (?![^)]*turbofan)/, apply(ctx) { ctx.control.bopUnoptimized = true; } },
     'bop-unoptimized-callee': { tiers: ['T6'], cheap: false, expect: /T6 B\/op: unsigned lane 0xFFFFFFFF = NaN B\/op, valid=0 \(expected < 0\.1, >= 3 valid\) -- not verified-optimized: callee [^(]+ not optimized and not inlined \(status 0x[0-9a-f]+ (?![^)]*turbofan)/, apply(ctx) { ctx.control.bopUnoptimizedCallee = true; } },
+    't6-highest-old': { tiers: ['T6'], cheap: false, expect: /^(?=[\s\S]*T6 B\/op: unsigned lane 0xFFFFFFFF = (?:15\.9\d\d|16\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid\)(?! --))(?=[\s\S]*T6 B\/op: unsigned lane 2\*\*31 = (?:15\.9\d\d|16\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid\)(?! --))(?![\s\S]*T6 B\/op: SIGNED lane)/, apply(ctx) { highestOld(ctx.FB); } },
     'soak-stash': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakStash = true; } },
     'soak-retain': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakRetain = true; } }
 };
