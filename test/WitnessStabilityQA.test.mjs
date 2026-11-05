@@ -3,8 +3,8 @@
 // and ASSERTIONS only, independent of the coder's WitnessConfirm.test.mjs.
 //
 // The REAL driver (a byte copy of test/witness.mjs) and the FROZEN efbb377
-// driver (.handoff/frozen-efbb377/test/witness.mjs, gitignored) each run end to
-// end against a FAKE run-one.mjs returning synthetic deterministic rows. The
+// driver (.handoff/frozen-efbb377/test/witness.mjs, else `git show efbb377:test/witness.mjs`;
+// sha256-checked; under CI=true a missing driver FAILS) each run end to end against a FAKE run-one.mjs returning synthetic deterministic rows. The
 // fake keeps a PER-SPAWN COUNTER per row (subject/op/mode/lane, a file in the
 // temp dir) so a scenario can make only the 1st spawn of a row bad.
 //
@@ -20,8 +20,9 @@
 // Every new-driver scenario: `CTRL confirm-slope` reads ok.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,9 +32,35 @@ delete process.env.WITNESS_FAST;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVE = join(HERE, 'witness.mjs');
-const FROZEN = join(HERE, '..', '.handoff', 'frozen-efbb377', 'test', 'witness.mjs');
-const HAVE_FROZEN = existsSync(FROZEN);
-const FROZEN_SKIP = HAVE_FROZEN ? false : 'frozen driver .handoff/frozen-efbb377/test/witness.mjs is missing (gitignored): frozen half skipped';
+const CI_STRICT = process.env.CI === 'true';
+const FROZEN_SHA = 'db61915e9766f4cb';
+const FROZEN_HANDOFF = join(HERE, '..', '.handoff', 'frozen-efbb377', 'test', 'witness.mjs');
+const FROZEN = process.env.WSTAB_FROZEN || FROZEN_HANDOFF;
+
+// Frozen driver source text: (a) the .handoff copy (or WSTAB_FROZEN), else (b) git history, else unavailable.
+let FROZEN_TEXT = null, FROZEN_FROM = '', FROZEN_REASON = '', FROZEN_BAD = '';
+{
+  let raw = null;
+  const errs = [];
+  if (existsSync(FROZEN)) {
+    try { raw = readFileSync(FROZEN, 'utf8'); FROZEN_FROM = 'handoff:' + FROZEN; }
+    catch (e) { errs.push('read ' + FROZEN + ': ' + e.message); }
+  } else errs.push('missing ' + FROZEN);
+  if (raw === null) {
+    try {
+      raw = execFileSync('git', ['show', 'efbb377:test/witness.mjs'], { cwd: join(HERE, '..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      FROZEN_FROM = 'git show efbb377:test/witness.mjs';
+    } catch (e) { errs.push('git show efbb377:test/witness.mjs: ' + String(e.message).trim().split('\n')[0]); }
+  }
+  if (raw === null) FROZEN_REASON = 'frozen efbb377 driver unavailable (' + errs.join('; ') + ')';
+  else {
+    const sha = createHash('sha256').update(raw).digest('hex');
+    if (sha.startsWith(FROZEN_SHA)) FROZEN_TEXT = raw;
+    else FROZEN_BAD = 'frozen driver from ' + FROZEN_FROM + ' has sha256 ' + sha.slice(0, 16) + ', expected ' + FROZEN_SHA;
+  }
+}
+const FROZEN_SKIP = FROZEN_TEXT !== null ? false : (FROZEN_BAD || FROZEN_REASON) + ': frozen half skipped';
+const HAVE_FROZEN = FROZEN_TEXT !== null;
 
 // ---------------------------------------------------------------------------
 // fake run-one: argv[2] = JSON spec. WQA_CNT = counter dir. Clean rows mirror
@@ -123,10 +150,10 @@ function runDriver(dir, s) {
   });
 }
 
-function mkDriverDir(name, src) {
+function mkDriverDir(name, src, text) {
   const dir = join(ROOT, name);
   mkdirSync(join(dir, 'witness'), { recursive: true });
-  copyFileSync(src, join(dir, 'witness.mjs'));
+  if (text !== undefined) writeFileSync(join(dir, 'witness.mjs'), text); else copyFileSync(src, join(dir, 'witness.mjs'));
   writeFileSync(join(dir, 'witness', 'run-one.mjs'), FAKE);
   return dir;
 }
@@ -137,11 +164,11 @@ describe('witness slope confirm / exit codes -- frozen efbb377 vs live driver, s
     // (the live driver realpaths both sides of its entry guard, so for it this is belt-and-braces).
     ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'fb32-wstab-')));
     const t0 = Date.now();
-    const targets = [['live', LIVE]];
-    if (HAVE_FROZEN) targets.unshift(['frozen', FROZEN]);
+    const targets = [['live', LIVE, undefined]];
+    if (HAVE_FROZEN) targets.unshift(['frozen', null, FROZEN_TEXT]);
     // serial, one driver at a time
-    for (const [who, src] of targets) {
-      const dir = mkDriverDir(who, src);
+    for (const [who, src, text] of targets) {
+      const dir = mkDriverDir(who, src, text);
       for (const s of SCEN) runs[who][s.id] = await runDriver(dir, s);
     }
     console.log('WitnessStabilityQA scenario runs wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s');
@@ -163,6 +190,13 @@ describe('witness slope confirm / exit codes -- frozen efbb377 vs live driver, s
     assert.equal(c[0], NOT_RUN);
   };
   const confirmLines = (r) => r.lines.filter((l) => /^ {2}CONFIRM/.test(l));
+
+  it('frozen efbb377 driver: source + sha256 ' + FROZEN_SHA + ' (CI=true: required)',
+    { skip: (FROZEN_TEXT === null && !FROZEN_BAD && !CI_STRICT) ? FROZEN_REASON : false }, () => {
+      assert.ok(!FROZEN_BAD, FROZEN_BAD);
+      assert.ok(FROZEN_TEXT !== null, FROZEN_REASON + ' (CI=true requires it)');
+      console.log('frozen efbb377 driver source: ' + FROZEN_FROM + ' (sha256 ' + FROZEN_SHA + '...)');
+    });
 
   for (const who of ['frozen', 'live']) {
     const sk = who === 'frozen' ? FROZEN_SKIP : false;

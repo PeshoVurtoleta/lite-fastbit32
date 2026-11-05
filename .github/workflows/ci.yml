@@ -1,0 +1,93 @@
+# ci.yml -- lite-fastbit32 per-push / per-PR gate (CI burst 2026-11-05; modeled on LiteUtils ci.yml).
+# DETERMINISTIC tier only: npm test, test:types, torture, torture:controls. No quiet lock, no timed gate:
+# test:perf and the gate:release witness are STATISTICAL and stay on the local quiet host (hosted CI is not
+# calibrated for them).
+# Matrix: node 18 / 20 / 22 / 24 / 26 x ubuntu-latest + macos-latest, plus one node 26.8.2 leg per OS (the
+# maintainer's local node, so a T6 B/op reading here compares like for like): 12 legs.
+# Node 18 is the shipped engines floor (package.json engines >=18). It runs npm test + test:types only:
+# torture and torture:controls need Node 20+ because the devDependency @zakkster/lite-leak declares
+# engines.node >=20 (CHANGELOG [1.2.1] "Node floor"). The skip is a named step that prints the reason.
+# fetch-depth 0: S3Parity (27291e4), S5QA (fb3b803), FastBit1024Parity160 (cd49e4d) and WitnessStabilityQA
+# (efbb377) read `git show <commit>:<file>`. The parity rows FAIL (throw / assert) when the commit is missing,
+# on any host; WitnessStabilityQA's frozen driver comes from .handoff/ (gitignored) or else git history, and
+# under CI=true (GitHub sets it) a missing driver FAILS. The history step below refuses a shallow clone up front.
+# Known explicit SKIP: the T6 FastBit1024 d8 pointer-compressed lane needs a jsvu d8 (FASTBIT_D8); runners have
+# none, so torture prints "MEASURE FastBit1024 d8 ... lane SKIP: <reason>" on stderr.
+# No lockfile is committed (package-lock.json is gitignored): `npm install`, no npm cache; the resolved
+# devDependency versions are printed after install.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # 60 (nominal): local npm test is 173 s at load1 ~31 on 12 cores (2026-11-05); torture not yet timed on a runner
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['18', '20', '22', '24', '26']
+        include:
+          - os: ubuntu-latest
+            node: '26.8.2'
+          - os: macos-latest
+            node: '26.8.2'
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: provenance
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -a
+          echo "commit: $(git rev-parse HEAD)"
+          echo "shallow: $(git rev-parse --is-shallow-repository)"
+          echo "CI=${CI:-unset}"
+          echo "cpus: $(node -p 'require("os").cpus().length')  load: $(node -p 'require("os").loadavg().map(x => x.toFixed(2)).join(" ")')"
+          node -p '"v8 " + process.versions.v8 + "  arch " + process.arch'
+      # the pins live in the test files: a pinned commit missing from the clone FAILS its rows
+      - name: full history (not a shallow clone)
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+      # no committed lockfile: plain install (an engines mismatch only warns, e.g. lite-leak on node 18)
+      - name: install
+        run: npm install --no-audit --no-fund
+      - name: resolved devDependencies
+        run: npm ls --depth=0 || true
+      - name: npm test
+        run: npm test
+      - name: test:types
+        run: npm run test:types
+      - name: torture
+        if: matrix.node != '18'
+        run: npm run torture
+      - name: torture:controls
+        if: matrix.node != '18'
+        run: npm run torture:controls
+      - name: torture + torture:controls SKIPPED (node 18)
+        if: matrix.node == '18'
+        run: echo "SKIP torture, torture:controls on node 18 -- @zakkster/lite-leak (devDependency) declares engines.node >=20 (CHANGELOG [1.2.1] Node floor); the shipped library keeps engines >=18 and its npm test + test:types ran above."

@@ -592,7 +592,7 @@ describe('FastBit1024 image: hostile sources (p7, p8, Q-9, Q-10)', () => {
         }
     });
 
-    it('detached out / src -> RangeError (offset-fit message "got 0"); a shrunk resizable buffer -> RangeError length', () => {
+    it('detached out / src -> RangeError (offset-fit message "got 0")', () => {
         need();
         const s = mk(500, [9]);
         const out = new Int32Array(64); structuredClone(out.buffer, { transfer: [out.buffer] });
@@ -600,6 +600,11 @@ describe('FastBit1024 image: hostile sources (p7, p8, Q-9, Q-10)', () => {
         const src = new Int32Array(64); src.set(refImage(500, new Set([3]))); structuredClone(src.buffer, { transfer: [src.buffer] });
         rej(s, () => s.loadFrom(src), RangeError, M_OFF(0), [], 'detached src');
         rej(null, () => FastBit1024.deserialize(src), RangeError, M_OFF(0), [], 'detached deserialize');
+    });
+
+    it('a shrunk resizable buffer -> RangeError length', { skip: typeof ArrayBuffer.prototype.resize === 'function' ? false : 'resizable ArrayBuffer is ES2024 (V8 11.1 / Node 20+); absent on the Node 18 engines floor' }, () => {
+        need();
+        const s = mk(500, [9]);
         const rab = new ArrayBuffer(68, { maxByteLength: 400 }), a = new Int32Array(rab);
         s.saveInto(a); rab.resize(40);
         rej(s, () => s.loadFrom(a), RangeError, M_IMG('length'), [], 'shrunk resizable src');

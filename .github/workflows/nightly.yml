@@ -1,0 +1,81 @@
+# nightly.yml -- lite-fastbit32 daily run on the newest node and the floors (CI burst 2026-11-05; modeled on
+# LiteUtils nightly.yml). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync), on node
+# 'latest', '20' (the torture floor) and '18' (the shipped engines floor; npm test + test:types only, see ci.yml)
+# x ubuntu-latest / macos-latest, check-latest so each row gets the newest patch every night. A daily torture
+# run on a clean runner also shows whether the load-dependent T6 B/op failure (16 B/op on the unsigned lanes)
+# happens off the maintainer's shared host.
+# A failure turns the nightly red; it is never a required check for a push. GitHub runs a schedule only from
+# the default branch and pauses it after 60 days without repository activity (re-enable in the Actions tab).
+
+name: nightly
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: nightly (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # 60 (nominal): local npm test is 173 s at load1 ~31 on 12 cores (2026-11-05); torture not yet timed on a runner
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['latest', '20', '18']
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+      - name: provenance
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -a
+          echo "commit: $(git rev-parse HEAD)"
+          echo "shallow: $(git rev-parse --is-shallow-repository)"
+          echo "CI=${CI:-unset}"
+          echo "cpus: $(node -p 'require("os").cpus().length')  load: $(node -p 'require("os").loadavg().map(x => x.toFixed(2)).join(" ")')"
+          node -p '"v8 " + process.versions.v8 + "  arch " + process.arch'
+      # the pins live in the test files: a pinned commit missing from the clone FAILS its rows
+      - name: full history (not a shallow clone)
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+      # no committed lockfile: plain install (an engines mismatch only warns, e.g. lite-leak on node 18)
+      - name: install
+        run: npm install --no-audit --no-fund
+      - name: resolved devDependencies
+        run: npm ls --depth=0 || true
+      - name: npm test
+        run: npm test
+      - name: test:types
+        run: npm run test:types
+      - name: torture
+        if: matrix.node != '18'
+        run: npm run torture
+      - name: torture:controls
+        if: matrix.node != '18'
+        run: npm run torture:controls
+      - name: torture + torture:controls SKIPPED (node 18)
+        if: matrix.node == '18'
+        run: echo "SKIP torture, torture:controls on node 18 -- @zakkster/lite-leak (devDependency) declares engines.node >=20 (CHANGELOG [1.2.1] Node floor); the shipped library keeps engines >=18 and its npm test + test:types ran above."
