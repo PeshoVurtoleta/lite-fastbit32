@@ -1,4 +1,4 @@
-# @zakkster/lite-fastbit32 v1.6.0
+# @zakkster/lite-fastbit32 v1.6.1
 
 > Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless.
 
@@ -24,7 +24,7 @@ import {
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
 
-// VERSION is the package version string ('1.6.0'), synced with package.json.
+// VERSION is the package version string ('1.6.1'), synced with package.json.
 ```
 
 ## Constructor

@@ -25,7 +25,7 @@
  * (FB-12, S7).
  */
 
-export const VERSION = '1.6.0';
+export const VERSION = '1.6.1';
 
 export class FastBit32 {
     constructor(initial = 0) {

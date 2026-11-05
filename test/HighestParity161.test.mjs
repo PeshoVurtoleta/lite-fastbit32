@@ -7,6 +7,8 @@
 // commit FAILS (never skips). Receivers are built by direct `f.value = x`
 // (the constructor would coerce). PRNG: xorshift32, seed 0x5EED0B3A (32-bit
 // exact via >>> 0), 100000 words.
+// Rows 7 / 8 pin the 1.6.1 release text (exactly VERSION + highest differ from
+// the base): retire or rebase them at the next edit of FastBit32.js.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -106,16 +108,18 @@ test('B3 row 6: source pin -- highest() text, new and old', () => {
     assert.equal(ot, 'highest() {\n        return 31 - Math.clz32(this.value);\n    }');
 });
 
-test('B3 row 7: the two FastBit32.js texts differ in exactly one line', () => {
+test('B3 row 7: the two FastBit32.js texts differ in exactly two lines (VERSION, highest)', () => {
     const a = baseSrc.split('\n'), b = headSrc.split('\n');
     assert.equal(a.length, b.length, 'line count');
     const d = [];
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d.push(i);
-    assert.equal(d.length, 1, 'differing lines: ' + d.join(','));
-    assert.ok(a[d[0]].includes('Math.clz32(this.value') && b[d[0]].includes('Math.clz32(this.value'));
+    assert.equal(d.length, 2, 'differing lines: ' + d.join(','));
+    assert.equal(a[d[0]], "export const VERSION = '1.6.0';");
+    assert.equal(b[d[0]], "export const VERSION = '1.6.1';");
+    assert.ok(a[d[1]].includes('Math.clz32(this.value);') && b[d[1]].includes('Math.clz32(this.value | 0);'));
 });
 
-test('B3 row 8: VERSION stays 1.6.0 in both', () => {
-    assert.equal(NEW.VERSION, '1.6.0');
+test('B3 row 8: VERSION is 1.6.0 in the base, 1.6.1 in the new body', () => {
+    assert.equal(NEW.VERSION, '1.6.1');
     assert.equal(OLD.VERSION, '1.6.0');
 });

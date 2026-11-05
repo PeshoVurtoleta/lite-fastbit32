@@ -3,7 +3,7 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
-## [Unreleased]
+## [1.6.1] - 2026-11-05
 
 ### Fixed
 
@@ -11,8 +11,9 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   its `Math.clz32` call. After one Maglev "not int32" deopt (for example a word
   >= 2^31 reaching optimized code), V8 stopped speculating on that call and
   passed the float64 field as a boxed HeapNumber: 16 B per `highest()` call on
-  Node. The argument is now `this.value | 0`, so on Node (32-bit Smi) a word >= 2^31 passes as a Smi (a pointer-compressed
-  engine can still box an int32 outside [-2^30, 2^30) there; not gated).
+  Node. The argument is now `this.value | 0`, so on Node (32-bit Smi) a word
+  >= 2^31 passes as a Smi (a pointer-compressed engine can still box an int32
+  outside [-2^30, 2^30) there; not gated).
   Results are unchanged for every input (200,085 golden vectors vs the 1.6.0
   build, and `HighestParity161` (100,000 seeded words, every single bit, edge
   values) in `npm test`). Only `highest()` was affected;
@@ -50,8 +51,9 @@ No library behaviour change beyond Fixed.
 - T6-FIX2: before the first measured lane, T6 runs a deterministic
   feedback-poisoning pre-pass over 11 rows (checked against a census of every
   method that feeds `this.value` to a `Math.*` call). A witness class carrying
-  the 1.6.0 `highest()` body must read >= 15.9 B/op on its unsigned lanes on every run, or T6 fails
-  with "the pre-pass did not take". New control `t6-highest-old`.
+  the 1.6.0 `highest()` body must read >= 15.9 B/op on its unsigned lanes on
+  every run, or T6 fails with "the pre-pass did not take".
+  New control `t6-highest-old`.
   `torture:controls` has 44 controls (entries in `test/torture/controls.mjs`).
   T6 reads 37 verified lanes on node 26.8.2. `npm test`: 880 tests, 879 pass,
   1 skip (the V8 11 - 13 row), node 26.8.2.
