@@ -21,6 +21,37 @@ function run(flags, env = {}) {
     });
 }
 
+// Node <= 24 prints `(node:<pid>) [DEP0152] ...` in each child; the PID differs
+// per child while the rest is byte-identical. Only a line-leading PID is rewritten.
+function normPid(s) {
+    return s.replace(/^\(node:\d+\) /gm, '(node:PID) ');
+}
+
+// Probe once: does this V8 know --minor-ms? (Node 18/20 do not: node itself
+// refuses the option with exit 9 "bad option" before torture.mjs runs.)
+const MINOR_PROBE = (() => {
+    const clean = { ...process.env };
+    delete clean.NODE_OPTIONS;
+    return spawnSync(process.execPath, ['--minor-ms', '-e', '0'], { env: clean, encoding: 'utf8' });
+})();
+
+function assertMinorMsRefused(flag) {
+    const r = run(['--expose-gc', ...PINS, flag], { TORTURE_CONTROL: 'foreach-closure', TORTURE_FAST: '1' });
+    if (MINOR_PROBE.status === 0) {
+        assert.strictEqual(r.status, 1);
+        assert.match(r.stderr, /--minor-ms is unsupported/);
+        assert.strictEqual(r.stdout, '');
+    } else if (MINOR_PROBE.status === 9) {
+        // V8 has no --minor-ms; node refuses it (still fail closed).
+        assert.strictEqual(r.status, 9, 'V8 has no --minor-ms; node refuses it: want status 9, got ' + r.status);
+        assert.strictEqual(r.stdout, '');
+        assert.match(r.stderr, /bad option: --minor[-_]ms/);
+    } else {
+        assert.fail('--minor-ms probe gave unexpected status ' + MINOR_PROBE.status +
+            ' signal=' + MINOR_PROBE.signal + ' error=' + MINOR_PROBE.error + ': ' + MINOR_PROBE.stderr);
+    }
+}
+
 describe('torture entry guards (fail closed)', () => {
     it('without --expose-gc: exit 1 with a remedy, no stack trace', () => {
         const r = run([]);
@@ -77,19 +108,13 @@ describe('torture entry guards (fail closed)', () => {
     // the detector self-validation (guard 5) would also fail closed on any other
     // blinding. (test:perf independently fails closed here via lite-perf-gate's
     // own detector validation.)
-    it('--minor-ms: the entry refuses it (exit 1, no stdout)', () => {
-        const r = run(['--expose-gc', ...PINS, '--minor-ms'], { TORTURE_CONTROL: 'foreach-closure', TORTURE_FAST: '1' });
-        assert.strictEqual(r.status, 1);
-        assert.match(r.stderr, /--minor-ms is unsupported/);
-        assert.strictEqual(r.stdout, '');
+    it('--minor-ms: the entry refuses it (exit 1, no stdout; or node refuses on a V8 without the flag)', () => {
+        assertMinorMsRefused('--minor-ms');
     });
 
     // The underscore spelling must be refused too (name normalised before match).
-    it('--minor_ms: the entry refuses it (exit 1, no stdout)', () => {
-        const r = run(['--expose-gc', ...PINS, '--minor_ms'], { TORTURE_CONTROL: 'foreach-closure', TORTURE_FAST: '1' });
-        assert.strictEqual(r.status, 1);
-        assert.match(r.stderr, /--minor-ms is unsupported/);
-        assert.strictEqual(r.stdout, '');
+    it('--minor_ms: the entry refuses it (exit 1, no stdout; or node refuses on a V8 without the flag)', () => {
+        assertMinorMsRefused('--minor_ms');
     });
 
     // Guard 5 teeth (QA round 4): blind the GC watcher itself with a preload that
@@ -137,9 +162,22 @@ describe('torture entry guards (fail closed)', () => {
         assert.strictEqual(a.status, 1);
         assert.match(a.stderr, /FAIL T5/);
         assert.match(a.stderr, /TORTURE_SEED=12345 npm run torture # op \d+/);
-        assert.strictEqual(a.stderr, b.stderr);
+        assert.strictEqual(normPid(a.stderr), normPid(b.stderr));
+        // teeth: the run itself must differ under another seed, not only the echoed seed
+        const other = run(['--expose-gc', ...PINS], { TORTURE_SEED: '12346', TORTURE_CONTROL: 'oracle-flip' });
+        assert.strictEqual(other.status, 1);
+        assert.match(other.stderr, /TORTURE_SEED=12346 npm run torture # op \d+/);
+        const noEcho = (s) => normPid(s).replace(/TORTURE_SEED=\d+/g, 'TORTURE_SEED=N');
+        assert.notStrictEqual(noEcho(a.stderr), noEcho(other.stderr));
         const neg = run(['--expose-gc', ...PINS], { TORTURE_SEED: '-5', TORTURE_CONTROL: 'oracle-flip' });
         const uns = run(['--expose-gc', ...PINS], { TORTURE_SEED: '4294967291', TORTURE_CONTROL: 'oracle-flip' });
-        assert.strictEqual(neg.stderr, uns.stderr);
+        assert.strictEqual(normPid(neg.stderr), normPid(uns.stderr));
+    });
+
+    it('normPid rewrites line-leading PIDs only (regex cannot be a no-op)', () => {
+        assert.strictEqual(
+            normPid('(node:4242) [DEP0152] x\n(node:7) y'),
+            '(node:PID) [DEP0152] x\n(node:PID) y');
+        assert.strictEqual(normPid('a (node:12) b'), 'a (node:12) b');
     });
 });
