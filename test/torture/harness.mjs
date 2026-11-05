@@ -146,16 +146,26 @@ export function newSpaceUsed() {
 }
 
 // ---- scavenge watcher -----------------------------------------------------
+// Classifies by entry.detail.kind ONLY. The top-level entry.kind accessor is
+// deprecated (DEP0152: node <= 24 prints a DeprecationWarning on first read),
+// so it is never read. An entry whose detail is missing, or whose detail.kind
+// is not a number, is counted as UNKNOWN -- never as minor or major. Fail
+// closed: runWindow discards a window with any unknown entry (as it does a
+// scavenge) and measureScavenges returns NaN if one arrived in its window
+// (callers gate with !(scav <= n), so NaN fails).
 const MINOR = new Int32Array(1);
+const GC_UNKNOWN = new Int32Array(1);
 let OBS = null;
 export function startScavengeWatch() {
     if (OBS) return;
     OBS = new PerformanceObserver((list) => {
         const entries = list.getEntries();
         for (let i = 0; i < entries.length; i++) {
+            const d = entries[i].detail;
+            const kind = d === null || d === undefined ? undefined : d.kind;
             // kind 1 === NODE_PERFORMANCE_GC_MINOR (scavenge)
-            if (entries[i].detail && entries[i].detail.kind === 1) MINOR[0] = (MINOR[0] + 1) | 0;
-            else if (entries[i].kind === 1) MINOR[0] = (MINOR[0] + 1) | 0;
+            if (typeof kind !== 'number') GC_UNKNOWN[0] = (GC_UNKNOWN[0] + 1) | 0;
+            else if (kind === 1) MINOR[0] = (MINOR[0] + 1) | 0;
         }
     });
     OBS.observe({ entryTypes: ['gc'], buffered: true });
@@ -165,6 +175,10 @@ export function stopScavengeWatch() {
 }
 export function minorCount() {
     return MINOR[0];
+}
+// GC entries the watcher could not classify (no detail / no numeric kind).
+export function unknownGcCount() {
+    return GC_UNKNOWN[0];
 }
 
 // ---- young-GC detector self-validation controls ---------------------------
@@ -264,13 +278,32 @@ export function warmShared(FB) {
 // PARSES without --allow-natives-syntax (plain `node --test` files import it);
 // without the flag measureBop fails closed with a "needs" reason.
 //
-// %GetOptimizationStatus bits on Node 26.8.2 / V8 14.6.202.34, decoded
-// empirically (.handoff/evidence/t6-fix/status-bits.log): 0x1 is-function,
+// %GetOptimizationStatus has TWO bit layouts across the V8 versions we run.
+// Every OPT_* constant below and every status the harness reads or prints is
+// in the V8 14 layout; a V8 11.3-13.6 word is normalized into it first.
+//
+// Layout 0 -- V8 14.x (Node 26.8.2 / V8 14.6.202.34; d8 15.7 agrees: forced
+// TurboFan 0x29), decoded empirically (.handoff/evidence/t6-fix/status-bits.log):
+// 0x1 is-function,
 // 0x2 never-optimize (seen under --jitless; %NeverOptimizeFunction does not set
 // it here, its op reads 0x4001 / 0x41), 0x8 optimized (any tier), 0x10 Maglev, 0x20 TurboFan,
 // 0x40 interpreted, 0x80 marked for optimization on next call, 0x1000 lite
 // mode (--jitless), 0x2000 marked for deoptimization, 0x4000 Sparkplug, 0x20000
 // lazy (never compiled). Maglev does NOT count: only the TurboFan bit verifies.
+//
+// Layout 1 -- V8 11.3-13.6 (Node 20 / 22 / 24): bit 2 (0x4) is still
+// kAlwaysOptimize, so every bit above 0x2 sits ONE position higher. Measured
+// with `new Function` probes (.handoff/research/ci4/status-bits.out): V8 12.4 and
+// 13.6 forced TurboFan 0x51, interpreted 0x81, marked-for-opt 0x181, after
+// deopt 0x81, Maglev (13.6) 0x31; CI run 42066992411 printed 0x51 for the
+// forced probe on V8 11.3 (Node 20.20.2). V8 14.6 reads 0x29 / 0x41 / 0xc1 /
+// 0x41 / 0x19 for the same probes. normalizeStatus drops old bit 2 and shifts
+// the rest down one; the bits above 0x100 (lite, deopt-marked, Sparkplug,
+// lazy) are assumed to move the same way -- they were not probed on layout 1.
+//
+// natives() detects the layout ONCE (decodeStatusLayout on a forced-TurboFan
+// probe and an interpreted probe); an unknown layout fails closed
+// (optimizationUnavailable returns a reason, measureBop never measures).
 export const OPT_NEVER = 0x2;
 export const OPT_MAGLEV = 0x10;
 export const OPT_TURBOFAN = 0x20;
@@ -281,21 +314,86 @@ export const OPT_DEOPT_MARKED = 0x2000;
 export const OPT_BASELINE = 0x4000;
 export const NATIVES_REMEDY = 'node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs';
 
+// Which layout a (forced-TurboFan, interpreted) probe pair was read in:
+// 0 = V8 14.x, 1 = V8 11.3-13.6 (kAlwaysOptimize at bit 2), null = neither or
+// both (unknown -- the caller fails closed). Pure.
+export function decodeStatusLayout(tfWord, interpWord) {
+    const l0 = (tfWord & 0x8) !== 0 && (tfWord & 0x20) !== 0 && (tfWord & 0x40) === 0 &&
+        (interpWord & 0x40) !== 0 && (interpWord & 0x8) === 0 && (interpWord & 0x20) === 0;
+    const l1 = (tfWord & 0x10) !== 0 && (tfWord & 0x40) !== 0 && (tfWord & 0x80) === 0 &&
+        (interpWord & 0x80) !== 0 && (interpWord & 0x10) === 0 && (interpWord & 0x40) === 0;
+    if (l0 === l1) return null;
+    return l0 ? 0 : 1;
+}
+
+// A raw status word re-expressed in the V8 14 layout. shift 0: unchanged;
+// shift 1: keep bits 0-1, drop old bit 2 (kAlwaysOptimize), move the rest down
+// one. Pure, int32 only (no allocation).
+export function normalizeStatus(raw, shift) {
+    return shift === 1 ? (raw & 0x3) | ((raw >>> 1) & ~0x3) : raw;
+}
+
+const STATUS_RAW = new Int32Array(1);      // raw word of the LAST N.status read
 let NATIVES = null;                        // null = not tried, false = unavailable
 function natives() {
     if (NATIVES === null) {
+        let prep, opt, never, raw;
         try {
-            NATIVES = {
-                prep: new Function('f', '%PrepareFunctionForOptimization(f);'),
-                opt: new Function('f', '%OptimizeFunctionOnNextCall(f);'),
-                never: new Function('f', '%NeverOptimizeFunction(f);'),
-                status: new Function('f', 'return %GetOptimizationStatus(f);')
-            };
+            prep = new Function('f', '%PrepareFunctionForOptimization(f);');
+            opt = new Function('f', '%OptimizeFunctionOnNextCall(f);');
+            never = new Function('f', '%NeverOptimizeFunction(f);');
+            raw = new Function('f', 'return %GetOptimizationStatus(f);');
         } catch (e) {
             NATIVES = false;
+            return NATIVES;
         }
+        // Layout probes: distinct source text from each other and from the
+        // optimizationUnavailable probe, so no compilation-cache sharing.
+        const tfProbe = new Function('x', 'return (x + 1) | 0; // t6 layout probe: forced turbofan');
+        prep(tfProbe);
+        tfProbe(1); tfProbe(2);
+        opt(tfProbe);
+        tfProbe(3);
+        const interpProbe = new Function('x', 'return (x + 1) | 0; // t6 layout probe: interpreted');
+        interpProbe(1);
+        const tfWord = raw(tfProbe);
+        const interpWord = raw(interpProbe);
+        const shift = decodeStatusLayout(tfWord, interpWord);
+        const sh = shift === null ? 0 : shift;   // unknown: raw words, and every consumer refuses
+        NATIVES = {
+            prep, opt, never, raw,
+            shift, tfWord, interpWord,
+            // normalized (V8 14 layout) word; the raw word stays in STATUS_RAW[0]
+            status: (f) => {
+                STATUS_RAW[0] = raw(f);
+                return normalizeStatus(STATUS_RAW[0], sh);
+            }
+        };
     }
     return NATIVES;
+}
+
+// The detected layout, for tests and diagnostics (cold). null when natives are
+// unavailable (no --allow-natives-syntax); else { shift: 0 | 1 | null, tfWord,
+// interpWord, v8 }.
+export function statusLayout() {
+    const N = natives();
+    if (N === false) return null;
+    return { shift: N.shift, tfWord: N.tfWord, interpWord: N.interpWord, v8: process.versions.v8 };
+}
+
+function layoutUnknownReason(N) {
+    return 'the %GetOptimizationStatus layout is unknown on V8 ' + process.versions.v8 +
+        ' (forced-TurboFan probe raw 0x' + N.tfWord.toString(16) + ', interpreted probe raw 0x' + N.interpWord.toString(16) +
+        '; neither the V8 14 nor the V8 11.3-13.6 layout fits), so TurboFan cannot be verified -- failing closed' +
+        ' (if --no-opt / --jitless / --max-opt is set, remove it)';
+}
+
+// describeOptStatus for the word the LAST N.status call returned, plus the raw
+// word when it was normalized (cold path).
+function describeRead(N, s) {
+    if (N.shift === 0) return describeOptStatus(s);
+    return describeOptStatus(s) + ' (raw 0x' + STATUS_RAW[0].toString(16) + ', ' + (N.shift === 1 ? 'V8 <= 13 layout' : 'unknown layout') + ')';
 }
 
 // Decode a status word for a failure message (cold path).
@@ -318,13 +416,14 @@ export function describeOptStatus(s) {
 export function optimizationUnavailable() {
     const N = natives();
     if (N === false) return '--allow-natives-syntax is not set: T6 must force and verify TurboFan optimization of every measured op (needs --allow-natives-syntax).';
+    if (N.shift === null) return 'T6 cannot run: ' + layoutUnknownReason(N) + '.';
     const probe = new Function('x', 'return (x + 1) | 0; // t6 natives probe');
     N.prep(probe);
     probe(1); probe(2);
     N.opt(probe);
     probe(3);
     const s = N.status(probe);
-    if ((s & OPT_TURBOFAN) === 0) return 'TurboFan is unavailable (forced probe status ' + describeOptStatus(s) + '; remove --no-opt / --jitless / --max-opt): T6 measures verified-optimized code only.';
+    if ((s & OPT_TURBOFAN) === 0) return 'TurboFan is unavailable (forced probe status ' + describeRead(N, s) + '; remove --no-opt / --jitless / --max-opt): T6 measures verified-optimized code only.';
     return null;
 }
 
@@ -358,13 +457,13 @@ export function collectMethods(...classes) {
 // deoptimization. Returns null or the reason (cold).
 function verifyTracked(N, opFn, baselineFn, callees, when) {
     const so = N.status(opFn);
-    if ((so & OPT_TURBOFAN) === 0 || (so & OPT_DEOPT_MARKED) !== 0) return 'op ' + when + ' (status ' + describeOptStatus(so) + ')';
+    if ((so & OPT_TURBOFAN) === 0 || (so & OPT_DEOPT_MARKED) !== 0) return 'op ' + when + ' (status ' + describeRead(N, so) + ')';
     const sb = N.status(baselineFn);
-    if ((sb & OPT_TURBOFAN) === 0 || (sb & OPT_DEOPT_MARKED) !== 0) return 'baseline ' + when + ' (status ' + describeOptStatus(sb) + ')';
+    if ((sb & OPT_TURBOFAN) === 0 || (sb & OPT_DEOPT_MARKED) !== 0) return 'baseline ' + when + ' (status ' + describeRead(N, sb) + ')';
     for (let i = 0; i < callees.length; i++) {
         const s = N.status(callees[i]);
         if ((s & (OPT_TURBOFAN | OPT_MARKED)) === 0 || (s & OPT_DEOPT_MARKED) !== 0) {
-            return 'callee ' + (callees[i].name || '#' + i) + ' ' + when + ' and not inlined (status ' + describeOptStatus(s) + ')';
+            return 'callee ' + (callees[i].name || '#' + i) + ' ' + when + ' and not inlined (status ' + describeRead(N, s) + ')';
         }
     }
     return null;
@@ -391,10 +490,12 @@ const BOP_OPTS = ['callees', 'withhold'];
 async function runWindow(opFn) {
     const before = newSpaceUsed();
     const m0 = minorCount();
+    const u0 = GC_UNKNOWN[0];
     for (let i = 0; i < K; i++) opFn(i);
     const after = newSpaceUsed();
     await settle(10);
-    return { delta: after - before, scav: minorCount() - m0 };
+    // an unclassifiable GC entry counts toward the discard, never as zero
+    return { delta: after - before, scav: (minorCount() - m0) + (GC_UNKNOWN[0] - u0) };
 }
 
 // opFn(i) writes its int result into SINK. baselineFn(i) does the loop + sink
@@ -414,6 +515,7 @@ export async function measureBop(opFn, baselineFn, opts) {
     const fail = (why) => ({ perOp: NaN, valid: 0, window0: NaN, status: 'not verified-optimized: ' + why });
     const N = natives();
     if (N === false) return fail('needs --allow-natives-syntax (' + NATIVES_REMEDY + ')');
+    if (N.shift === null) return fail(layoutUnknownReason(N));
     if (o0.withhold === true) N.never(opFn);
     if (o0.withhold === 'callee') N.never(callees[0]);
     N.prep(opFn);
@@ -463,7 +565,9 @@ export async function measureScavenges(opFn, N = 2000000, warm = 100000) {
     for (let i = 0; i < warm; i++) opFn(i);
     await settle(50);
     const m0 = minorCount();
+    const u0 = GC_UNKNOWN[0];
     for (let i = 0; i < N; i++) opFn(i);
     await settle(50);
+    if (GC_UNKNOWN[0] !== u0) return NaN;  // unclassifiable GC in the window: no verdict
     return minorCount() - m0;
 }
