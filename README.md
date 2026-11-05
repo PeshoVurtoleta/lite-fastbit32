@@ -37,9 +37,9 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 2254 B whole module | ~8KB | ~6KB |
+| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 2254 B whole module (1.5.0 build; see note) | ~8KB | ~6KB |
 
-> Bundle sizes, measured 2026-10-11: an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2254 B. `{ FastBit32 }` alone: 1059 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1485 B (1302 B in 1.4.0).
+> Bundle sizes of the 1.5.0 build, measured 2026-10-11 (not re-measured for 1.6.0, which adds FastBit1024 members): an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 2254 B. `{ FastBit32 }` alone: 1059 B. `{ FastBit1024 }` alone: 1006 B. Every export except FastBit1024 (VERSION included): 1485 B (1302 B in 1.4.0).
 
 > FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0).
 
@@ -160,7 +160,7 @@ Tested on Apple M2 Pro, Node 22, V8 12.x. All values in **ops/ms**.
 
 `forEach` with a callback that captures per-call state allocates a closure on every
 call. The `nextSetBit` cursor (1.3.0) needs no callback at all: O(1) per step,
-0 B/op (gated in the torture T6 lane and the perf gate).
+0 B/op (gated in the torture T6 lane on verified-optimized code, and the perf gate).
 
 ```javascript
 import { FastBit32 } from '@zakkster/lite-fastbit32';
@@ -383,7 +383,7 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 
 ## FastBit1024: 32 x 32 pools up to 1024
 
-`FastBit1024` (1.4.0) is a fixed 32 x 32 two-level bitmap: an `Int32Array(32)` plus a "word non-empty" and a "word full" summary and an exact count, so every op except `forEach`, `hasAll`, `hasAny` and `clear` is loop-free. It is a separate export with no coupling to `FastBit32`.
+`FastBit1024` (1.4.0) is a fixed 32 x 32 two-level bitmap: an `Int32Array(32)` plus a "word non-empty" and a "word full" summary and an exact count. Every op is loop-free except forEach/hasAll/hasAny/clear/copy/equals/intersectionSize/unionSize/differenceSize (O(non-empty words)), saveInto/loadFrom (O(image words), and loadFrom rewrites all 32 words; the cold serialize/deserialize reuse them, clone reuses copy) and addRange/removeRange (O(words touched)). 1.6.0 adds save / restore, copy / equals, the three counts, `prevSetBit` and the range ops. It is a separate export with no coupling to `FastBit32`.
 
 **Two input laws in one package:** FastBit32's hot ops trust the caller (SC-3, open, decided in S6), while FastBit1024 fails closed on every index (a `RangeError`, or a `TypeError` for a Symbol, a BigInt or a null-prototype object; a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw; see [SC-3](./ROADMAP.md#sc-3----the-input-law-for-raw-bit-indices-open-decided-in-s6) and [SC-5](./ROADMAP.md#sc-5----fastbit1024-in-this-package-settled-2026-10-10-maintainer)).
 
@@ -398,10 +398,25 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 | `isEmpty()`, `isFull()` | `boolean` | O(1) |
 | `lowest()`, `highest()`, `nextClearBit()` | index or `-1` | O(1) |
 | `nextSetBit(from)` | index or `-1` | `from` in `0..capacity`; `capacity` ends the cursor |
-| `hasAll(other)`, `hasAny(other)` | `boolean` | `other` must be a FastBit1024 (anything else: `TypeError`; the brand is `instanceof`, so an `Object.create(FastBit1024.prototype)` forgery passes it and is unsupported: no defined answer, and neither method writes to either instance); capacities may differ, answer is exact |
+| `prevSetBit(from)` | index or `-1` | (1.6.0) highest set bit `<= from` (inclusive), loop-free, 0 B/op. `from` in `-1..capacity-1`; `-1` returns `-1`, so `prevSetBit(b - 1)` ends a reverse walk; anything else: `RangeError`. The mirror of `nextSetBit` and of `FastBit32#prevSetBit` |
+| `hasAll(other)`, `hasAny(other)` | `boolean` | `other` must be a FastBit1024 (private-name brand; anything else, a forgery or a Proxy included: `TypeError`; neither method writes to either instance); O(non-empty words), 0 B/op; capacities may differ, answer is exact. `hasAny` is RoaringSet's `intersects` (no alias) |
+| `intersectionSize(other)`, `unionSize(other)`, `differenceSize(other)` | `number` | (1.6.0) the count of A AND B, A OR B, A AND NOT B (RoaringSet's names); O(non-empty words), 0 B/op; same brand `TypeError`. Exact for any two capacities (RoaringSet throws `RangeError` on a universe mismatch; these do not) |
+| `copy(other)`, `equals(other)` | `this` / `boolean` | (1.6.0) `copy` overwrites words and summaries (no rebuild); a differing capacity is accepted only when every set bit of `other` fits, else `RangeError` and nothing is written. `equals` is exact across capacities. O(non-empty words), 0 B/op; same brand `TypeError` |
+| `clone()` | `FastBit1024` | (1.6.0) COLD, allocates: same capacity, same bits |
+| `addRange(lo, hi)`, `removeRange(lo, hi)` | `this` | (1.6.0) set / clear bits `lo..hi-1`: HALF-OPEN `[lo, hi)`, `0 <= lo <= hi <= capacity` (integers, else `RangeError` before any write); `lo === hi` is a no-op. A Symbol or BigInt `lo` throws `TypeError`; so does such an `hi` when `lo` passes its check. O(words touched), 0 B/op |
+| `imageLength` | `number` | (1.6.0) read-only: `1 + ceil(capacity / 32)` (2..33) words in the image |
+| `saveInto(out, offset = 0)` | `number` | (1.6.0) writes the image at `out[offset..offset + imageLength)` (header `0x46420800 \| capacity`, then the data words LSB-first); returns `offset + imageLength`, so saves chain. `out`: a genuine `Int32Array` or a subclass (intrinsic tag and length), else `TypeError`; a bad offset, no room or a detached `out`: `RangeError`, nothing written. O(image words), 0 B/op |
+| `loadFrom(src, offset = 0)` | `number` | (1.6.0) validates the WHOLE image (tag, capacity 1..1024, length, no bit at or above the image capacity, every set bit below THIS capacity) before any write, then rebuilds the summaries and the count (a stored count is never trusted); returns the offset just past the image. Same `src` brand as `saveInto`; any failure leaves the set unchanged. O(image words), 0 B/op |
+| `serialize()`, `FastBit1024.deserialize(src, offset = 0)` | `Int32Array` / `FastBit1024` | (1.6.0) COLD, allocate: a fresh image / a new set whose capacity is the image's (throws as `loadFrom`) |
 | `forEach(cb)`, `clear()` | `this` | O(k + non-empty words) / O(non-empty words). forEach reads each word once (a snapshot): to mutate during the walk, use the `nextSetBit` cursor |
 
-Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`/`hasAny` check `instanceof FastBit1024`, so a FastBit1024 from a second installed copy of the package throws `TypeError`.
+Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`, `hasAny`, `copy`, `equals`, `intersectionSize`, `unionSize` and `differenceSize` check a private-name brand (a private field stamped by the constructor): subclass instances pass; `null`, a primitive, a FastBit32, an `Object.create(FastBit1024.prototype)` forgery, a Proxy and a FastBit1024 from a second installed copy of the package all throw `TypeError`.
+
+**Ranges are half-open.** `addRange` / `removeRange` take `[lo, hi)`; `FastBit32.countRange` and `FastBit32.rangeMask` are INCLUSIVE `[start, end]`.
+
+**Shared memory.** An `Int32Array` over a `SharedArrayBuffer` is accepted by `loadFrom` / `deserialize`. Under a concurrent writer I1-I4 hold (no bit at or above the capacity is ever stored); the content is an unspecified (torn) image.
+
+**RoaringSet name map.** `intersectionSize` / `unionSize` / `differenceSize` use RoaringSet's names; `hasAny` is RoaringSet's `intersects` (no alias).
 
 Pool recipe (lowest-slot reuse, double release caught):
 
@@ -426,7 +441,33 @@ live.release(a);
 // live.release(a);                       // RangeError: release of a free slot
 ```
 
-Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op): `acquire()` + `release()` pair ~3.2, `nextClearBit()` ~0.5, `lowest()` ~0.34-0.37, `highest()` ~0.40-0.47, `has()` ~0.91-0.98 (of which ~0.78 is the fail-closed check), each flat whether the free (or set) slot is in word 0 or word 31. 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in the FastBit1024 T6 lane); the perf gate adds 0 scavenges for acquire+release.
+Save, load and walk (1.6.0; every line below was run against `FastBit32.js`):
+
+```js
+import { FastBit1024 } from '@zakkster/lite-fastbit32';
+
+const s = new FastBit1024(500);
+s.add(3).add(64).add(499).addRange(100, 104);       // 3, 64, 100..103, 499
+
+// JSON save / load (cold): the image is an Int32Array, JSON holds a plain array
+const json = JSON.stringify(Array.from(s.serialize()));
+const back = FastBit1024.deserialize(new Int32Array(JSON.parse(json)));
+back.equals(s);                                     // true; back.capacity === 500
+
+// Reverse walk, closure-free, 0 B/op
+for (let b = s.prevSetBit(s.capacity - 1); b !== -1; b = s.prevSetBit(b - 1)) {
+    // 499, 103, 102, 101, 100, 64, 3
+}
+
+// Snapshot arena, zero-GC: k sets of the same capacity, chained saveInto offsets
+const k = 3, arena = new Int32Array(k * s.imageLength);
+let off = 0;
+for (let i = 0; i < k; i++) off = s.saveInto(arena, off);   // off === arena.length
+off = 0;
+for (let i = 0; i < k; i++) off = s.loadFrom(arena, off);   // each call returns the next offset
+```
+
+Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op): `acquire()` + `release()` pair ~3.2, `nextClearBit()` ~0.5, `lowest()` ~0.34-0.37, `highest()` ~0.40-0.47, `has()` ~0.91-0.98 (of which ~0.78 is the fail-closed check), each flat whether the free (or set) slot is in word 0 or word 31. 0 B/op measured in torture T6 (verified-optimized code; a DETERMINISTIC allocation count, gated in `npm run torture`) for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny, and for the 1.6.0 members saveInto, loadFrom, copy, equals, prevSetBit, intersectionSize / unionSize / differenceSize, addRange and removeRange (add/remove/toggle/forEach/clear are not in the FastBit1024 T6 lane; serialize, deserialize and clone allocate and have must-fail lanes that prove the detector sees it); the perf gate adds 0 scavenges for acquire+release.
 
 ---
 
@@ -470,7 +511,7 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 |---|---|---|
 | `.count()` | `number` | O(1) popcount — number of active bits (0–32). |
 | `.countMasked(mask)` | `number` | O(1) popcount within a masked region. |
-| `.countRange(start, end)` | `number` | O(1) popcount within inclusive range `[start, end]`. |
+| `.countRange(start, end)` | `number` | O(1) popcount within INCLUSIVE range `[start, end]` -- FastBit1024 `addRange` / `removeRange` are half-open `[lo, hi)`. |
 | `.lowest()` | `number` | O(1) index of least significant active bit. `-1` if empty. |
 | `.highest()` | `number` | O(1) index of most significant active bit. `-1` if empty. |
 | `.nextClearBit()` | `number` | O(1) index of least significant **clear** bit. `-1` if full. Zero-alloc pool slot lookup. |
@@ -481,7 +522,7 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 | `.equals(other)` | `boolean` | Same set as another FastBit32 (signedness-agnostic). |
 | `.equalsValue(x)` | `boolean` | Same set as a raw word (signedness-agnostic). Not validated: `undefined` / `null` / `NaN` compare as `0`. |
 | `.isSubsetOf(mask)` | `boolean` | Every active bit is also in `mask` (the dual of `hasAll`). |
-| `FastBit32.rangeMask(start, end)` | `number` | Inclusive `[start, end]` mask as a signed int32. Cold, validated: throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
+| `FastBit32.rangeMask(start, end)` | `number` | INCLUSIVE `[start, end]` mask as a signed int32 -- FastBit1024 `addRange` / `removeRange` are half-open `[lo, hi)`. Cold, validated: throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
 | `.select(k)` | `number` | (1.5.0) The k-th set bit, 0-based ascending: `select(0) === lowest()`, `select(count() - 1) === highest()`. `-1` for any int32 `k` outside `0..count()-1` (and on an empty set). Inverse of `rank`. O(1) branchless SWAR descent, 0 B/op. Not validated: a non-int32 `k` is read as `k \| 0` (pinned until S6). |
 | `FastBit32.nextSubset(sub, mask)` | `number` | (1.5.0) `(sub - 1) & mask` as a signed int32 (0 B/op on Node; a result outside [-2^30, 2^30) boxes, 12 B, on pointer-compressed engines through a non-inlined call: FB-12, S7). Walk from `mask` down: exactly 2^count(mask) submasks, `0` last. `nextSubset(0, mask)` wraps to `mask | 0` (signed): visit, then stop on `0`. Not validated. |
 | `FastBit32.nextCombination(v)` | `number` | (1.5.0) Next word with the same popcount, strictly greater as uint32 (Gosper's hack, no division), as a signed int32. Ends at `0` (after the top-k-bits word; also `f(0)` and `f(-1)`), never `-1`. Not validated. |
@@ -536,6 +577,27 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 | `forEachMaskPair(maskA, maskB, cb)` | `cb(bit)` for intersection (A & B). |
 | `forEachMaskDiff(maskA, maskB, cb)` | `cb(bit)` for difference (A & ~B). |
 | `forEachMaskUnion(maskA, maskB, cb)` | `cb(bit)` for union (A \| B). |
+
+---
+
+## Testing
+
+`npm test` runs 818 tests (node:test, 106 suites; DETERMINISTIC; qa run 2026-11-05, Node v26.8.2). The package scripts:
+
+| Script | What it does |
+|---|---|
+| `npm test` | `node --test test/*.test.mjs`: the unit, property, parity and documentation-pin suites |
+| `npm run test:types` | `tsc` over `test/types`: the .d.ts against typed usage and `@ts-expect-error` rows |
+| `npm run torture` | the tiered torture run (laws, adversarial input, fuzz, B/op allocation counts, soak); the script owns its node flags (`--allow-natives-syntax --expose-gc`, 4 MB semi-space); the T6 lanes measure verified-optimized (TurboFan) code and an unverified lane fails closed |
+| `npm run torture:controls` | mutants and broken harness pieces that each must turn their tier red (proves the gates have teeth) |
+| `npm run test:perf` | the timed perf gate; runs under the quiet lock at release |
+| `npm run witness`, `npm run witness:fast` | the flatness witness (STATISTICAL, timed) |
+| `npm run gate:release` | `test/witness-release.mjs`: witness:fast K = 5 rounds with a majority vote (STATISTICAL, timed); runs under the quiet lock at release. Exit 0 pass, 1 finding or harness failure, 2 inconclusive (`prepublishOnly` fails on 2) |
+| `npm run bundle-check` | esbuild bundle smoke |
+| `npm run verify` | `npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf` |
+| `npm run bench:sc1`, `npm run bench:sc2` | research benchmarks (REPORTED only, gate nothing) |
+
+`prepublishOnly` runs `verify`, then `gate:release --if-stale`, then `bundle-check`.
 
 ---
 

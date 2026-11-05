@@ -5,7 +5,116 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+FastBit1024 (additions only; no 1.5.0 member changes behaviour except
+hasAll / hasAny, see Changed). Every new member below is DETERMINISTIC-gated
+(`npm test`, `npm run torture`, `npm run torture:controls`); nothing timed is
+claimed for it.
+
+- `imageLength`, `saveInto(out, offset = 0)`, `loadFrom(src, offset = 0)`: a
+  versioned Int32Array image, header `0x46420800 | capacity` followed by
+  `ceil(capacity / 32)` LSB-first data words. `saveInto` returns
+  `offset + imageLength`, so saves chain through one arena. `loadFrom` validates
+  the whole image (tag and version, capacity 1..1024, length, no bit at or
+  above the image capacity, every set bit below the receiver's capacity) before
+  any write, then rebuilds the summaries and the count (a stored count is never
+  trusted). A differing capacity loads when every set bit fits, else
+  RangeError. The array must be a genuine Int32Array, subclasses included,
+  checked through the intrinsic %TypedArray% tag and length getters captured at
+  module init (a re-prototyped view, an Array or a Proxy throws TypeError; the
+  length is read once). Both are zero-allocation (T6-gated).
+- `serialize()` and static `FastBit1024.deserialize(src, offset = 0)` (COLD,
+  allocate): a fresh image / a new set whose capacity is the image's. JSON:
+  `Array.from(s.serialize())` and `FastBit1024.deserialize(new Int32Array(arr))`.
+- `copy(other)`, `equals(other)` (zero-allocation) and COLD `clone()`. `copy`
+  accepts a differing capacity only when every set bit of `other` fits (else
+  RangeError, nothing written); `equals` is exact across capacities.
+- `intersectionSize`, `unionSize`, `differenceSize` (RoaringSet's names;
+  `hasAny` is RoaringSet's `intersects`, no alias). Exact across capacities,
+  unlike RoaringSet's RangeError on a universe mismatch. Zero-allocation.
+- `prevSetBit(from)`: the highest set bit `<= from` (inclusive), domain
+  `-1..capacity-1`; the mirror of `nextSetBit` and of `FastBit32#prevSetBit`.
+  Reverse walk: `for (let b = s.prevSetBit(s.capacity - 1); b !== -1; b =
+  s.prevSetBit(b - 1))`. Loop-free, zero-allocation.
+- `addRange(lo, hi)`, `removeRange(lo, hi)`: HALF-OPEN `[lo, hi)`, `0 <= lo <=
+  hi <= capacity`; RangeError before any write; `lo === hi` is a no-op;
+  return `this`; O(words touched), zero-allocation. `FastBit32.countRange` and
+  `FastBit32.rangeMask` stay INCLUSIVE `[start, end]`; the d.ts, README and
+  llms.txt say so beside each.
+- Shared memory: a SharedArrayBuffer-backed Int32Array is accepted by
+  `loadFrom` / `deserialize`. Under a concurrent writer I1-I4 hold (no bit at
+  or above the capacity is ever stored) and the content is unspecified.
+- Gates (test/torture; all DETERMINISTIC). G1: T3 hostile-input rows for the
+  image methods and the brand (every re-prototyped view type, forgery, Proxy,
+  lying `_active`, detached buffers) plus a SharedArrayBuffer worker row that
+  tears the image while `loadFrom` / `deserialize` run (I1-I4 checked after
+  every accepted call; count-based coverage floors, a break is never retried);
+  T0 image laws; T6 zero-allocation lanes for saveInto / loadFrom / copy /
+  equals, a scavenge lane, must-fail lanes for serialize / deserialize / clone
+  and a pointer-compressed d8 loadFrom lane (SKIP without d8); T7 retention;
+  mutant controls built from line-for-line copies of the bodies, one flag per
+  mutation. G2: torture gates for FastBit1024 prevSetBit /
+  intersectionSize / unionSize / differenceSize: T0 laws, T3 rows, T6
+  counts+prev lane 0.000 B/op, T7 churn, 2 controls. Ranges: torture gates for
+  FastBit1024 addRange / removeRange: a T5 differential range fuzz (1 in 32
+  steps; return value, I1-I4 and size after every range op; five fail-closed
+  coverage floors), two T6 zero-allocation lanes (empty and full base,
+  verified-optimized, < 0.1 B/op), controls fb1024-range-inclusive /
+  fb1024-remove-keeps-active (T5); the faithful fb1024Img copy also re-runs T5.
+- Tests: test/FastBit1024Image.test.mjs (independent bit-by-bit image oracle),
+  test/FastBit1024Counts.test.mjs (prevSetBit and the three counts),
+  test/FastBit1024Ranges.test.mjs (range oracle; a word ledger that proves
+  O(words touched)), test/FastBit1024Parity160.test.mjs (every 1.5.0 member's
+  Function#toString except hasAll / hasAny, and the bytes before the FastBit1024
+  marker, equal the 1.5.0 build cd49e4d), and test/FastBit1024QA160.test.mjs
+  (16 qa boundary cases: capacity 1 / 1024, bound order and wrap points,
+  exact-fit offsets, shared memory, another realm, the documented recipes
+  run from the docs). `npm test` 818 tests in 106 suites, 818 pass, 0 fail
+  (DETERMINISTIC; qa run 2026-11-05, Node v26.8.2).
+  `npm run torture` exit 0 with 34 / 34 T6 lanes verified TurboFan (same run
+  log). `npm run test:perf` is PENDING for this cycle (timed, needs a quiet
+  host); no timing figure is claimed for any of the above.
+
+### Changed
+
+- FastBit1024 `hasAll` / `hasAny` check a private-name brand (a private field
+  stamped by the constructor) instead of `instanceof`: a forgery
+  (`Object.create(FastBit1024.prototype)`) or a Proxy now throws TypeError (it
+  had "no defined answer"). Subclass instances still pass, and a primitive
+  keeps its 1.5.0 TypeError message. `copy`, `equals` and the three counts
+  use the same brand.
+- The class comment and d.ts sentence on which ops are loop-free now lists the
+  1.6.0 members (copy / equals / the three counts: O(non-empty words);
+  saveInto / loadFrom: O(image words); addRange / removeRange: O(words
+  touched)).
+
 ### Changed (test harness only; no library change)
+
+- T6 B/op lanes measure verified-optimized (TurboFan) code: `measureBop` forces
+  the op, the baseline and the registered callees (every method, getter and
+  static of FastBit32, FastBit1024, BitMapper and the look-alike classes, plus
+  the shared call-site helpers) with the synchronous
+  `%OptimizeFunctionOnNextCall`, and checks `%GetOptimizationStatus` before and
+  after each window. An unverified lane fails closed with the reason. Not
+  tracked: module-scope helpers such as `fb1024Pop` and the window runner. The
+  trigger was T6 going red under host load on a callee that had not been
+  optimized yet. `npm run torture` and `npm run torture:controls` need
+  `--allow-natives-syntax` (the scripts carry it; torture guard 6 refuses to
+  run T6 without it). New controls `bop-unoptimized` and
+  `bop-unoptimized-callee`.
+
+- Torture T3 shared-memory row: the race controls can no longer pass by
+  missing the race. Window-coverage floors (counts, no clock): deserialize
+  must hit the header re-read window >= 64 times and loadFrom at capacity
+  500 the tail-word window >= 8 times; chunks repeat only while a floor is
+  unmet (at most 64), a break is never retried, and an unmet floor fails
+  closed with its own reason. The must-fail controls `fb1024-deser-norange`
+  and `fb1024-img-nomask`, and every cheap T3 control, carry an `expect`
+  pattern for their own failure reason; T9 now honors `expect`. New
+  controls `fb1024-deser-snapshot`, `fb1024-load-snapshot` (each trips
+  only its coverage floor) and `t9-expect-swap`. `torture:controls` takes
+  control names (`[name ...]` runs only those; an unknown name exits 2).
 
 - Witness: gateFlat fails closed on an empty or one-cell row and on a
   non-finite metric or NOISE (an empty row used to pass as NaN / -Infinity).
@@ -64,14 +173,16 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   majority of ok passes, anything else is INCONCLUSIVE. Rounds are classed
   HOST / valid / HARNESS. One witness:fast run is a STATISTICAL gate and
   false-failed 14 of 58 fast rounds (REPORTED: pooled earlier local single
-  runs on the builds before 170481d; not re-measured this cycle), so `npm run
-  verify` no longer runs `witness:fast`: it keeps only the DETERMINISTIC gates
-  (npm test, test:types, torture, torture:controls, test:perf).
-  `prepublishOnly` is now `npm run
-  verify && node test/witness-release.mjs --if-stale && npm run bundle-check`
-  (it was `npm run verify && npm run bundle-check`; verify ended with
-  `witness:fast` at 1.5.0). `--if-stale` skips the gate only on an exact
-  stamp match (.gate-release.json, gitignored, written on exit 0 only).
+  runs on the builds before 170481d; not re-measured this cycle), so
+  `npm run verify` no longer runs `witness:fast`: it keeps only the
+  DETERMINISTIC gates (npm test, test:types, torture, torture:controls,
+  test:perf). The gate exits 0 on a pass, 1 on a finding or a harness failure
+  and 2 when inconclusive; a non-zero exit stops `prepublishOnly`, which is
+  now `npm run verify && node test/witness-release.mjs --if-stale && npm run
+  bundle-check` (it was `npm run verify && npm run bundle-check`; verify
+  ended with `witness:fast` at 1.5.0). `--if-stale` skips the gate only on
+  an exact stamp match (.gate-release.json, gitignored, written on exit 0
+  only).
 - Release gate (22693ef): `--keep <dir>` saves the evidence of a run. <dir>
   must not exist and its parent must; after each round, before it is parsed,
   round-N.stdout.txt and round-N.json are written with flag `wx`, and
@@ -79,8 +190,9 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   (exit 1). `--keep` with `--if-stale` exits 1 (a skipped gate keeps
   nothing). Without `--keep` the log is unchanged.
 - Release gate (36d6b73): the `FLAT select (density)` and `FLAT select
-  (position)` rows are now REPORTED, not gated. flat-sel H (2026-10-21) found
-  30 of 60 select processes reading a spread > 0.132 ns with no code change.
+  (position)` rows are now REPORTED, not gated. flat-sel H (2026-10-21; one run, local)
+  found 30 of 60 select processes reading a spread > 0.132 ns with no code
+  change.
   The rows are still required in every round (a missing one is HARNESS);
   their FAIL / ok counts print as `REPORTED` lines and are kept in
   decision.json `reported`. They never become a FINDING or an INCONCLUSIVE,
@@ -89,16 +201,17 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - Witness: run-one slot mode (FastBit1024 pool rows), lane HOT only, runs
   `ceil(12 / P)` unrecorded warm-up passes before pass 0 (12 cells; P = number
   of params; same reshape / fill / best-of path; PRESSURE lane and the scalar /
-  slope modes have none). The first cells of a fresh process read cold. Pinned
-  by test/WitnessWarmup.test.mjs (27e4ac0). STATISTICAL tier, one run, local,
-  quiet host (load1 1.06 -> 1.15, baseline 2.21), Node v26.8.2, 2026-11-04,
-  480 processes: acceptance arm H (no warm-up) vs arm N (warm-up), K10 count
-  (processes whose flat spread exceeds 0.132 ns AND whose fitted step sits
-  at cell 10) H 18 vs N 1, Fisher p 2.836e-5, verdict PASS (rows
-  fb1024.nextClearBit and fb1024.highest). A following `gate:release` on that tree (one run, same
-  host, --strict): exit 0, 5 rounds valid, 0 HOST, 0 demoted, findings none;
-  REPORTED FLAT select (density) FAIL 2 / ok 3, FLAT select (position)
-  FAIL 0 / ok 5. Single runs; not a guarantee for other hosts.
+  slope modes have none). The first cells of a fresh process read cold
+  (flat-cp probe). Pinned by test/WitnessWarmup.test.mjs (27e4ac0).
+  STATISTICAL tier, one run, local, quiet host (load1 1.06 -> 1.15, baseline
+  2.21), Node v26.8.2, 2026-11-04, 480 processes: acceptance arm H (no
+  warm-up) vs arm N (warm-up), K10 count (processes whose flat spread exceeds
+  0.132 ns AND whose fitted step sits at cell 10) H 18 vs N 1, Fisher
+  p 2.836e-5, verdict PASS (rows fb1024.nextClearBit and fb1024.highest). A
+  following `gate:release` on that tree (one run, same host, --strict): exit
+  0, 5 rounds valid, 0 HOST, 0 demoted, findings none; REPORTED FLAT select
+  (density) FAIL 2 / ok 3, FLAT select (position) FAIL 0 / ok 5. Single runs;
+  not a guarantee for other hosts.
 - Tests: `npm test` 734 tests in 86 suites, 734 pass, 0 fail (DETERMINISTIC;
   qa run 2026-11-04). The 8 new cases (test/WitnessProgramQA.test.mjs) pin
   the warm-up count at P 5, 11, 12 and 13, and pin it for foilWordScan.

@@ -246,12 +246,11 @@ export class FastBit32 {
     /**
      * Returns the number of active bits within an inclusive range
      * `[start, end]`. Caller must guarantee `0 <= start <= end <= 31`.
+     * INCLUSIVE [start, end], unlike FastBit1024.addRange / removeRange [lo, hi).
      *
      * @param start - Lowest bit of the range (inclusive).
      * @param end - Highest bit of the range (inclusive).
      * @returns Active bit count within the range (0-32).
-     *
-     * INCLUSIVE [start, end], unlike FastBit1024.addRange / removeRange [lo, hi).
      */
     countRange(start: number, end: number): number;
 
@@ -657,8 +656,8 @@ export function forEachMaskUnion(
  * Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal;
  * writing them voids invariants I1-I4.
  *
- * `hasAll`/`hasAny`/`copy`/`equals` check a private-name brand: subclass instances
- * pass; a FastBit1024 from a second installed copy of the package, a Proxy or a
+ * `hasAll`/`hasAny`/`copy`/`equals`/`intersectionSize`/`unionSize`/`differenceSize` check a
+ * private-name brand: subclass instances pass; a FastBit1024 from a second installed copy of the package, a Proxy or a
  * forgery throws TypeError.
  *
  * @example
@@ -795,7 +794,7 @@ export class FastBit1024 {
 
     /**
      * Zero-GC overwrite from another FastBit1024: `other` passes the private-name brand,
-     * then the words and summaries are copied (no rebuild). O(non-empty words of both).
+     * then the words and summaries are copied (no rebuild). O(words non-empty in either set).
      * A differing capacity is accepted when every set bit of `other` is below this
      * capacity; otherwise RangeError and nothing is written. `copy(this)` is a no-op.
      * @returns This set.
@@ -837,7 +836,8 @@ export class FastBit1024 {
      * @param hi - One past the last bit to set (integer).
      * @throws RangeError unless both are integers with `0 <= lo <= hi <= capacity`
      *   (fractions, `NaN`, strings, `null`, `undefined` included); thrown before any
-     *   write, so the receiver is unchanged. A Symbol or BigInt bound throws TypeError.
+     *   write, so the receiver is unchanged. A Symbol or BigInt `lo` throws TypeError; so does
+     *   such an `hi` when `lo` passes its check.
      * @returns `this`.
      */
     addRange(lo: number, hi: number): this;
@@ -849,8 +849,8 @@ export class FastBit1024 {
      * @param lo - First bit to clear (integer).
      * @param hi - One past the last bit to clear (integer).
      * @throws RangeError unless both are integers with `0 <= lo <= hi <= capacity`;
-     *   thrown before any write, so the receiver is unchanged. A Symbol or BigInt
-     *   bound throws TypeError.
+     *   thrown before any write, so the receiver is unchanged. A Symbol or BigInt `lo`
+     *   throws TypeError; so does such an `hi` when `lo` passes its check.
      * @returns `this`.
      */
     removeRange(lo: number, hi: number): this;

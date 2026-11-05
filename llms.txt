@@ -4,7 +4,7 @@
 
 ## Overview
 
-FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle (an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2254 B whole module, 1059 B FastBit32 alone, 1006 B FastBit1024 alone.
+FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle, 1.5.0 build (measured 2026-10-11; an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2254 B whole module, 1059 B FastBit32 alone, 1006 B FastBit1024 alone. Not re-measured for 1.6.0, which adds FastBit1024 members.
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
@@ -74,7 +74,7 @@ All mutating methods return `this` for chaining unless noted otherwise.
 |---|---|---|
 | `.count()` | `number` | O(1) popcount (Hamming weight). Active bit count, 0-32. |
 | `.countMasked(mask)` | `number` | O(1) popcount within masked region only. |
-| `.countRange(start, end)` | `number` | O(1) popcount within inclusive range `[start, end]`. Caller must ensure `0 <= start <= end <= 31`. |
+| `.countRange(start, end)` | `number` | O(1) popcount within INCLUSIVE range `[start, end]` -- FastBit1024 addRange / removeRange are half-open [lo, hi). Caller must ensure `0 <= start <= end <= 31`. |
 | `.lowest()` | `number` | Index of least significant set bit (0-31). Returns `-1` if empty. |
 | `.highest()` | `number` | Index of most significant set bit (0-31). Returns `-1` if empty. |
 | `.nextClearBit()` | `number` | Index of least significant **clear** bit (0-31). Returns `-1` if full. Zero-alloc object-pool slot lookup. |
@@ -103,7 +103,7 @@ Raw-index ops (`nextSetBit`, `prevSetBit`, `rank`, like `add`/`has`) are NOT val
 | `.equals(other)` | `boolean` | (1.3.0) Same set. `(a ^ b) === 0`: signedness-agnostic across ctor-built and mutator-built instances. |
 | `.equalsValue(x)` | `boolean` | (1.3.0) Same set as the raw word `x`, signedness-agnostic. `undefined`/`null`/`NaN` behave like 0 (FB-02 class, closed in S6). |
 | `.isSubsetOf(mask)` | `boolean` | (1.3.0) Every active bit is in `mask`: `(value & ~mask) === 0`. Dual of `hasAll`. |
-| `FastBit32.rangeMask(start, end)` | `number` | (1.3.0) Static, COLD, validated. Inclusive `[start, end]` mask as a signed int32 (the `countRange` pattern). Throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
+| `FastBit32.rangeMask(start, end)` | `number` | (1.3.0) Static, COLD, validated. INCLUSIVE `[start, end]` mask as a signed int32 (the `countRange` pattern) -- FastBit1024 addRange / removeRange are half-open [lo, hi). Throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
 | `.select(k)` | `number` | (1.5.0) The k-th set bit, 0-based ascending (`select(0) === lowest()`, `select(count() - 1) === highest()`), or `-1` for any int32 `k` outside `0..count()-1` and on an empty set. Inverse of `rank`. O(1) branchless, 0 B/op. Not validated: non-int32 `k` is read as `k \| 0` (pinned until S6). |
 | `FastBit32.nextSubset(sub, mask)` | `number` | (1.5.0) Static. `(sub - 1) & mask`, signed int32. From `mask` down: exactly 2^count(mask) submasks, 0 last. `nextSubset(0, mask)` wraps to `mask | 0` (signed). 0 B/op on Node (T6); on a pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30) boxes (12 B) through a non-inlined call (FB-12, S7). Not validated. |
 | `FastBit32.nextCombination(v)` | `number` | (1.5.0) Static. Next word with the same popcount, strictly greater as uint32 (Gosper), signed int32. Ends at `0` (also `f(0)`, `f(-1)`), never `-1`. 0 B/op on Node (T6); on a pointer-compressed engine (31-bit Smi) a result outside [-2^30, 2^30) boxes (12 B) through a non-inlined call (FB-12, S7). Not validated. |
@@ -194,9 +194,9 @@ forEachMapped(mask, mapper, (name, bit) => {
 
 ## FastBit1024 -- 32 x 32 two-level bitmap (1.4.0)
 
-A fixed-geometry bitmap of up to 1024 bits for slot pools and dense id sets. Storage: `Int32Array(32)` plus two 32-bit summaries (`_active`: word non-empty, `_full`: word all ones) and an exact count, kept by every mutator. No coupling to FastBit32 (tree-shakes alone).
+A fixed-geometry bitmap of up to 1024 bits for slot pools and dense id sets. Storage: `Int32Array(32)` plus two 32-bit summaries (`_active`: word non-empty, `_full`: word all ones) and an exact count, kept by every mutator. No coupling to FastBit32 (tree-shakes alone). 1.6.0 adds save / restore, copy / equals / clone, the three counts, prevSetBit and the range ops.
 
-**Input law: FastBit1024 FAILS CLOSED on every index; FastBit32's hot ops trust the caller (SC-3, open, decided in S6).** An index must be an integer `0 <= i < capacity` (`nextSetBit`: `0 <= from <= capacity`). Anything else throws `RangeError` (undefined, null, NaN, 1.5, '3', true, -1, capacity, 2^32, {}); a Symbol, a BigInt or a null-prototype object throws `TypeError` from the index arithmetic. `-0` is slot 0. A rejected call writes nothing; the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw. `has(undefined)` throws: it never answers for slot 0. Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`/`hasAny` check `instanceof FastBit1024`: a FastBit1024 from a second installed copy of the package throws `TypeError`.
+**Input law: FastBit1024 FAILS CLOSED on every index; FastBit32's hot ops trust the caller (SC-3, open, decided in S6).** An index must be an integer `0 <= i < capacity` (`nextSetBit`: `0 <= from <= capacity`; `prevSetBit`: `-1 <= from <= capacity - 1`). Anything else throws `RangeError` (undefined, null, NaN, 1.5, '3', true, -1 (except prevSetBit's -1), capacity, 2^32, {}); a Symbol, a BigInt or a null-prototype object throws `TypeError` from the index arithmetic. `-0` is slot 0. A rejected call writes nothing; the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw. `has(undefined)` throws: it never answers for slot 0. Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`/`hasAny`/`copy`/`equals`/`intersectionSize`/`unionSize`/`differenceSize` check a private-name brand (a private field stamped by the constructor): subclass instances pass; null, a primitive, a FastBit32, a forgery (`Object.create(FastBit1024.prototype)`), a Proxy and a FastBit1024 from a second installed copy of the package throw `TypeError`. Every op is loop-free except forEach/hasAll/hasAny/clear/copy/equals/intersectionSize/unionSize/differenceSize (O(non-empty words)), saveInto/loadFrom (O(image words), and loadFrom rewrites all 32 words; the cold serialize/deserialize reuse them, clone reuses copy) and addRange/removeRange (O(words touched)). Ranges are half-open [lo, hi); FastBit32 countRange / rangeMask are INCLUSIVE [start, end]. Name map to RoaringSet: `hasAny` = `intersects` (no alias); `intersectionSize` / `unionSize` / `differenceSize` share its names.
 
 ```javascript
 new FastBit1024(capacity?: number)   // integer 1..1024; undefined -> 1024; else RangeError
@@ -213,7 +213,16 @@ new FastBit1024(capacity?: number)   // integer 1..1024; undefined -> 1024; else
 | `lowest()` / `highest()` | index or `-1` | O(1) | two `clz32`, no loop |
 | `nextClearBit()` | index or `-1` | O(1) | lowest clear bit below capacity |
 | `nextSetBit(from)` | index or `-1` | O(1) | from in 0..capacity; capacity -> -1 |
-| `hasAll(other)` / `hasAny(other)` | `boolean` | O(non-empty words of other) | other must be a FastBit1024, else TypeError (the brand is `instanceof`, so an `Object.create(FastBit1024.prototype)` forgery passes it and is unsupported: no defined answer, and neither method writes to either instance); capacities may differ (exact) |
+| `prevSetBit(from)` | index or `-1` | O(1), 0 B/op | (1.6.0) highest set bit <= from (inclusive); from in -1..capacity-1, -1 -> -1, else RangeError. Reverse walk: `for (let b = s.prevSetBit(s.capacity - 1); b !== -1; b = s.prevSetBit(b - 1))` |
+| `hasAll(other)` / `hasAny(other)` | `boolean` | O(non-empty words of other) | other must be a FastBit1024 (private-name brand), else TypeError (a forgery or a Proxy included); neither method writes to either instance; capacities may differ (exact). `hasAny` is RoaringSet's `intersects` |
+| `intersectionSize(other)` / `unionSize(other)` / `differenceSize(other)` | `number` | O(non-empty words), 0 B/op | (1.6.0) count of A AND B / A OR B / A AND NOT B; same brand TypeError; exact for any two capacities (RoaringSet throws RangeError on a universe mismatch; these do not) |
+| `copy(other)` / `equals(other)` | `this` / `boolean` | O(non-empty words), 0 B/op | (1.6.0) copy overwrites words and summaries (no rebuild); a differing capacity is accepted only when every set bit of other fits, else RangeError and nothing is written; copy(this) is a no-op. equals is exact across capacities. Same brand TypeError |
+| `clone()` | `FastBit1024` | COLD, allocates | (1.6.0) same capacity, same bits |
+| `addRange(lo, hi)` / `removeRange(lo, hi)` | `this` | O(words touched), 0 B/op | (1.6.0) set / clear bits lo..hi-1, HALF-OPEN [lo, hi), `0 <= lo <= hi <= capacity` (integers), else RangeError before any write; lo === hi is a no-op. A Symbol or BigInt `lo` throws TypeError; so does such an `hi` when `lo` passes its check |
+| `imageLength` | `number` | O(1) | (1.6.0) read-only getter: `1 + ceil(capacity / 32)` (2..33) words |
+| `saveInto(out, offset = 0)` | `number` | O(image words), 0 B/op | (1.6.0) writes the image (header `0x46420800 \| capacity`, then data words LSB-first) at out[offset..offset + imageLength); returns offset + imageLength so saves chain. `out` must be a genuine Int32Array or a subclass (intrinsic tag + length), else TypeError; bad offset / no room / detached: RangeError, nothing written |
+| `loadFrom(src, offset = 0)` | `number` | O(image words), 0 B/op | (1.6.0) validates the WHOLE image (tag, capacity 1..1024, length, no bit at or above the image capacity, every set bit below THIS capacity) before any write, rebuilds summaries and count (a stored count is never trusted); returns the offset just past the image. Same `src` brand as saveInto; a failure leaves the set unchanged. A SharedArrayBuffer-backed Int32Array is accepted: under a concurrent writer I1-I4 hold, content unspecified |
+| `serialize()` / `FastBit1024.deserialize(src, offset = 0)` | `Int32Array` / `FastBit1024` | COLD, allocate | (1.6.0) a fresh image / a new set whose capacity is the image's (throws as loadFrom) |
 | `forEach(cb)` | `this` | O(k + non-empty words) | ascending; hoist cb; each word is read once (snapshot): to mutate during the walk use the nextSetBit cursor |
 | `clear()` | `this` | O(non-empty words) | |
 
@@ -237,7 +246,28 @@ for (let s = slots.nextSetBit(0); s !== -1; s = slots.nextSetBit(s + 1)) {
 }
 ```
 
-Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty loop): `acquire()+release()` pair ~3.2 ns, `nextClearBit` ~0.5 ns, `lowest` ~0.34-0.37 ns, `highest` ~0.40-0.47 ns, `has` ~0.91-0.98 ns; each flat across "free (or set) slot in word 0..31". 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in that lane); perf-gate 0 scavenges at N and 8N for acquire+release.
+Save, load and walk recipes (1.6.0; each snippet was run against `FastBit32.js`):
+
+```javascript
+const s = new FastBit1024(500);
+s.add(3).add(64).add(499).addRange(100, 104);   // 3, 64, 100..103, 499
+
+// JSON save / load (cold)
+const json = JSON.stringify(Array.from(s.serialize()));
+const back = FastBit1024.deserialize(new Int32Array(JSON.parse(json)));   // back.equals(s) === true
+
+// Reverse walk, closure-free, 0 B/op: 499, 103, 102, 101, 100, 64, 3
+for (let b = s.prevSetBit(s.capacity - 1); b !== -1; b = s.prevSetBit(b - 1)) { /* use b */ }
+
+// Snapshot arena, zero-GC: k sets of the same capacity, chained saveInto offsets
+const k = 3, arena = new Int32Array(k * s.imageLength);
+let off = 0;
+for (let i = 0; i < k; i++) off = s.saveInto(arena, off);   // off === arena.length
+off = 0;
+for (let i = 0; i < k; i++) off = s.loadFrom(arena, off);   // each call returns the next offset
+```
+
+Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty loop): `acquire()+release()` pair ~3.2 ns, `nextClearBit` ~0.5 ns, `lowest` ~0.34-0.37 ns, `highest` ~0.40-0.47 ns, `has` ~0.91-0.98 ns; each flat across "free (or set) slot in word 0..31". 0 B/op measured in torture T6 for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny (add/remove/toggle/forEach/clear are not in that lane) and, from 1.6.0, for saveInto, loadFrom, copy, equals, prevSetBit, intersectionSize / unionSize / differenceSize, addRange and removeRange (DETERMINISTIC: an allocation count gated in `npm run torture` on verified-optimized code; serialize / deserialize / clone allocate and have must-fail lanes); perf-gate 0 scavenges at N and 8N for acquire+release.
 
 Measured, 1.5.0 (two fast witness runs, node v26.8.2, Apple M4 Pro, load ~4-5, net ns/op, HOT, flat across density and position): `select` ~3.25-3.35 ns (flatness ratio <= 1.02), `nextSubset` ~0.10-0.21 ns (<= 1.17), `nextCombination` ~0.35-0.43 ns (<= 1.16). `select` is an order of magnitude more than the other constant ops (~3.3 ns vs ~0.1-0.4 ns; a 5-step dependent descent) and still flat. 0 B/op on all three on Node (torture T6 S5 lane, gated < 0.1 B/op). On a pointer-compressed engine (31-bit Smi) the two statics box (12 B) a result outside [-2^30, 2^30) when returned through a non-inlined call (d8 probe; browser measurement in S7, FB-12); `select` returns only -1..31 and stays 0 B/op.
 
@@ -427,5 +457,5 @@ flags.has(10); // false -- clone is independent
 - `lowest()` / `highest()` / `nextClearBit()` / `highestClearBit()`: 2-5 operations using `31 - Math.clz32(...)`, zero loops, zero branches (`clz32(0)` is 32, so the `-1` sentinel comes for free).
 - FastBit1024 is not branchless: it fails closed (a range check and a throw site per index op) and `acquire()` takes the lowest free slot in O(1), about 3.0-3.2 ns per acquire+release pair (numbers above).
 - `forEach` and all standalone helpers: O(k) where k = active bits, not 32.
-- All methods except `clone()` and `deserialize()`: zero allocations.
+- FastBit32: all methods except `clone()` and `deserialize()` allocate nothing. FastBit1024: `serialize()`, `deserialize()` and `clone()` allocate (COLD); every other member is zero-allocation (DETERMINISTIC T6 gate for acquire / release, has, the cursors, hasAll / hasAny and all 1.6.0 hot members; add / remove / toggle / forEach / clear are not in a T6 lane).
 - V8 monomorphic: single hidden class for the lifetime of the object.
