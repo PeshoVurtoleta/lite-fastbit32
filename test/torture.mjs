@@ -12,7 +12,9 @@
 //   3. devDeps importable          else exit 2 ("npm install")
 //   4. known TORTURE_CONTROL       else exit 2 (did-you-mean)
 //   5. young-GC detector sees      else exit 1
-//   6. --allow-natives-syntax and a working TurboFan, when T6 will run
+//   6. V8 >= 14 for T6 (CI-5)      else T6 is a named SKIP; a control that
+//                                  targets T6 exits 1; unreadable V8 version exit 1
+//      --allow-natives-syntax and a working TurboFan, when T6 will run
 //                                  else exit 1 (T6 measures verified-optimized code)
 
 import * as h from './torture/harness.mjs';
@@ -118,12 +120,31 @@ h.startScavengeWatch();
     }
 }
 
-// ---- guard 6: natives + TurboFan (only when T6 will run) -----------------
+// ---- guard 6: T6 floor, then natives + TurboFan (only when T6 will run) ---
+// CI-5, maintainer ruling 2026-11-05: "T6 needs V8 >= 14; named SKIP". Below V8
+// 14 every tier except T6 runs, the reason is printed once and the summary reads
+// "[T6] SKIP" (like the d8 lane: SKIP with a reason, never ok); a control that
+// targets T6 must not pass and must not print "FAIL T6", so it exits 1 with the
+// reason. harness t6Floor throws on an unreadable version: exit 1, never a skip.
+let t6Skip;
+try {
+    t6Skip = h.t6Floor(process.versions.v8);
+} catch (e) {
+    console.error('torture: ' + e.message);
+    h.stopScavengeWatch();
+    await exitFlushed(1);
+}
+if (t6Skip !== null && controlName && CONTROLS[controlName].tiers.includes('T6')) {
+    console.error('torture: control ' + controlName + ' targets T6, which is skipped here: ' + t6Skip);
+    h.stopScavengeWatch();
+    await exitFlushed(1);
+}
+if (t6Skip !== null && !controlName) console.error(t6Skip);
 // T6 forces every measured op to TurboFan and verifies it (harness
 // measureBop); without --allow-natives-syntax it could only fail every lane.
 // Placed after guards 4 / 5 so their exits (and test/TortureGuards.test.mjs,
 // which runs non-T6 paths without the flag) keep their meaning.
-if (!controlName || CONTROLS[controlName].tiers.includes('T6')) {
+if (t6Skip === null && (!controlName || CONTROLS[controlName].tiers.includes('T6'))) {
     const why = h.optimizationUnavailable();
     if (why !== null) {
         console.error('torture: ' + why);
@@ -179,6 +200,7 @@ const ctx = buildBaseCtx(seed);
 const allFails = [];
 let totalGreen = 0;
 for (const name of ORDER) {
+    if (name === 'T6' && t6Skip !== null) { console.error('[T6] SKIP'); continue; }
     const r = await runTier(name, ctx);
     for (const f of r.fails) allFails.push(f);
     totalGreen += r.green;

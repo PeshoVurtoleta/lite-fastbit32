@@ -61,8 +61,8 @@ describe('normalizeStatus (pure)', () => {
 });
 
 // Live: a child with --allow-natives-syntax imports the harness and must find
-// TurboFan available on THIS V8. Node 18 (V8 10.x) cannot run torture (the
-// entry refuses it) and the harness need not load there, so the row skips.
+// TurboFan available on THIS V8. Node 18 (V8 10.x) has neither known opt-status
+// layout (torture skips T6 there, CI-5; CI runs no torture on node 18), so the row skips.
 const V8_MAJOR = Number(process.versions.v8.split('.')[0]);
 const HARNESS_URL = new URL('./torture/harness.mjs', import.meta.url).href;
 const CHILD = `
@@ -83,9 +83,12 @@ if (why !== null || !probeOk) process.exitCode = 1;
 
 describe('live layout detection (child, --allow-natives-syntax)', () => {
     it('optimizationUnavailable() === null and a forced probe normalizes to TurboFan',
-        { skip: V8_MAJOR < 11 ? 'V8 ' + process.versions.v8 + ' < 11 (Node 18 leg): torture refuses this V8, harness not imported' : false },
+        { skip: V8_MAJOR < 11 ? 'V8 ' + process.versions.v8 + ' < 11 (Node 18 leg): no opt-status layout for this V8 (torture skips T6 below V8 14, CI-5; CI runs no torture on node 18)' : false },
         () => {
+            const env = { ...process.env };
+            delete env.NODE_OPTIONS;
             const r = spawnSync(process.execPath, ['--allow-natives-syntax', '--input-type=module', '-e', CHILD], {
+                env,
                 encoding: 'utf8',
                 timeout: 60000
             });
@@ -106,11 +109,13 @@ describe('live layout detection (child, --allow-natives-syntax)', () => {
 
 // ---- fail-closed + T2 child rows (CI-4 review r1) -------------------------
 // Same skip rule as the live row. Each child prints ONE JSON line last.
-const LIVE_SKIP = V8_MAJOR < 11 ? 'V8 ' + process.versions.v8 + ' < 11 (Node 18 leg): torture refuses this V8, harness not imported' : false;
+const LIVE_SKIP = V8_MAJOR < 11 ? 'V8 ' + process.versions.v8 + ' < 11 (Node 18 leg): no opt-status layout for this V8 (torture skips T6 below V8 14, CI-5; CI runs no torture on node 18)' : false;
 const PINS = ['--expose-gc', '--min-semi-space-size=4', '--max-semi-space-size=4'];
 
 function runChild(flags, code) {
-    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', code], { encoding: 'utf8', timeout: 60000 });
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', code], { env, encoding: 'utf8', timeout: 60000 });
     assert.strictEqual(r.error, undefined, 'spawn failed: ' + (r.error && r.error.message));
     const line = r.stdout.trim().split('\n').pop();
     let out;

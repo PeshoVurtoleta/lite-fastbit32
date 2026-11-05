@@ -13,6 +13,10 @@
 # under CI=true (GitHub sets it) a missing driver FAILS. The history step below refuses a shallow clone up front.
 # Known explicit SKIP: the T6 FastBit1024 d8 pointer-compressed lane needs a jsvu d8 (FASTBIT_D8); runners have
 # none, so torture prints "MEASURE FastBit1024 d8 ... lane SKIP: <reason>" on stderr.
+# Known named SKIP (CI-5, maintainer ruling 2026-11-05 "T6 needs V8 >= 14; named SKIP"): on node 20 / 22 / 24
+# (V8 11-13) torture prints "T6 SKIP: ..." and "[T6] SKIP", and torture:controls prints
+# "[control <name>] SKIP tiers=T6: ..." for each of the 5 T6 controls; T6 and the B/op claims are gated on the
+# node 26 legs only.
 # No lockfile is committed (package-lock.json is gitignored): `npm install`, no npm cache; the resolved
 # devDependency versions are printed after install.
 

@@ -427,6 +427,26 @@ export function optimizationUnavailable() {
     return null;
 }
 
+// CI-5, maintainer ruling 2026-11-05: "T6 needs V8 >= 14; named SKIP". On V8
+// 12.4 / 13.6 the measured op and its callees stay Sparkplug / Maglev after a
+// forced optimization (raw 0x8401 / 0x31, .handoff/research/ci4/), and
+// %OptimizeFunctionOnNextCall after %NeverOptimizeFunction is a fatal CHECK. So
+// below V8 14 torture runs every tier except T6 and prints this reason, the T6
+// controls skip the same way (like the d8 lane), the B/op claims stay gated on
+// Node 26.x, and making T6 work on V8 11-13 is backlog research.
+// Pure: null when the V8 major is >= 14, else the one-line ASCII SKIP reason.
+// An unparseable version THROWS TypeError (fail closed: never a skip on a
+// version string this cannot read). optimizationUnavailable() stays layout-only.
+export function t6Floor(v8Version) {
+    const m = typeof v8Version === 'string' && !/[^\x21-\x7e]/.test(v8Version) ? /^(\d+)\.\d+/.exec(v8Version) : null;
+    if (m === null) {
+        throw new TypeError('t6Floor: unparseable V8 version ' + (typeof v8Version === 'string' ? JSON.stringify(v8Version) : '(' + typeof v8Version + ')') +
+            ' (want "<major>.<minor>..." in printable ASCII) -- failing closed, T6 is never skipped on an unreadable version');
+    }
+    if (Number(m[1]) >= 14) return null;
+    return 'T6 SKIP: verified-TurboFan forcing needs V8 >= 14 (Node 26+); this V8 is ' + v8Version;
+}
+
 // Every function-valued own property (methods, getters, setters) of each class
 // AND of its prototype, walking both chains (so a control subclass contributes
 // its overrides AND the base methods); constructors and builtins excluded.
