@@ -1604,3 +1604,121 @@ half-open ranges; the versioned `Int32Array` image with `saveInto` /
 `loadFrom`; copy, equals and clone; all four groups in 1.6.0; inclusive
 `prevSetBit`; no `intersects` alias; a private-name brand on every cross-set
 method (hasAll / hasAny included); the intrinsic `length` getter, read once.
+
+## 18. FastBit64: the S9 research burst (2026-11-05)
+
+The research burst ROADMAP S9 requires before any planner pass (maintainer, 2026-11-04;
+run ahead of the T6-LOAD diagnosis by the maintainer's decision of 2026-11-05). SC-4's
+shape is SETTLED and not reopened: one flat object, two int32 fields, bodies on shared
+single-word kernels. A candidate class was written OUTSIDE the package
+(`.handoff/research/fastbit64/candidate.mjs`, gitignored; FastBit32.js sha256/8 71f28feb
+and FastBit32.d.ts a650fa3c untouched, both 1.6.0) and probed. The draft surface, the
+alternatives and the Q-ids are in `.handoff/PROPOSAL-fastbit64.md`. Apple M4 Pro (12
+cores), Node v26.8.2 / V8 14.6.202.34-node.28, 2026-11-05 08:41-08:49Z, load1 3.0-4.0
+(baseline 2.21): the host was PRELIMINARY for timing, which the DETERMINISTIC probes
+(counts, correctness, allocation) do not depend on.
+
+### 18.1 Findings
+
+- **Prior art in the suite: none.** No package keeps a 64-bit bitset in two int32 words
+  or in a BigInt (scout, 7 patterns over every main file and probe folder; near misses
+  are hashes and number splits: LiteSketch `addHashed(hi, lo)`, LiteAdaptive, LiteBmfont).
+  The one consumer that hits the 32-bit limit is lite-ecs (`LiteEcs/ROADMAP.md:25`, "at
+  most 32 component types"); its plan for wider masks is `FastBit1024` (`:35-37`). No
+  package asks for a FastBit64. BitMapper refuses more than 32 names (`FastBit32.js:388`).
+- **Correctness (DETERMINISTIC).** Every candidate method matches TWO independent
+  oracles, a BigInt model and the shipped `FastBit1024(64)`, on 2,621 word pairs
+  (boundary words with bits 31 / 32 / 63, -1, -2^31, 2^31 - 1, plus seeded random and
+  sparse): 1,764,168 checks, 0 FAIL (p1). The cursors are exhaustive over their
+  domains, every half-open range [a, b) on 40 words is checked, and the kernels
+  (`ctz32`, `popcnt32`, `select32`) equal the shipped FastBit32 `lowest` / `count` /
+  `select` bodies on every word of the corpus. 19 / 20 LISTED one-token mutants are
+  killed by p1 + p2; the review found four guard-drop mutants that survive (fromArray
+  index, setWords lo, equalsWords hi, saveInto offset: one slot of a pair untested), so
+  the planner owes a bad-input row per guarded argument. The survivor (dropping `ArrayBuffer.isView` from the source brand) is
+  equivalent: the intrinsic `@@toStringTag` getter already returns `undefined` for every
+  non-TypedArray. FastBit1024 1.6.0 has the same redundant third check.
+- **Branchless word split.** With `ctz32(x) = 32 - clz32(~x & (x - 1))` (32 at 0, no
+  branch), the two-word scans need no branch: lowest = `t | ~((t - 64) >> 31)` with
+  `t = ctz32(lo) + (ctz32(hi) & -(ctz32(lo) >>> 5))`; highest = `63 - clz64` the same
+  way. The cursor masks use `(from - 32) >> 31` to pick the word (no `<< 32` trap).
+- **Fail-closed input law, one check.** `(i & 63) !== i` rejects -1, 64, 2^31, 2^32 + 3,
+  1.5, NaN, Infinity, '3', null, undefined, true, [3] and an object with valueOf,
+  RangeError with the receiver unchanged (unchanged by the method: a user valueOf runs once,
+  before the throw, and its own side effects stand, as in FastBit1024); Symbol / BigInt throw TypeError from `&`
+  (126 law rows, p1). Word inputs (ctor, setWords, equalsWords) accept a number that is
+  an int32 or a uint32 and store `| 0`; anything else is RangeError, and a non-number is
+  never converted.
+- **The private fields are the brand.** With `#lo` / `#hi`, `other.#lo` throws
+  TypeError on `{}`, `{lo, hi}`, a Proxy of a real instance, an
+  `Object.create(FastBit64.prototype)` forgery, a FastBit32 or a FastBit1024, and
+  accepts subclass instances, with no extra check (p1, p5). The public-field shape
+  (SC-4's 2026-10-11 probe) FAILS OPEN: `hasAll({})`, `hasAll({lo: 0, hi: 0})`,
+  `hasAll(Proxy)` and `hasAll(forgery)` answer `true` (p5). The underscore + `#brand`
+  shape (FastBit1024 parity) is closed too, but costs 24 B of bytecode in `hasAll`
+  (67 B vs 43 B).
+- **Zero allocation, inlined or not (DETERMINISTIC).** All 21 hot lanes (every mutator,
+  query, cursor walk, range op, saveInto / loadFrom, the lo / hi getters on bit-31
+  words) are 0.000 B/op with 0 scavenges in 2e6 ops, each op and every callee verified
+  TurboFan (measureBop, K = 65536, 7 / 7 valid windows) -- AND the same with
+  `--no-turbo-inlining`, where every kernel and method is reached through a real call
+  (p3). Every value is an int32, so nothing boxes on a 64-bit Node. On a
+  pointer-compressed engine (31-bit Smi) a word in [2^30, 2^31) is not a Smi: the
+  reviewer's d8 run showed 0 scavenges inlined; the no-inlining case is unproven. Control: a callee
+  returning the unsigned form of a bit-31 word (`x >>> 0`) reads 0.000 B/op inlined and
+  **16.000 B/op** under `--no-turbo-inlining`, while still carrying the TurboFan status
+  bit. That is the exact T6-LOAD signature (NEXT.md): status bits do not prove
+  inlining, and an unsigned double crossing a call boxes 16 B. It supports the T6-LOAD
+  hypothesis but does not prove it; that burst gets it as an input.
+- **Inlining (REPORTED, V8 14.6, limit 460 B).** Every candidate body is under the limit:
+  hot bodies 19-181 B (hasAll 43, has 67, add 84, lowest 56, nextSetBit 139, prevSetBit
+  148, select 115 + the `select32` kernel 323), cold `loadFrom` 453 B. TurboFan inlined
+  every kernel into its method. In one loop calling ten methods, the 920 B cumulative
+  budget ran out, so `rank` and `countRange` stayed calls (`count` and `select` inlined in only one of two
+  compilations; p5-inline.out); the no-inlining
+  run shows that costs no allocation. Duplicating kernel bodies inline (no free
+  functions) grows `count` from 35 B to 207 B and `lowest` from 58 B to 108 B (p4).
+- **Save / restore = the FastBit1024 image at capacity 64.** `[0x46420840, lo, hi]` is
+  byte-identical to `FastBit1024(64).serialize()` on every corpus word; each class
+  loads the other's image (p1). loadFrom takes any FastBit1024-format image (capacity
+  1..1024) whose set bits are below 64, and refuses, with the receiver unchanged: a bit at
+  the image capacity for every capacity 1..63, a bit >= 64 in larger images, header /
+  version / capacity / length damage, bad offsets, a lying-length subclass, a Proxy, a
+  re-prototyped Uint32Array and every non-Int32Array source. It loads a genuine
+  subclass, a SharedArrayBuffer image and a 1-word image followed by a non-zero arena
+  word (hi stays 0): 402 rows, 0 FAIL (p2).
+- **SAB + concurrent writer (the 1.6.0 required probe).** A worker flips the hi word of
+  a capacity-40 image between valid (bits 32..39) and invalid (bits 40..63) while the
+  main thread restores 2e6 times. Candidate: 1,985,524 accepted, 14,476 refused,
+  **0 FAIL-OPEN**. The two-pass control (validate one read, store another) failed open
+  2x in the same run, so the race was hit (2, 4 and 30 hits / 2e6 over three runs:
+  too thin for a gate control, which must be the re-read mutant); a candidate mutant that re-reads
+  `src[base + 1]` failed open 649x (p7). Reading each word once into a local and
+  validating the local is what makes restore safe; there is no summary to tear.
+- **The 64 x 64 recipe.** Two shapes on the public draft surface, both exact against a
+  byte-array oracle on 40 seeded runs of add / remove / acquire / release / has / lowest /
+  nextSetBit / size (866,216 checks, 0 FAIL), fail-closed on every index and 0 B/op on
+  acquire + release, has and nextSetBit (p8). Retained bytes (REPORTED, 2,000 live
+  structures after gc): R1 = one Int32Array(128) + two FastBit64 summaries, **852 B**;
+  R2 = SC-4's literal 64 FastBit64 objects + summaries, **3,261 B**; one FastBit64 37 B;
+  one FastBit1024 404 B.
+- **Not measured: timing.** p6 (interleaved A/B of the five storage / kernel / branch
+  variants plus FastBit1024(64): hasAll, lowest, has, add) was refused by the quiet lock
+  (`run --strict`, exit 76, NOISY: load1 3.24 >= baseline 2.21 + 1). PENDING. SC-4's
+  2026-10-11 table stays the only timing evidence for the flat shape.
+
+### 18.2 Open questions (ruled in the PROPOSAL)
+
+Q-1 release slot; Q-2 field storage and brand; Q-3 index law and domains; Q-4 word-input
+law; Q-5 mask arguments; Q-6 surface scope; Q-7 ranges; Q-8 word kernels (+ section 8 K1);
+Q-9 save format (+ BigInt); Q-10 the 64 x 64 recipe shape; Q-11 BitMapper above 32
+names; Q-12 member naming; Q-13 fromArray container law (a review DESIGN blocker: the
+draft, like FastBit32.fromArray, clears the set on fromArray(42) / ({}) / (true)).
+
+RULED by the maintainer 2026-11-05, every one on its recommended option (quoted in the
+PROPOSAL, section 7): ship as 1.7.0 ahead of S6; private `#lo` / `#hi` as the brand;
+fail closed on every index with one check; a word is an int32 or a uint32 number, stored
+signed; cross-set methods take another FastBit64; the full draft surface without pool
+ops; half-open ranges; private kernels (exports and K1 wait for S6); the FastBit1024
+image at capacity 64; the Int32Array recipe, tested; BitMapper unchanged; FastBit32's
+names first; `fromArray` takes an Array or a TypedArray only.
