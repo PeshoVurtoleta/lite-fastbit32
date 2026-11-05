@@ -240,7 +240,7 @@ if (m.fb1024ImgD8) {
 }
 if (m.fb1024ImgT0) console.error('MEASURE FastBit1024 T0 image laws ' + JSON.stringify(m.fb1024ImgT0) + ' [gated: 0 failed, fullLoads>=20 crossLoads>=100]');
 if (m.fb1024ImgT3) console.error('MEASURE FastBit1024 T3 image rows ' + JSON.stringify(m.fb1024ImgT3) + ' [gated: 0 failed]');
-if (m.fb1024Sab) console.error('MEASURE FastBit1024 T3 SAB row ' + JSON.stringify(m.fb1024Sab) + ' [gated: br 0, torn>=20 per scenario, rounds>=10]');
+if (m.fb1024Sab) console.error('MEASURE FastBit1024 T3 SAB row ' + JSON.stringify(m.fb1024Sab) + ' [gated: br 0, torn>=20 per scenario, deserialize hits>=64, cap500 tail hits>=8, <=64 chunks, rounds>=10]');
 if (m.fb1024ImgLive) console.error('MEASURE FastBit1024 T7 image retention live per cycle=[' + m.fb1024ImgLive.join(',') + '] [gated: 0 each]');
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);
 

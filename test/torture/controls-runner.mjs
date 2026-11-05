@@ -8,7 +8,9 @@
 // A control may also carry `expect` (a RegExp): its stderr must match it, so a
 // control that must fail for ONE reason cannot pass by failing for another.
 //
-// node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs
+// node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs [name ...]
+// With control names as arguments only those run (an unknown name exits 2);
+// with none, every control runs.
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -26,9 +28,13 @@ function runControl(name) {
     });
 }
 
+const ARGS = process.argv.slice(2);
+for (const a of ARGS) {
+    if (!CONTROLS[a]) { console.error('controls-runner: unknown control "' + a + '" (known: ' + CONTROL_NAMES.join(', ') + ')'); process.exit(2); }
+}
 let bad = 0;
 
-for (const name of CONTROL_NAMES) {
+for (const name of ARGS.length > 0 ? ARGS : CONTROL_NAMES) {
     const control = CONTROLS[name];
     const res = runControl(name);
     const stderr = res.stderr || '';

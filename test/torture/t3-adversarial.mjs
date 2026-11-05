@@ -444,19 +444,57 @@ function fb1024ImageBadInput(ctx, F) {
 // After EVERY accepted call: I1-I4 (fb1024Invariants) AND 1 <= _cap <= 1024
 // as an integer (the cap-0 / cap-2047 headers the writer stores are what a
 // deserialize without its range re-check would keep). Count-based: SAB_N
-// calls per receiver and per deserialize, no clock; a scenario below
-// SAB_FLOOR runs up to SAB_CHUNKS - 1 more SAB_N-call chunks, each after a
-// 2 ms yield (the writer may have had no CPU), before failing closed. Every
-// call is checked; a break is never retried. Fail closed: 0 breaks
-// required; a scenario with fewer than SAB_FLOOR accepted torn results (any
-// set bit), or a writer that finished fewer than SAB_ROUNDS rounds during the
-// row, FAILS (no vacuous pass). The worker is started once per process,
-// unref'd, and parked (Atomics.wait) between rows.
+// calls per receiver and per deserialize, no clock. Every call is checked; a
+// break is never retried and never excused. Fail closed: 0 breaks required;
+// a scenario with fewer than SAB_FLOOR accepted torn results (any set bit),
+// or a writer that finished fewer than SAB_ROUNDS rounds during the row,
+// FAILS (no vacuous pass). The worker is started once per process, unref'd,
+// and parked (Atomics.wait) between rows.
+//
+// Window coverage (DESER-FIX). A torn result proves the writer ran, not that
+// a call landed in the window a mutant differs at, and at load1 ~60 the
+// writer can miss every call of a chunk. Two scenarios therefore also count
+// HITS of their race window and need a floor of them:
+// - deserialize: the header re-read window (C-14 re-check). The writer only
+//   ever stores the H tag, so loadFrom's first check never says 'header'; a
+//   'FastBit1024: bad image: header' RangeError from deserialize here is a
+//   re-check rejection, i.e. the re-read header differed from the validated
+//   one. A '_cap outside 1..1024' break is the same hit seen on a mutant
+//   without the range re-check, so it counts too. Floor SAB_HITS = 64.
+// - loadFrom cap 500: the tail-word window (C-14 mask). An accepted result
+//   whose word 15 is exactly 0x000FFFFF (the cap-500 mask lm) means the write
+//   pass read a word with all 20 low bits set; the check / fit pass saw no bit
+//   >= 500 there, and the writer stores only 0, 1, -1 and random words, so
+//   that read was a -1 (or random) the mask cut: a hit. Breaks in this
+//   scenario count too. Floor SAB_TAIL = 8. Caps 1 and 33 have no sound
+//   witness (their mask is 1, the writer's legal tail value) and caps 32 /
+//   1024 cannot break without the mask, so only cap 500 is floored.
+// A scenario below ANY of its floors (torn, hits) runs another SAB_N-call
+// chunk after a 2 ms yield (the writer may have had no CPU), up to
+// SAB_CHUNKS chunks in all; still below a floor -> FAIL closed with its own
+// coverage reason. Counts on the real code (FastBit32.js d88876e, 2026-11-05),
+// logged (inproc-table.log, 5 in-process runs, load1 5-7): deserialize hits
+// 1255..1426, cap-500 tail hits 23..107 per first chunk; at load1 ~60 a chunk
+// may read 0 (inferred from the NEXT.md GREEN, not measured).
+// Miss probability on the mutants once a floor is met: every counted cap-500
+// hit is a certain break without the mask (P(miss) ~ 0; the residue is a
+// random word equal to exactly 0x000FFFFF, 2^-32 per write, counted as a hit
+// it is not). A deserialize hit is a break without the range re-check only
+// when the re-read header is 2047 (or 0 over no bits); measured share 0.48
+// (10259 / 21274, 12 fb1024-deser-norange runs, inproc-table.log). If hits were
+// independent, P(64 hits, 0 breaks) ~ 0.52^64 ~ 7e-19, nominal; they are not strictly
+// independent (they come in writer-phase bursts), so that figure is nominal.
+// Either way such a miss reads as a GREEN row only if the floor is met with
+// 0 breaks; a coverage FAIL is never green.
 const SAB_OFF = 5;
 const SAB_N = 8000;
 const SAB_FLOOR = 20;
+const SAB_HITS = 64;
+const SAB_TAIL = 8;
 const SAB_ROUNDS = 10;
-const SAB_CHUNKS = 16;
+const SAB_CHUNKS = 64;
+const SAB_MSG_HDR = 'FastBit1024: bad image: header';
+const SAB_LM500 = 0x000FFFFF;
 let SAB = null;
 
 function sabWriter(seed) {
@@ -494,26 +532,34 @@ function fb1024SabRow(ctx, F) {
     try {
     for (const cap of [1, 32, 33, 500, 1024, 0]) {
         const r = cap === 0 ? null : new C(cap);
-        let acc = 0, threw = 0, torn = 0, br = 0;
-        for (let chunk = 0; chunk < SAB_CHUNKS && (chunk === 0 || !(torn >= SAB_FLOOR)); chunk++) {
+        // hit floor: deserialize -> SAB_HITS, cap 500 -> SAB_TAIL, others none (-1)
+        const need = cap === 0 ? SAB_HITS : cap === 500 ? SAB_TAIL : -1;
+        let acc = 0, threw = 0, torn = 0, br = 0, hits = 0, chunks = 0;
+        for (let chunk = 0; chunk < SAB_CHUNKS && (chunk === 0 || !(torn >= SAB_FLOOR) || (need > 0 && !(hits >= need))); chunk++) {
         if (chunk > 0) Atomics.wait(ctl, 3, 0, 2);
+        chunks++;
         for (let k = 0; k < SAB_N; k++) {
             let s = r;
             try {
                 if (r === null) s = C.deserialize(src, SAB_OFF); else r.loadFrom(src, SAB_OFF);
             } catch (e) {
                 if (!(e instanceof RangeError)) { br++; if (!first) first = (r === null ? 'deserialize' : 'cap ' + cap) + ' threw ' + e.constructor.name; }
+                else if (r === null && e.message === SAB_MSG_HDR) hits++;
                 threw++;
                 continue;
             }
             acc++;
             if (s._n > 0) torn++;
             const v = check(s);
-            if (v !== null) { br++; if (!first) first = (r === null ? 'deserialize' : 'loadFrom cap ' + cap) + ': ' + v; }
+            if (v !== null) {
+                br++;
+                if (!first) first = (r === null ? 'deserialize' : 'loadFrom cap ' + cap) + ': ' + v;
+                if (r === null ? v.startsWith('_cap ') : cap === 500) hits++;
+            } else if (cap === 500 && s._data[15] === SAB_LM500) hits++;
         }
         }
         broke += br;
-        per.push({ who: cap === 0 ? 'deserialize' : 'cap' + cap, acc, threw, torn, br });
+        per.push({ who: cap === 0 ? 'deserialize' : 'cap' + cap, acc, threw, torn, br, hits: need > 0 ? hits : null, chunks });
     }
     rounds = Atomics.load(ctl, 2) - rStart;
     } finally {
@@ -523,6 +569,8 @@ function fb1024SabRow(ctx, F) {
     if (broke !== 0) F('FB1024 SAB: ' + broke + ' invariant / capacity break(s) under a concurrent writer, first: ' + first);
     for (const p of per) {
         if (!(p.torn >= SAB_FLOOR)) F('FB1024 SAB coverage: ' + p.who + ' accepted ' + p.torn + ' torn results (need >= ' + SAB_FLOOR + '; ' + p.acc + ' accepted, ' + p.threw + ' threw) -- fail closed');
+        if (p.who === 'deserialize' && !(p.hits >= SAB_HITS)) F('FB1024 SAB coverage: deserialize hit the header re-read window ' + p.hits + ' times in ' + p.chunks + ' chunk(s) (need >= ' + SAB_HITS + ') -- fail closed');
+        if (p.who === 'cap500' && !(p.hits >= SAB_TAIL)) F('FB1024 SAB coverage: loadFrom cap 500 hit the tail-word window ' + p.hits + ' times in ' + p.chunks + ' chunk(s) (need >= ' + SAB_TAIL + ') -- fail closed');
     }
     if (!(rounds >= SAB_ROUNDS)) F('FB1024 SAB coverage: the writer finished ' + rounds + ' rounds during the row (need >= ' + SAB_ROUNDS + ') -- fail closed');
 }

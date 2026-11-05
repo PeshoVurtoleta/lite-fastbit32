@@ -408,16 +408,30 @@ function fb1024Img(C, m) {
 
 export function fb1024Faithful(C) { return fb1024Img(C, {}); }
 
+function fb1024SabCopy(C, which) {
+    // Not a library mutant: a harness control for the T3 SAB row's coverage
+    // floors (DESER-FIX). 'deser': deserialize reads a private slice() of a
+    // SharedArrayBuffer-backed source, so the writer can never land between its
+    // two header reads. 'load': loadFrom does the same, so the tail check and
+    // the write pass always see one word. Every other source passes through
+    // untouched (ArrayBuffer.isView first: a Proxy never reaches .buffer).
+    const shared = (x) => ArrayBuffer.isView(x) && x instanceof Int32Array && x.buffer instanceof SharedArrayBuffer;
+    return class extends C {
+        loadFrom(src, offset = 0) { return super.loadFrom(which === 'load' && shared(src) ? src.slice() : src, offset); }
+        static deserialize(src, offset = 0) { return super.deserialize(which === 'deser' && shared(src) ? src.slice() : src, offset); }
+    };
+}
+
 function flipOracle(oracle) {
     // one corrupted function: popcount off by one -> every T5 count check diverges
     return { ...oracle, oCount: (v) => oracle.oCount(v) + 1 };
 }
 
 export const CONTROLS = {
-    'hasall-old': { tiers: ['T0', 'T1', 'T2', 'T3', 'T5', 'T8'], cheap: true, apply(ctx) { ctx.FB = oldHasAll(ctx.FB); } },
+    'hasall-old': { tiers: ['T0', 'T1', 'T2', 'T3', 'T5', 'T8'], cheap: true, expect: /T3: ECS size-1 idx 31(?!\d)/, apply(ctx) { ctx.FB = oldHasAll(ctx.FB); } },
     'lowest-noguard': { tiers: ['T0', 'T1'], cheap: true, apply(ctx) { ctx.FB = lowestNoGuard(ctx.FB); } },
     'nextset-nowrap': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB = nextSetNoWrap(ctx.FB); } },
-    'isfull-unsigned': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB = isFullUnsigned(ctx.FB); } },
+    'isfull-unsigned': { tiers: ['T3'], cheap: true, expect: /T3: pool not full after 32 adds \(isFull teeth\)/, apply(ctx) { ctx.FB = isFullUnsigned(ctx.FB); } },
     'fb1024-sparse': { tiers: ['T1', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Sparse(ctx.FB1024); } },
     'fb1024-nofull': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024NoFull(ctx.FB1024); } },
     'fb1024-clear-low16': { tiers: ['T0', 'T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024ClearLow16(ctx.FB1024); } },
@@ -429,18 +443,18 @@ export const CONTROLS = {
     'mapper-dedup': { tiers: ['T4'], cheap: true, apply(ctx) { ctx.Mapper = dedupMapper(ctx.Mapper); } },
     'oracle-flip': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.oracle = flipOracle(ctx.oracle); } },
     // G1 (1.6.0) save / restore / brand, all cheap; C-14 race controls are child-process only
-    'fb1024-img-notail': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTail: true }); } },
-    'fb1024-img-nofit': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noFit: true }); } },
-    'fb1024-img-array': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { arrayBrand: true }); } },
-    'fb1024-copy-nofit': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyNoFit: true }); } },
+    'fb1024-img-notail': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ bit == capacity: did not throw \(want RangeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTail: true }); } },
+    'fb1024-img-nofit': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ load a 1024-image with bit \d+: did not throw \(want RangeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noFit: true }); } },
+    'fb1024-img-array': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ Array image: did not throw \(want TypeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { arrayBrand: true }); } },
+    'fb1024-copy-nofit': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ copy from a 1024-set with bit \d+: did not throw \(want RangeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyNoFit: true }); } },
     'fb1024-img-nofull': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noFull: true }); } },
-    'fb1024-img-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { instanceofOnly: true }); } },
-    'fb1024-set-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyInstanceof: true, hasAllInstanceof: true, hasAnyInstanceof: true }); } },
-    'fb1024-img-length': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { ownLength: true }); } },
-    'fb1024-img-notag': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTag: true }); } },
-    'fb1024-copy-early-n': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyEarlyN: true }); } },
-    'fb1024-hasany-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { hasAnyInstanceof: true }); } },
-    'fb1024-equals-instanceof': { tiers: ['T3'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { equalsInstanceof: true }); } },
+    'fb1024-img-instanceof': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ Proxy\(Int32Array\) image: /, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { instanceofOnly: true }); } },
+    'fb1024-set-instanceof': { tiers: ['T3'], cheap: true, expect: /^(?=[\s\S]*T3: FB1024 img Q-8 copy\(forgery\): did not throw)(?=[\s\S]*T3: FB1024 img Q-8 hasAll\(forgery\): did not throw)(?=[\s\S]*T3: FB1024 img Q-8 hasAny\(forgery\): did not throw)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyInstanceof: true, hasAllInstanceof: true, hasAnyInstanceof: true }); } },
+    'fb1024-img-length': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img p8 Liar subclass \(5 real words of 17\) loadFrom: did not throw \(want RangeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { ownLength: true }); } },
+    'fb1024-img-notag': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img Q-10 saveInto\(Int8Array re-prototyped\): did not throw \(want TypeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noTag: true }); } },
+    'fb1024-copy-early-n': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img cap \d+ copy from a 1024-set with bit \d+: receiver changed by a rejected call/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { copyEarlyN: true }); } },
+    'fb1024-hasany-instanceof': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img Q-8 hasAny\(forgery\): did not throw \(want TypeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { hasAnyInstanceof: true }); } },
+    'fb1024-equals-instanceof': { tiers: ['T3'], cheap: true, expect: /T3: FB1024 img Q-8 equals\(forgery\): did not throw \(want TypeError\)/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { equalsInstanceof: true }); } },
     'fb1024-deser-nocap': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCap: true }); } },
     // G2 (1.6.0) prevSetBit / counts
     'fb1024-prev-strict': { tiers: ['T0'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { prevStrict: true }); } },
@@ -448,8 +462,16 @@ export const CONTROLS = {
     // L3 (1.6.0) addRange / removeRange
     'fb1024-range-inclusive': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { rangeInclusive: true }); } },
     'fb1024-remove-keeps-active': { tiers: ['T5'], cheap: true, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { removeKeepsActive: true }); } },
-    'fb1024-img-nomask': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noMask: true }); } },
-    'fb1024-deser-norange': { tiers: ['T3'], cheap: false, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCapRange: true }); } },
+    'fb1024-img-nomask': { tiers: ['T3'], cheap: false, expect: /FB1024 SAB: \d+ invariant \/ capacity break\(s\) under a concurrent writer, first: loadFrom cap \d+: I4 bit \d+ >= cap \d+/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noMask: true }); } },
+    'fb1024-deser-norange': { tiers: ['T3'], cheap: false, expect: /FB1024 SAB: \d+ invariant \/ capacity break\(s\) under a concurrent writer, first: deserialize: _cap (?:0|2047) outside 1\.\.1024/, apply(ctx) { ctx.FB1024 = fb1024Img(ctx.FB1024, { noCapRange: true }); } },
+    // DESER-FIX: the SAB row's window-coverage floors. Each reads a private copy
+    // of the shared source, so the writer can never land inside the race window;
+    // answers stay valid, so ONLY that coverage floor can fail T3.
+    'fb1024-deser-snapshot': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB1024 SAB: \d+ invariant)[\s\S]*FB1024 SAB coverage: deserialize hit the header re-read window 0 times in 64 chunk\(s\) \(need >= 64\) -- fail closed/, apply(ctx) { ctx.FB1024 = fb1024SabCopy(ctx.FB1024, 'deser'); } },
+    'fb1024-load-snapshot': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB1024 SAB: \d+ invariant)[\s\S]*FB1024 SAB coverage: loadFrom cap 500 hit the tail-word window 0 times in 64 chunk\(s\) \(need >= 8\) -- fail closed/, apply(ctx) { ctx.FB1024 = fb1024SabCopy(ctx.FB1024, 'load'); } },
+    // T9's `expect` branch: isfull-unsigned is checked against fb1024-img-notail's
+    // expect, so it still fails T3 but for the wrong reason -> T9 must go red.
+    't9-expect-swap': { tiers: ['T9'], cheap: false, expect: /T9: control "isfull-unsigned" failed T3 but for another reason: no fail matched \/T3: FB1024 img cap/, apply(ctx) { ctx.control.t9ExpectSwap = ['isfull-unsigned', 'fb1024-img-notail']; } },
     'foreach-closure': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.foreachClosure = true; } },
     'budget-major': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.budgetMajor = true; } },
     'bop-box': { tiers: ['T6'], cheap: false, apply(ctx) { ctx.control.bopBox = true; } },

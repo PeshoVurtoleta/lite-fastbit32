@@ -4,6 +4,11 @@
 // gate is decorative, and that is itself a T9 failure. The expensive controls (foreach-closure,
 // budget-major, soak-stash) are exercised as child processes by
 // controls-runner.mjs because they re-run the gc/measurement tiers.
+// A control with `expect` (a RegExp) must also fail for ITS reason: the
+// fail strings of its tiers, joined by newlines, must match it (the same
+// rule controls-runner.mjs applies to the child's stderr), else T9 fails.
+// ctx.control.t9ExpectSwap = [a, b] checks control a against control b's
+// `expect` (the t9-expect-swap control: that branch must fire).
 
 import { buildBaseCtx } from './context.mjs';
 import { CONTROLS } from './controls.mjs';
@@ -26,13 +31,18 @@ export function run(ctx) {
         const sub = buildBaseCtx(ctx.seed);
         control.apply(sub);
         const notFailed = [];
+        const got = [];
         for (const tierName of control.tiers) {
             const tierRun = SYNC_TIERS[tierName];
             if (!tierRun) { fails.push('T9: control ' + name + ' targets unknown sync tier ' + tierName); notFailed.push(tierName); continue; }
             const res = tierRun(sub);
             if (!(res.fails.length > 0 || res.green > 0)) notFailed.push(tierName);
+            for (const f of res.fails) got.push(f);
         }
+        const swap = ctx.control.t9ExpectSwap;
+        const expect = swap !== undefined && swap[0] === name ? CONTROLS[swap[1]].expect : control.expect;
         if (notFailed.length > 0) fails.push('T9: control "' + name + '" did NOT fail every target tier ' + control.tiers.join(',') + ' (decorative gate; still green: ' + notFailed.join(',') + ')');
+        else if (expect !== undefined && !expect.test(got.join('\n'))) fails.push('T9: control "' + name + '" failed ' + control.tiers.join(',') + ' but for another reason: no fail matched ' + expect + ' (first: ' + (got.length > 0 ? got[0] : 'green expected-red rows only') + ')');
     }
 
     return { fails, green };
