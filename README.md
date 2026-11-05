@@ -582,7 +582,7 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 
 ## Testing
 
-`npm test` runs 818 tests (node:test, 106 suites; DETERMINISTIC; qa run 2026-11-05, Node v26.8.2). The package scripts:
+`npm test` runs 822 tests (node:test, 107 suites; DETERMINISTIC; run 2026-11-05, Node v26.8.2). The package scripts:
 
 | Script | What it does |
 |---|---|

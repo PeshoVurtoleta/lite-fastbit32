@@ -558,9 +558,9 @@ const FB1024_IMG_MASK = -2048;
 // captured at module init: a subclass getter, an own `length` property or a
 // getter patched after import is never called. The tag is the internal
 // [[TypedArrayName]] (a re-prototyped Uint8Array reads 'Uint8Array'); both
-// return without allocating.
-const fb1024TaLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), 'length').get;
-const fb1024TaTag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), Symbol.toStringTag).get;
+// return without allocating. Each is wrapped /* @__PURE__ */ so a bundle that never uses FastBit1024 drops them.
+const fb1024TaLength = /* @__PURE__ */ (() => Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), 'length').get)();
+const fb1024TaTag = /* @__PURE__ */ (() => Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int32Array.prototype), Symbol.toStringTag).get)();
 
 // SWAR popcount for the COLD loadFrom rebuild only. Hot bodies inline the three
 // lines instead, so no int32 outside Smi range crosses a call.

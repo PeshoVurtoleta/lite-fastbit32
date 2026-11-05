@@ -70,11 +70,14 @@ claimed for it.
   marker, equal the 1.5.0 build cd49e4d), and test/FastBit1024QA160.test.mjs
   (16 qa boundary cases: capacity 1 / 1024, bound order and wrap points,
   exact-fit offsets, shared memory, another realm, the documented recipes
-  run from the docs). `npm test` 818 tests in 106 suites, 818 pass, 0 fail
-  (DETERMINISTIC; qa run 2026-11-05, Node v26.8.2).
-  `npm run torture` exit 0 with 34 / 34 T6 lanes verified TurboFan (same run
-  log). `npm run test:perf` is PENDING for this cycle (timed, needs a quiet
-  host); no timing figure is claimed for any of the above.
+  run from the docs), and test/BundleShake.test.mjs (bundle content: an
+  `export { FastBit32 }` bundle carries no FastBit1024 code). `npm test` 822
+  tests in 107 suites, 822 pass, 0 fail (DETERMINISTIC; run 2026-11-05, Node
+  v26.8.2).
+  `npm run torture` exit 0 with 34 / 34 T6 lanes verified TurboFan (a separate
+  run, 2026-11-05, after the tree-shake fix). `npm run test:perf` is PENDING
+  for this cycle (timed, needs a quiet host); no timing figure is claimed for
+  any of the above.
 
 ### Changed
 
@@ -88,6 +91,12 @@ claimed for it.
   1.6.0 members (copy / equals / the three counts: O(non-empty words);
   saveInto / loadFrom: O(image words); addRange / removeRange: O(words
   touched)).
+- FastBit1024's two intrinsic getter captures (the %TypedArray%.prototype
+  `length` and @@toStringTag getters) are `/* @__PURE__ */` IIFEs, still run
+  once at module init: a bundle that never uses FastBit1024 drops them. An
+  `export { FastBit32 }` bundle is 1059 B min+gz again (1134 B before the
+  fix; REPORTED: esbuild 0.28.2 --bundle --format=esm --minify | gzip -9, one
+  run, 2026-11-05).
 
 ### Changed (test harness only; no library change)
 
