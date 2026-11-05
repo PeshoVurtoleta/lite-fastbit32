@@ -102,7 +102,7 @@ lowest = 31 - Math.clz32(value & -value)
 
 `value & -value` isolates the lowest set bit into a power-of-two. `Math.clz32` counts leading zeros from the left, and `31 -` converts it to a right-indexed position. On an empty word `clz32(0)` is 32, so the result is the `-1` sentinel with no guard. One expression, no loops, no branches.
 
-`highest` uses `31 - Math.clz32(value)` directly.
+`highest` uses `31 - Math.clz32(value | 0)` (1.6.1 body): the `| 0` keeps the argument an int32, so on Node it never boxes, even when V8 has disabled speculation on that call (T6 poison witness, node 26.x; on a pointer-compressed engine an int32 outside [-2^30, 2^30) can still box there: not gated).
 
 ### O(k) Iteration
 
@@ -582,13 +582,13 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op)
 
 ## Testing
 
-`npm test` runs 822 tests (node:test, 107 suites; DETERMINISTIC; run 2026-11-05, Node v26.8.2). The package scripts:
+`npm test` runs 880 tests (node:test, 115 suites; 879 pass, 1 skip: the V8 11-13 row; DETERMINISTIC; run 2026-11-05, Node v26.8.2). The package scripts:
 
 | Script | What it does |
 |---|---|
 | `npm test` | `node --test test/*.test.mjs`: the unit, property, parity and documentation-pin suites |
 | `npm run test:types` | `tsc` over `test/types`: the .d.ts against typed usage and `@ts-expect-error` rows |
-| `npm run torture` | the tiered torture run (laws, adversarial input, fuzz, B/op allocation counts, soak); the script owns its node flags (`--allow-natives-syntax --expose-gc`, 4 MB semi-space); the T6 lanes measure verified-optimized (TurboFan) code and an unverified lane fails closed |
+| `npm run torture` | the tiered torture run (laws, adversarial input, fuzz, B/op allocation counts, soak); the script owns its node flags (`--allow-natives-syntax --expose-gc`, 4 MB semi-space); the T6 lanes measure verified-optimized (TurboFan) code and an unverified lane fails closed; T6 runs on V8 >= 14 (node 26.x; below that torture prints a named SKIP) and first poisons call feedback, with a 1.6.0-body witness that must read >= 15.9 B/op on its unsigned lanes |
 | `npm run torture:controls` | mutants and broken harness pieces that each must turn their tier red (proves the gates have teeth) |
 | `npm run test:perf` | the timed perf gate; runs under the quiet lock at release |
 | `npm run witness`, `npm run witness:fast` | the flatness witness (STATISTICAL, timed) |

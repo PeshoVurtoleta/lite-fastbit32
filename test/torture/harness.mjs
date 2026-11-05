@@ -607,7 +607,8 @@ export { K as BOP_K, WINDOWS as BOP_WINDOWS };
 // Smi); Maglev on next call, compiled by w = 0x80000001 and REQUIRED to carry
 // the Maglev bit (else the reason, fail closed); then the trigger w = 1
 // (stored 0xFFFFFFFE >= 2^31). A caller that lost the Maglev bit is recorded
-// in `deopted` (reported; the T6 witness lanes gate that the poisoning took).
+// in `deopted` (reported; the T6 witness lanes gate that the mechanism poisons a fresh class;
+// FastBit32's own rows, under the full run's feedback history, only by the revert check R1, PLAN A1).
 // `args` is source text evaluated inside the caller: only literals and `cb`
 // (a no-op callback, for forEach) are in scope. One `new C(0xFFFFFFFF)` runs
 // first so the field representation is Double before any caller compiles

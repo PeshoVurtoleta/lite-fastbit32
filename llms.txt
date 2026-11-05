@@ -454,8 +454,8 @@ flags.has(10); // false -- clone is independent
 
 - All single-bit operations: one bitwise instruction, zero branches.
 - `count()`: 5 bitwise operations (Hacker's Delight parallel popcount), zero loops.
-- `lowest()` / `highest()` / `nextClearBit()` / `highestClearBit()`: 2-5 operations using `31 - Math.clz32(...)`, zero loops, zero branches (`clz32(0)` is 32, so the `-1` sentinel comes for free).
+- `lowest()` / `highest()` / `nextClearBit()` / `highestClearBit()`: 2-5 operations using `31 - Math.clz32(...)` (`highest()` passes `value | 0`, so on Node it never boxes, even after a deopt; pointer-compressed engines: not gated), zero loops, zero branches (`clz32(0)` is 32, so the `-1` sentinel comes for free).
 - FastBit1024 is not branchless: it fails closed (a range check and a throw site per index op) and `acquire()` takes the lowest free slot in O(1), about 3.0-3.2 ns per acquire+release pair (numbers above).
 - `forEach` and all standalone helpers: O(k) where k = active bits, not 32.
-- FastBit32: all methods except `clone()` and `deserialize()` allocate nothing. FastBit1024: `serialize()`, `deserialize()` and `clone()` allocate (COLD); every other member is zero-allocation (DETERMINISTIC T6 gate for acquire / release, has, the cursors, hasAll / hasAny and all 1.6.0 hot members; add / remove / toggle / forEach / clear are not in a T6 lane).
+- FastBit32: all methods except `clone()` and `deserialize()` allocate nothing. FastBit1024: `serialize()`, `deserialize()` and `clone()` allocate (COLD); every other member is zero-allocation (DETERMINISTIC T6 gate, on V8 >= 14 (node 26.x), for acquire / release, has, the cursors, hasAll / hasAny and all 1.6.0 hot members; add / remove / toggle / forEach / clear are not in a T6 lane).
 - V8 monomorphic: single hidden class for the lifetime of the object.

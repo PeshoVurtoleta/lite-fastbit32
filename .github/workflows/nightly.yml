@@ -1,9 +1,10 @@
 # nightly.yml -- lite-fastbit32 daily run on the newest node and the floors (CI burst 2026-11-05; modeled on
 # LiteUtils nightly.yml). The same DETERMINISTIC steps as ci.yml (keep the two step lists in sync), on node
 # 'latest', '20' (the torture floor) and '18' (the shipped engines floor; npm test + test:types only, see ci.yml)
-# x ubuntu-latest / macos-latest, check-latest so each row gets the newest patch every night. A daily torture
-# run on a clean runner also shows whether the load-dependent T6 B/op failure (16 B/op on the unsigned lanes)
-# happens off the maintainer's shared host.
+# x ubuntu-latest / macos-latest, check-latest so each row gets the newest patch every night. '20' is still the
+# torture floor, but T6 SKIPs there (V8 11.3 < 14; CI-5). The load-dependent T6 B/op failure (16 B/op on the
+# unsigned lanes) had a found cause, fixed in T6-FIX2 (highest() boxed after a Maglev deopt); the 'latest' row
+# keeps checking T6 on a clean runner.
 # A failure turns the nightly red; it is never a required check for a push. GitHub runs a schedule only from
 # the default branch and pauses it after 60 days without repository activity (re-enable in the Actions tab).
 

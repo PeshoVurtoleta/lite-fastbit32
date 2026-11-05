@@ -88,9 +88,11 @@ const WITNESS_NAMES = ['0xFFFFFFFF', '2**31', '0x40000000'];
 // Measured ops come from module-scope factories, each called once with a
 // throwaway instance before its first measured lane: the op literal's
 // feedback cell is then "many closures", so TurboFan cannot specialize a
-// measured op on its context (the first closure of a literal would fold
-// `inst.value` to a constant and read 0 B/op even through a poisoned slot --
-// orch-confirm: 2**31 first = -0.017, 0xFFFFFFFF second = 16.000).
+// measured op on its context. Defensive: no folding was observed with the
+// caller-store pre-pass (review mutants mC / mD); kept so a future one-closure
+// op cannot fold `inst.value` to a constant and read 0 B/op even through a
+// poisoned slot (orch-confirm, earlier shape: 2**31 first = -0.017,
+// 0xFFFFFFFF second = 16.000).
 function witnessOp(h, inst) {
     return (i) => { h.SINK[0] = inst.highest() | 0; };
 }
