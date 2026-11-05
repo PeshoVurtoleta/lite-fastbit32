@@ -19,12 +19,31 @@ import * as h from './torture/harness.mjs';
 import { buildBaseCtx } from './torture/context.mjs';
 import { CONTROLS, CONTROL_NAMES, suggest, fb1024Faithful } from './torture/controls.mjs';
 
+// CI-3: on POSIX, process.stdout / process.stderr on a pipe or socket are
+// asynchronous. Once the kernel buffer is full libuv queues the remaining writes,
+// and process.exit() discards that queue: a control lost its last "FAIL <tier>"
+// lines when the parent was slow to read. A Writable completes writes in order,
+// so the callback of an empty write fires only after every earlier chunk reached
+// the fd. Every exit below goes through here; no output byte changes. A reader
+// that has gone (EPIPE) must not turn exit <code> into an unhandled 'error' crash.
+function flushed(stream) {
+    return new Promise((resolve) => {
+        const done = () => resolve();
+        stream.once('error', done);
+        stream.write('', done);
+    });
+}
+async function exitFlushed(code) {
+    await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
+    process.exit(code);
+}
+
 // ---- guard 1: --expose-gc ------------------------------------------------
 if (typeof globalThis.gc !== 'function') {
     console.error('torture: globalThis.gc is missing.');
     console.error('  remedy: node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture.mjs');
     console.error('  or run: npm run torture');
-    process.exit(1);
+    await exitFlushed(1);
 }
 
 // ---- guard 2: semi-space pins --------------------------------------------
@@ -33,7 +52,7 @@ if (typeof globalThis.gc !== 'function') {
     if (!h.pinsOk(pins)) {
         console.error('torture: both --min-semi-space-size=4 and --max-semi-space-size=4 must be set exactly to 4 (got ' + h.pinsDetail(pins) + '; V8 applies the LAST occurrence and accepts the underscore spelling, so every occurrence must be 4; B/op scale drifts otherwise).');
         console.error('  remedy: npm run torture');
-        process.exit(1);
+        await exitFlushed(1);
     }
 }
 
@@ -43,7 +62,7 @@ if (typeof globalThis.gc !== 'function') {
     if (ms.length > 0) {
         console.error('torture: --minor-ms is unsupported (MinorMS reports young GCs as perf_hooks kind 2, not 1, which blinds the scavenge/B-op lanes -- they would read 0 while allocating). Remove ' + ms.join(' ') + '.');
         console.error('  remedy: npm run torture');
-        process.exit(1);
+        await exitFlushed(1);
     }
 }
 
@@ -56,7 +75,7 @@ try {
 } catch (e) {
     console.error('torture: a dev dependency failed to import (' + e.message + ').');
     console.error('  remedy: npm install');
-    process.exit(2);
+    await exitFlushed(2);
 }
 
 // ---- guard 4: known control ----------------------------------------------
@@ -66,7 +85,7 @@ if (controlName !== undefined && controlName !== '' && !CONTROLS[controlName]) {
     console.error('torture: unknown TORTURE_CONTROL "' + controlName + '".');
     console.error('  known: ' + CONTROL_NAMES.join(', '));
     if (hint) console.error('  did you mean: ' + hint + ' ?');
-    process.exit(2);
+    await exitFlushed(2);
 }
 
 // ---- tier registry (dynamic: devDeps already verified) -------------------
@@ -95,7 +114,7 @@ h.startScavengeWatch();
         console.error('torture: young-GC detector blind (positive control scavenges=' + posScav + ' need > 0, negative=' + negScav + ' need 0; flags: ' + h.gcFlagsLine() + '). The scavenge and B/op lanes would read 0 while allocating.');
         console.error('  remedy: run under a Scavenger young generation (no --minor-ms), npm run torture');
         h.stopScavengeWatch();
-        process.exit(1);
+        await exitFlushed(1);
     }
 }
 
@@ -111,7 +130,7 @@ if (!controlName || CONTROLS[controlName].tiers.includes('T6')) {
         console.error('  remedy: ' + h.NATIVES_REMEDY);
         console.error('  or run: npm run torture');
         h.stopScavengeWatch();
-        process.exit(1);
+        await exitFlushed(1);
     }
 }
 
@@ -152,7 +171,7 @@ if (controlName) {
         }
     }
     h.stopScavengeWatch();
-    process.exit(anyFailed ? 1 : 0);
+    await exitFlushed(anyFailed ? 1 : 0);
 }
 
 // ---- normal run ----------------------------------------------------------
@@ -249,10 +268,10 @@ h.stopScavengeWatch();
 const ok = allFails.length === 0 && totalGreen === 0;
 if (ok) {
     console.log('ok');
-    process.exit(0);
+    await exitFlushed(0);
 } else {
     for (const f of allFails) console.error('TODO/FAIL ' + f);
     if (totalGreen > 0) console.error('FAIL: ' + totalGreen + ' expected-red row(s) came out green');
     console.error('seed was ' + (seed >>> 0) + ' (TORTURE_SEED=' + (seed >>> 0) + ' npm run torture to replay)');
-    process.exit(1);
+    await exitFlushed(1);
 }
