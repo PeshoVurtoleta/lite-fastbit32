@@ -26,7 +26,7 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned; starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-s6-input-law.md` (the SC-2 / SC-3 options as Q-ids), ruled by the maintainer before any planner pass |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
-| **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 2.1.0 | additive, new export | planned (last chapter); starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-fastbit64.md` (draft .d.ts surface, kernels, naming as Q-ids; SC-4's flat lo/hi shape is SETTLED, not reopened), ruled before any planner pass |
+| **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 1.7.0 (ahead of S6) | additive, new export | planned (amended 2026-11-05: ships ahead of S6, no longer last); starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-fastbit64.md` (draft .d.ts surface, kernels, naming as Q-ids; SC-4's flat lo/hi shape is SETTLED, not reopened), ruled before any planner pass |
 
 ---
 
@@ -315,6 +315,22 @@ NOT a class: it ships only as a README/GUIDE recipe in S9 (64 FastBit64 words +
 that is lite-o1 `BitSet` (3 levels, fan-out 32); its missing `firstClear` is
 the RESEARCH 11.4 handoff, decided in lite-o1. 32 x 32 x 32 is not built here.
 
+**Amended 2026-11-05 (PROPOSAL-fastbit64 section 7).** The SETTLED text above
+is left byte-identical, so the `[amended: x]` markers live here, each naming
+the quoted clause it amends:
+- (a) `[amended: a]` on "Scheduled as **S9, the last chapter** (after S8)":
+  FastBit64 ships ahead of S6 in 1.7.0, replacing "the last chapter" (here and
+  in the SC-4 heading) and "after S8".
+- (b) `[amended: b]` on "it follows the 2.0.0 input law (S6)": FastBit64 has
+  its own fail-closed signed-storage law (Q-3 / Q-4: index `(i & 63) !== i` ->
+  RangeError; words int32-or-uint32, stored `| 0`). S6 then rules FastBit32
+  only; a different S6 law for FastBit64 would be a 2.0.0 break of FastBit64.
+- (c) `[amended: c]` on "(64 FastBit64 words + `active`/`full` FastBit64
+  summaries ...)": the 64 x 64 = 4096 recipe is an `Int32Array(128)` + two
+  FastBit64 summaries, replacing "64 FastBit64 words" (Q-10).
+- (d) `[amended: d]` on "every body written on shared single-word kernels":
+  the word kernels are private (Q-8); exporting them waits for S6.
+
 ### SC-5 -- `FastBit1024` in this package (SETTLED 2026-10-10, maintainer)
 
 - **A. Export `FastBit1024` from `FastBit32.js`.** (chosen)
@@ -364,8 +380,10 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
                                  +--------------------> S7 (demo, uses S2 kernels) <--+
                                                                                      |
                                                      S6 --(2.0.0)--> S8 --(2.0.1) <--+
-                                                                          |
-                                                                          +--> S9 --(2.1.0) FastBit64
+
+1.5.0 --> 1.6.x --+--> S9 --(1.7.0) FastBit64   (amended 2026-11-05: ahead of S6)
+                  |
+                  +--> S6 --(2.0.0) ...         (S6 as drawn above)
 ```
 
 - **S0 blocks everything.** Without the harness, nothing below can be proven.
