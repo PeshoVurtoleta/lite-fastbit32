@@ -1,0 +1,117 @@
+# perf-nightly.yml -- lite-fastbit32 lane P (NIGHTLY-1): one STATISTICAL perf night per OS, REPORT-ONLY until
+# NIGHTLY-2 calibrates it (SPEC-nightly.md section P, CAL-1..CAL-5). gate:release's statistic, unchanged: per
+# row, strict majority 3 of K = 5 witness:fast rounds, each round NOISE-relative (test/witness-release.mjs).
+# test/perf-nightly.mjs runs it on two arms interleaved ABBA on one runner: arm A = the live tree, arm B = a temp
+# copy whose countMasked is Kernighan (the must-fail control: FLAT countMasked (density) must trip). Verdict
+# exit 0 PASS / 1 FAIL / 2 INCONCLUSIVE / 3 NO DATA; DECISIVE = PASS or FAIL with the control tripped.
+# Node is PINNED (env PIN_NODE, never the newest patch): a patch bump mid-window would split the calibration.
+# Thresholds and calibration are per OS (ubuntu-latest, macos-latest). The measure step never turns the job red
+# (it is allowed to error, with a ::warning::); a bad input, a node that is not PIN_NODE or an empty artifact does.
+# GitHub runs a schedule only from the default branch and pauses it after 60 days without repository activity.
+
+name: perf-nightly
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'runner(s) for this night'
+        type: choice
+        options:
+          - both
+          - ubuntu-latest
+          - macos-latest
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PIN_NODE: '26.8.2'
+
+jobs:
+  perf:
+    name: perf-nightly (${{ matrix.os }}, node 26.8.2)
+    runs-on: ${{ matrix.os }}
+    # 45 (nominal): 10 rounds x <= 120 s (ROUND_TIMEOUT_MS) = 20 min worst case + setup; a local round is ~14 s
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # the input text never reaches the list: one of three literal lists (an unknown value -> both, then the
+        # guard below rejects it before any round)
+        os: ${{ fromJSON(inputs.os == 'ubuntu-latest' && '["ubuntu-latest"]' || inputs.os == 'macos-latest' && '["macos-latest"]' || '["ubuntu-latest","macos-latest"]') }}
+    env:
+      INPUT_OS: ${{ inputs.os }}
+      MATRIX_OS: ${{ matrix.os }}
+      PERF_OS: ${{ matrix.os }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup node (pinned to PIN_NODE)
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.PIN_NODE }}
+      # fail closed before any round: the os input, the matrix row, the event and the pinned node
+      - name: input guard
+        run: |
+          node -e 'import("./test/perf-nightly.mjs").then((m) => { const why = m.guardInputs(process.env); if (why) { console.error("perf-nightly input guard: " + why); process.exit(1); } console.log("input guard ok: event " + process.env.GITHUB_EVENT_NAME + ", INPUT_OS \"" + process.env.INPUT_OS + "\", MATRIX_OS " + process.env.MATRIX_OS + ", node " + process.version); }, (e) => { console.error(e); process.exit(1); })'
+      - name: provenance
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -a
+          echo "commit: $(git rev-parse HEAD)"
+          echo "shallow: $(git rev-parse --is-shallow-repository)"
+          echo "CI=${CI:-unset}"
+          echo "cpus: $(node -p 'require("os").cpus().length')  load: $(node -p 'require("os").loadavg().map(x => x.toFixed(2)).join(" ")')"
+          node -p '"v8 " + process.versions.v8 + "  arch " + process.arch'
+      # lane P runs no git-pinned test; the full clone + this refusal are kept from nightly.yml (same checkout,
+      # same provenance) so night.json's commit is read from the same kind of clone as ci.yml / nightly.yml
+      - name: full history (not a shallow clone)
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+      # no committed lockfile: plain install (an engines mismatch only warns). Kept from nightly.yml: the witness
+      # imports no package today, but the night must run on the same installed tree as the gate it mirrors
+      - name: install
+        run: npm install --no-audit --no-fund
+      # REPORT-ONLY (P-6) until NIGHTLY-2: a non-PASS night is a ::warning::, never a red job. Make this step
+      # gating only when NIGHTLY-2 closes the calibration for this OS.
+      - name: measure (lane P night, REPORT-ONLY)
+        continue-on-error: true
+        run: |
+          rc=0
+          node test/perf-nightly.mjs --out perf-out || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning title=lane P REPORT-ONLY (${MATRIX_OS})::perf-nightly exit ${rc} (1 FAIL, 2 INCONCLUSIVE, 3 NO DATA) -- see perf-out/night.json"
+          fi
+          exit "$rc"
+      - name: step summary
+        if: always()
+        run: |
+          if [ -f perf-out/summary.md ]; then
+            cat perf-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### lane P (REPORT-ONLY) -- ${MATRIX_OS} -- **NO DATA** (no perf-out/summary.md)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: upload night
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-nightly-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: perf-out/
+          retention-days: 90
+          if-no-files-found: error

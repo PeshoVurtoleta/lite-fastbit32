@@ -62,6 +62,31 @@ export function installSeed() {
     return seed;
 }
 
+// TORTURE_SOAK_CYCLES (NIGHTLY S-5): the T7 soak volume. Unset or '' -> 4096
+// (the push shape). Otherwise a plain decimal multiple of 1024 in [4096, 131072]
+// (131072 keeps 64 * CYCLES <= t7-soak's FB1024_TAG0 = 1 << 23, so the tag
+// ranges stay disjoint). Pure: returns the cycle count, or null when invalid --
+// no trim, no sign, no exponent, no hex, no fraction.
+export function parseSoakCycles(s) {
+    if (s === undefined || s === '') return 4096;
+    if (typeof s !== 'string' || !/^[1-9]\d{0,5}$/.test(s)) return null;
+    const n = Number(s);
+    if (!(n >= 4096) || !(n <= 131072) || (n & 1023) !== 0) return null;
+    return n;
+}
+
+// Read the knob once (t7-soak module scope); an invalid value exits 2 like
+// TORTURE_SEED, never a silent fallback to 4096.
+export function soakCycles() {
+    const env = process.env.TORTURE_SOAK_CYCLES;
+    const n = parseSoakCycles(env);
+    if (n === null) {
+        console.error('torture: TORTURE_SOAK_CYCLES must be a decimal multiple of 1024 in [4096, 131072] (or unset for 4096), got "' + env + '".');
+        process.exit(2);
+    }
+    return n;
+}
+
 // Collects EVERY occurrence of each semi-space pin from NODE_OPTIONS (first) and
 // execArgv. Returns an array of value strings per flag (empty if absent). The
 // caller requires >= 1 occurrence and every occurrence === '4' (pinsOk).

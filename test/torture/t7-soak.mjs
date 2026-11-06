@@ -1,4 +1,4 @@
-// test/torture/t7-soak.mjs -- retention churn (lite-leak). 4096 cycles, each
+// test/torture/t7-soak.mjs -- retention churn (lite-leak). CYCLES (4096; TORTURE_SOAK_CYCLES), each
 // building 1 BitMapper + 64 FastBit32, running ops, then dropping everything.
 // Held-value contract: the cleanup is a module-scope noop and the tag is a
 // number -- neither closes over the target, or finalization would never fire.
@@ -14,12 +14,18 @@ import {
     createLeakTracker,
     createOwnerCascadeOrphanKernel
 } from '@zakkster/lite-leak';
+import { soakCycles } from './harness.mjs';
+
+// NIGHTLY S-5: read once at load, so a bad TORTURE_SOAK_CYCLES exits 2 before any tier runs.
+const CYCLES = soakCycles();          // 4096 unset; multiple of 1024 in [4096, 131072]
+const PER_SEG = 1024;
+const SEGMENTS = CYCLES / PER_SEG;    // 1024 cycles each
 
 function moduleNoop() { /* must not close over the tracked target */ }
 
 const STASH = [];    // soak-stash control: retains tracked FastBit32 instances
 const RETAIN = [];   // soak-retain control: retains an on-heap array per cycle
-const FB1024_TAG0 = 1 << 23; // 8388608 + cycle: above 4096 * 64 FastBit32 tags, below the image row's 1 << 24
+const FB1024_TAG0 = 1 << 23; // 8388608 + cycle: FastBit32 tags < 64 * CYCLES <= 1 << 23 (CYCLES <= 131072), below the image row's 1 << 24
 
 // One G2 churn instance per cycle. A plain (non-async) function, like imgCycle,
 // so the instance never sits in run()'s suspended async frame across a drain.
@@ -66,9 +72,6 @@ export async function run(ctx) {
     });
     tracker.registerKernel(createOwnerCascadeOrphanKernel());
 
-    const CYCLES = 4096;
-    const SEGMENTS = 4;                 // 1024 cycles each
-    const PER_SEG = CYCLES / SEGMENTS;
     const names = Array.from({ length: 16 }, (_, i) => 'C' + i);
     const C1024 = ctx.FB1024;
     const partner = new C1024(700);

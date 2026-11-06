@@ -1,0 +1,196 @@
+# soak-nightly.yml -- lite-fastbit32 lane S: the torture soak at nightly volume (NIGHTLY-1, SPEC-nightly S-1..S-9).
+# DETERMINISTIC and GATING: a red leg is RED (Q-N5: an unexplained red night since the last release blocks
+# /release until it is named, reproduced from its replay line, then fixed or recorded as a test defect).
+# success = PASS; failure / timed_out = RED; cancelled / never acquired = NO DATA.
+# Per leg: 3 seeds (fresh crypto.randomInt, or the dispatch input `seeds`, the same 3 on every leg), each a full
+# `npm run torture` (TORTURE_FAST unset) with TORTURE_SOAK_CYCLES = the nightly volume (default 16384 = 4x push),
+# checked by test/nightly/soak-lane.mjs (every tier line, the postDrainKB count = cycles / 1024, the d8 lane);
+# then torture:controls at push volume and the two T7 controls at the nightly volume (must-fail teeth).
+# A `[T6] SKIP` line, a skipped control or a missing d8 line turns the leg red.
+# d8 (ubuntu legs): V8 15.7.37 linux64, pointer-compressed, from the URL jsvu 3.0.5 resolves for
+# `jsvu --os=linux64 v8@15.7.37`, pinned by sha256. jsvu itself is not run: under node 26 (3.0.5 and 3.0.6) its
+# extract step exits 0 having installed nothing, and a versioned jsvu install drops v8_build_config.json, which
+# the t6 d8 lane reads (probe 2026-11-06: .handoff/evidence/nightly-1/lane-s/d8-probe/). macOS legs: named SKIP.
+# npm test, test:types and the push tiers are ci.yml / nightly.yml's job, not this one.
+# GitHub runs a schedule only from the default branch and pauses it after 60 days without repository activity.
+# Timeouts are nominal (S-9): not yet measured on a runner.
+
+name: soak-nightly
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 'exactly 3 decimal uint32 seeds, space or comma separated (empty = 3 fresh seeds per leg)'
+        required: false
+        default: ''
+      soak_cycles:
+        description: 'TORTURE_SOAK_CYCLES for the soak: a multiple of 1024 in [8192, 65536]'
+        required: false
+        default: '16384'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  soak:
+    name: soak (${{ matrix.os }}, node ${{ matrix.node }}, d8 ${{ matrix.d8 }})
+    runs-on: ${{ matrix.os }}
+    # 200 (nominal, S-9 180 raised): >= the step caps' sum, install 10 + d8 10 + 3 x seed 35 + controls 40 +
+    # soak-volume controls 30 = 195; not yet measured on a runner
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 'latest', d8: ran }
+          - { os: ubuntu-latest, node: '26.8.2', d8: ran }
+          - { os: macos-latest, node: 'latest', d8: skip }
+    env:
+      # dispatch inputs reach the shell ONLY here; soak-lane.mjs seeds validates them fail-closed
+      SEEDS_IN: ${{ inputs.seeds || '' }}
+      SOAK_CYCLES_IN: ${{ inputs.soak_cycles || '16384' }}
+      MATRIX_OS: ${{ matrix.os }}
+      MATRIX_D8: ${{ matrix.d8 }}
+      SOAK_OUT: soak-out
+      PIN_D8: '15.7.37'
+      PIN_D8_URL: 'https://storage.googleapis.com/chromium-v8/official/canary/v8-linux64-rel-15.7.37.zip'
+      PIN_D8_SHA256: '8ba595f2236b8d753f2919af57872ccffba76e4a957876a278921d836f811e80'
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: setup node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+      - name: provenance
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -a
+          echo "commit: $(git rev-parse HEAD)"
+          echo "shallow: $(git rev-parse --is-shallow-repository)"
+          echo "CI=${CI:-unset}"
+          echo "cpus: $(node -p 'require("os").cpus().length')  load: $(node -p 'require("os").loadavg().map(x => x.toFixed(2)).join(" ")')"
+          node -p '"v8 " + process.versions.v8 + "  arch " + process.arch'
+      # the pins live in the test files: a pinned commit missing from the clone FAILS its rows
+      - name: full history (not a shallow clone)
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+      # S-3 / S-4: validates SEEDS_IN / SOAK_CYCLES_IN, prints the 3 replay lines first, exports
+      # SOAK_SEED_1..3 + NIGHTLY_CYCLES, writes soak-out/seeds.json
+      - name: seeds
+        id: seeds
+        run: node test/nightly/soak-lane.mjs seeds --out "$SOAK_OUT"
+      # no committed lockfile: plain install (an engines mismatch only warns)
+      - name: install
+        id: install
+        timeout-minutes: 10
+        run: npm install --no-audit --no-fund
+      - name: resolved devDependencies
+        run: npm ls --depth=0 2>&1 | tee "$SOAK_OUT/npm-ls.txt" || true
+      - name: d8 install (infra)
+        id: d8
+        if: matrix.d8 == 'ran'
+        timeout-minutes: 10
+        run: |
+          dir="$RUNNER_TEMP/d8-$PIN_D8"
+          zip="$RUNNER_TEMP/v8-linux64-rel-$PIN_D8.zip"
+          got=""
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 300 -o "$zip" "$PIN_D8_URL"; then got=yes; break; fi
+            echo "d8 download attempt $attempt failed"
+            sleep 10
+          done
+          test "$got" = yes || { echo "::error::d8 download failed 3 times: $PIN_D8_URL"; exit 1; }
+          sum="$(sha256sum "$zip" | cut -d' ' -f1)"
+          test "$sum" = "$PIN_D8_SHA256" || { echo "::error::d8 zip sha256 $sum != pin $PIN_D8_SHA256"; exit 1; }
+          rm -rf "$dir" && mkdir -p "$dir" && unzip -q "$zip" -d "$dir"
+          ver="$("$dir/d8" -e 'print(version())')"
+          test "$ver" = "$PIN_D8" || { echo "::error::d8 version '$ver' != pin $PIN_D8"; exit 1; }
+          pc="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pointer_compression' "$dir/v8_build_config.json")"
+          test "$pc" = true || { echo "::error::d8 pointer_compression=$pc (want true)"; exit 1; }
+          echo "d8 $ver pointer_compression=$pc at $dir/d8"
+          echo "FASTBIT_D8=$dir/d8" >> "$GITHUB_ENV"
+          echo "D8_VERSION=$ver" >> "$GITHUB_ENV"
+      # a nonexistent FASTBIT_D8 makes the t6 lane print its named "lane SKIP:" line deterministically
+      - name: d8 skip (macos)
+        if: matrix.d8 == 'skip'
+        run: |
+          echo "FASTBIT_D8=$RUNNER_TEMP/no-d8/d8" >> "$GITHUB_ENV"
+          echo "D8_SKIP_REASON=macOS leg: no pinned pointer-compressed d8 (S-7)" >> "$GITHUB_ENV"
+      - name: torture seed 1
+        id: seed1
+        if: "!cancelled() && steps.seeds.outcome == 'success' && steps.install.outcome == 'success'"
+        timeout-minutes: 35
+        run: |
+          : "${SOAK_SEED_1:?}" "${NIGHTLY_CYCLES:?}"
+          { echo "replay: TORTURE_SEED=$SOAK_SEED_1 TORTURE_SOAK_CYCLES=$NIGHTLY_CYCLES npm run torture"; TORTURE_SEED="$SOAK_SEED_1" TORTURE_SOAK_CYCLES="$NIGHTLY_CYCLES" npm run torture; } 2>&1 | tee "$SOAK_OUT/torture-seed-1.log"
+          node test/nightly/soak-lane.mjs check --d8 "$MATRIX_D8" --cycles "$NIGHTLY_CYCLES" --torture "$SOAK_OUT/torture-seed-1.log"
+      - name: torture seed 2
+        id: seed2
+        if: "!cancelled() && steps.seeds.outcome == 'success' && steps.install.outcome == 'success'"
+        timeout-minutes: 35
+        run: |
+          : "${SOAK_SEED_2:?}" "${NIGHTLY_CYCLES:?}"
+          { echo "replay: TORTURE_SEED=$SOAK_SEED_2 TORTURE_SOAK_CYCLES=$NIGHTLY_CYCLES npm run torture"; TORTURE_SEED="$SOAK_SEED_2" TORTURE_SOAK_CYCLES="$NIGHTLY_CYCLES" npm run torture; } 2>&1 | tee "$SOAK_OUT/torture-seed-2.log"
+          node test/nightly/soak-lane.mjs check --d8 "$MATRIX_D8" --cycles "$NIGHTLY_CYCLES" --torture "$SOAK_OUT/torture-seed-2.log"
+      - name: torture seed 3
+        id: seed3
+        if: "!cancelled() && steps.seeds.outcome == 'success' && steps.install.outcome == 'success'"
+        timeout-minutes: 35
+        run: |
+          : "${SOAK_SEED_3:?}" "${NIGHTLY_CYCLES:?}"
+          { echo "replay: TORTURE_SEED=$SOAK_SEED_3 TORTURE_SOAK_CYCLES=$NIGHTLY_CYCLES npm run torture"; TORTURE_SEED="$SOAK_SEED_3" TORTURE_SOAK_CYCLES="$NIGHTLY_CYCLES" npm run torture; } 2>&1 | tee "$SOAK_OUT/torture-seed-3.log"
+          node test/nightly/soak-lane.mjs check --d8 "$MATRIX_D8" --cycles "$NIGHTLY_CYCLES" --torture "$SOAK_OUT/torture-seed-3.log"
+      # S-6: every control at push volume (TORTURE_SOAK_CYCLES unset here): exactly `controls ok`, one `-> ok`
+      # per CONTROL_NAMES entry + does-not-exist
+      - name: torture:controls
+        id: controls
+        if: "!cancelled() && steps.seeds.outcome == 'success' && steps.install.outcome == 'success'"
+        timeout-minutes: 40
+        run: |
+          npm run torture:controls 2>&1 | tee "$SOAK_OUT/controls.log"
+          node test/nightly/soak-lane.mjs check --controls "$SOAK_OUT/controls.log"
+      # S-6: the T7 must-fail controls at the nightly volume (the nightly T7 gate keeps its teeth)
+      - name: torture:controls soak-stash soak-retain (nightly volume)
+        id: soakcontrols
+        if: "!cancelled() && steps.seeds.outcome == 'success' && steps.install.outcome == 'success'"
+        timeout-minutes: 30
+        run: |
+          TORTURE_SOAK_CYCLES="$NIGHTLY_CYCLES" npm run torture:controls -- soak-stash soak-retain 2>&1 | tee "$SOAK_OUT/controls-soak.log"
+          node test/nightly/soak-lane.mjs check --soak-controls "$SOAK_OUT/controls-soak.log"
+      - name: result record
+        if: always()
+        env:
+          OUTCOME_SEEDS: ${{ steps.seeds.outcome }}
+          OUTCOME_INSTALL: ${{ steps.install.outcome }}
+          OUTCOME_D8: ${{ steps.d8.outcome }}
+          OUTCOME_SEED_1: ${{ steps.seed1.outcome }}
+          OUTCOME_SEED_2: ${{ steps.seed2.outcome }}
+          OUTCOME_SEED_3: ${{ steps.seed3.outcome }}
+          OUTCOME_CONTROLS: ${{ steps.controls.outcome }}
+          OUTCOME_SOAK_CONTROLS: ${{ steps.soakcontrols.outcome }}
+        run: node test/nightly/soak-lane.mjs result --out "$SOAK_OUT"
+      - name: upload soak record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-${{ matrix.os }}-node-${{ matrix.node }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: soak-out/
+          retention-days: 90
+          if-no-files-found: error
