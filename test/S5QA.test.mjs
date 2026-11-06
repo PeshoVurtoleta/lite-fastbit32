@@ -724,7 +724,8 @@ describe('S5 QA parity vs 1.4.0 (' + BASE14 + ')', () => {
 
     it('the surface is additive: exactly select + nextSubset + nextCombination (1.5.0) and the FastBit1024 1.6.0 G1 + L2 + L3 members (prevSetBit, intersectionSize, unionSize, differenceSize, addRange, removeRange) are new', () => {
         assert.ok(OLD14);
-        assert.deepStrictEqual(Object.keys(NEW).sort(), Object.keys(OLD14).sort());
+        // 1.7.0 adds exactly one export, FastBit64 (R-8); the list stays exact.
+        assert.deepStrictEqual(Object.keys(NEW).sort(), [...Object.keys(OLD14), 'FastBit64'].sort());
         const diff = (a, b) => a.filter((n) => !b.includes(n)).sort();
         const np = ownMethods(NEW.FastBit32.prototype), op = ownMethods(OLD14.FastBit32.prototype);
         assert.deepStrictEqual(diff(op, np), []);

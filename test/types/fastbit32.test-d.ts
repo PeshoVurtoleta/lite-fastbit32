@@ -9,6 +9,7 @@ import {
     FastBit32,
     BitMapper,
     FastBit1024,
+    FastBit64,
     forEachArray,
     forEachObject,
     forEachMapped,
@@ -198,3 +199,67 @@ void l3Chain;
 
 // @ts-expect-error -- addRange takes numbers, not strings.
 pool.addRange('0', 1);
+
+// ---- 1.7.0: FastBit64 (two int32 words, fail-closed indices) ----
+const f64: FastBit64 = new FastBit64();
+const f64w: FastBit64 = new FastBit64(0x80000000, -1);
+const f64lo: number = f64w.lo;
+const f64hi: number = f64w.hi;
+const f64Chain: FastBit64 = f64.add(0).remove(1).toggle(63).union(f64w).difference(f64w)
+    .intersect(f64w).copy(f64w).setWords(1, 2).addRange(0, 64).removeRange(3, 5).clear()
+    .forEach((b: number) => { void b; });
+const f64Has: boolean = f64.has(5) && f64.hasAll(f64w) && f64.hasAny(f64w) && f64.hasNone(f64w)
+    && f64.isSubsetOf(f64w) && f64.equals(f64w) && f64.equalsWords(1, 2) && f64.isEmpty() && f64.isFull();
+const f64Nums: number = f64.count() + f64.countMasked(f64w) + f64.lowest() + f64.highest()
+    + f64.nextClearBit() + f64.highestClearBit() + f64.nextSetBit(64) + f64.prevSetBit(-1)
+    + f64.rank(3) + f64.select(0) + f64.countRange(0, 64);
+const f64Img: Int32Array = new Int32Array(FastBit64.imageLength + f64.imageLength);
+const f64Three: 3 = FastBit64.imageLength;
+const f64End: number = f64.saveInto(f64Img) + f64.saveInto(f64Img, 3);
+const f64Load: number = f64.loadFrom(f64Img) + f64.loadFrom(f64Img, 3);
+const f64Ser: Int32Array = f64.serialize();
+const f64Des: FastBit64 = FastBit64.deserialize(f64Ser);
+const f64Des2: FastBit64 = FastBit64.deserialize(f64Img, 3);
+const f64Clone: FastBit64 = f64.clone();
+const f64Arr: number[] = f64.toArray();
+const f64Str: string = f64.toBinaryString() + f64.toBinaryString(false);
+// fromArray (Q-13): an Array or a TypedArray of numbers.
+const f64FromA: FastBit64 = f64.fromArray([0, 31, 32, 63]);
+const f64FromRo: FastBit64 = f64.fromArray([1, 2] as readonly number[]);
+const f64FromI: FastBit64 = f64.fromArray(new Int32Array([1, 2]));
+const f64FromF: FastBit64 = f64.fromArray(new Float64Array([1, 2]));
+void f64lo; void f64hi; void f64Chain; void f64Has; void f64Nums; void f64Three; void f64End; void f64Load;
+void f64Des; void f64Des2; void f64Clone; void f64Arr; void f64Str; void f64FromA; void f64FromRo; void f64FromI; void f64FromF;
+
+// @ts-expect-error -- fromArray takes an Array or a TypedArray, not a plain array-like.
+f64.fromArray({ length: 1, 0: 3 });
+
+// @ts-expect-error -- fromArray takes an Array or a TypedArray, not a number.
+f64.fromArray(42);
+
+// @ts-expect-error -- fromArray takes number elements, not a BigInt64Array.
+f64.fromArray(new BigInt64Array(1));
+
+// @ts-expect-error -- fromArray takes a TypedArray of numbers, not a DataView.
+f64.fromArray(new DataView(new ArrayBuffer(8)));
+
+// @ts-expect-error -- lo is read-only.
+f64.lo = 1;
+
+// @ts-expect-error -- hi is read-only.
+f64.hi = 1;
+
+// @ts-expect-error -- imageLength is a read-only getter.
+f64.imageLength = 3;
+
+// @ts-expect-error -- cross-set methods take another FastBit64, not a raw mask.
+f64.hasAll(5);
+
+// @ts-expect-error -- cross-set methods take a FastBit64, not a FastBit1024.
+f64.union(pool);
+
+// @ts-expect-error -- deserialize is static, not an instance member.
+f64.deserialize(f64Ser);
+
+// @ts-expect-error -- setWords needs both words.
+f64.setWords(1);

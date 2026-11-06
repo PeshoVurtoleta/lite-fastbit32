@@ -992,3 +992,377 @@ export class FastBit1024 {
         return s;
     }
 }
+// -- FastBit64 --
+// 64 flags in one flat object: two signed int32 words in private fields, bits
+// 0..31 in #lo and 32..63 in #hi (SC-4), every body on the shared single-word
+// kernels below. No import or runtime coupling to FastBit32; it reuses
+// FastBit1024's image tag and its intrinsic TypedArray getter captures read-only.
+// Every method that takes an index FAILS CLOSED (Q-3): a bad index throws
+// RangeError (a Symbol/BigInt throws TypeError on `&`) and writes nothing. A word
+// (constructor, setWords, equalsWords) is a number that is an int32 or a uint32,
+// stored `| 0`; anything else throws RangeError and is never converted (Q-4).
+// A cross-set method reads `other.#lo` before any write: anything that is not a
+// FastBit64 (a Proxy, a forgery, a second module copy) throws V8's TypeError
+// (Q-2 / Q-5); subclass instances pass. Every op is loop-free except forEach /
+// toArray / fromArray (O(k)) and loadFrom (O(image words)).
+// Zero-box rule (1.6.1 lesson): every stored field is an int32 by construction,
+// and every Math.clz32 / Math.imul argument is an int32 field or the direct
+// result of & | ^ ~ << >>, never >>>, +, - or a uint32. A `>>> 0` value is
+// produced only in toBinaryString (isWord / fromArray use it only inside a compare).
+
+// Single-word kernels: private, called by every FastBit64 body. popcnt32 is
+// FastBit32#count's body and select32 is FastBit32#select's body with the word
+// as a parameter (a test pins them to FastBit32's shipped bodies).
+// fb64-kernels:begin
+// lowest set bit of x, 0..31; 32 when x === 0
+function ctz32(x) { return 32 - Math.clz32(~x & (x - 1)); }
+// popcount, 0..32
+function popcnt32(v) {
+    v = v - ((v >>> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+    return Math.imul((v + (v >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
+}
+// the k-th set bit of v (0-based), -1 when k is outside 0..popcnt32(v)-1
+function select32(v, k) {
+    const q = k | 0;
+    const c2 = v - ((v >>> 1) & 0x55555555);
+    const c4 = (c2 & 0x33333333) + ((c2 >>> 2) & 0x33333333);
+    const c8 = (c4 + (c4 >>> 4)) & 0x0F0F0F0F;
+    const c16 = (c8 + (c8 >>> 8)) & 0x00FF00FF;
+    let r = q, t = c16 & 31, m = (t - r - 1) >> 31, s = m & 16; r -= m & t;
+    t = (c8 >>> s) & 15; m = (t - r - 1) >> 31; s += m & 8; r -= m & t;
+    t = (c4 >>> s) & 7;  m = (t - r - 1) >> 31; s += m & 4; r -= m & t;
+    t = (c2 >>> s) & 3;  m = (t - r - 1) >> 31; s += m & 2; r -= m & t;
+    t = (v >>> s) & 1;   m = (t - r - 1) >> 31; s += m & 1;
+    return s | (((((c16 + (c16 >>> 16)) & 63) + ~q) | q) >> 31);
+}
+// bits [0, n) of one word, n 0..32 (n = 32 gives -1, never the `1 << 32` trap);
+// an int32 mask used only inside the range bodies
+function upTo(n) { return ((1 << n) - 1) | -(n >>> 5); }
+// fb64-kernels:end
+
+// Cold throw helpers: every message starts 'FastBit64: '.
+function fb64BadIndex(bit, limit) {
+    throw new RangeError('FastBit64: bit index must be an integer 0..' + (limit - 1) + ', got ' + fb1024Show(bit));
+}
+
+function fb64BadFrom(from) {
+    throw new RangeError('FastBit64: from must be an integer -1..63, got ' + fb1024Show(from));
+}
+
+function fb64BadWord(word) {
+    throw new RangeError('FastBit64: a word must be an integer in [-2^31, 2^32), got ' + fb1024Show(word));
+}
+
+function fb64BadRange(lo, hi) {
+    throw new RangeError('FastBit64: range must be integers 0 <= lo <= hi <= 64, got ' + fb1024Show(lo) + ', ' + fb1024Show(hi));
+}
+
+function fb64BadBuf(what) {
+    throw new TypeError('FastBit64: ' + what + ' must be an Int32Array');
+}
+
+function fb64BadOffset(off) {
+    throw new RangeError('FastBit64: offset must be a non-negative integer that fits the image, got ' + fb1024Show(off));
+}
+
+function fb64BadImage(why) {
+    throw new RangeError('FastBit64: bad image: ' + why);
+}
+
+function fb64BadArray(bits) {
+    throw new TypeError('FastBit64: fromArray expects an Array or a TypedArray, got ' + (bits === null ? 'null' : typeof bits));
+}
+
+// A word is a number that is an int32 or a uint32 (both forms of the same 32
+// bits); a non-number is never converted (no valueOf call).
+function isWord(x) {
+    return typeof x === 'number' && ((x | 0) === x || (x >>> 0) === x);
+}
+
+export class FastBit64 {
+    // The only state: two int32 words. `other.#lo` is the brand.
+    #lo; #hi;
+
+    /** lo, hi: each an int32 or a uint32 number (default 0), stored `| 0`; else RangeError. */
+    constructor(lo = 0, hi = 0) {
+        if (!isWord(lo)) fb64BadWord(lo);
+        if (!isWord(hi)) fb64BadWord(hi);
+        this.#lo = lo | 0;
+        this.#hi = hi | 0;
+    }
+
+    /** Bits 0..31 as a signed int32 (bit 31 set -> negative). Read-only. */
+    get lo() { return this.#lo; }
+    /** Bits 32..63 as a signed int32 (bit 63 set -> negative). Read-only. */
+    get hi() { return this.#hi; }
+
+    // -- one index, 0..63 --
+
+    add(bit) {
+        if ((bit & 63) !== bit) fb64BadIndex(bit, 64);
+        if (bit < 32) this.#lo |= 1 << bit; else this.#hi |= 1 << bit;
+        return this;
+    }
+
+    remove(bit) {
+        if ((bit & 63) !== bit) fb64BadIndex(bit, 64);
+        if (bit < 32) this.#lo &= ~(1 << bit); else this.#hi &= ~(1 << bit);
+        return this;
+    }
+
+    toggle(bit) {
+        if ((bit & 63) !== bit) fb64BadIndex(bit, 64);
+        if (bit < 32) this.#lo ^= 1 << bit; else this.#hi ^= 1 << bit;
+        return this;
+    }
+
+    has(bit) {
+        if ((bit & 63) !== bit) fb64BadIndex(bit, 64);
+        return ((bit < 32 ? this.#lo : this.#hi) & (1 << bit)) !== 0;
+    }
+
+    // -- another FastBit64 (other.#lo throws TypeError before any write) --
+
+    hasAll(other) { return ((~this.#lo & other.#lo) | (~this.#hi & other.#hi)) === 0; }
+
+    hasAny(other) { return ((this.#lo & other.#lo) | (this.#hi & other.#hi)) !== 0; }
+
+    hasNone(other) { return ((this.#lo & other.#lo) | (this.#hi & other.#hi)) === 0; }
+
+    isSubsetOf(other) { return ((this.#lo & ~other.#lo) | (this.#hi & ~other.#hi)) === 0; }
+
+    equals(other) { return ((this.#lo ^ other.#lo) | (this.#hi ^ other.#hi)) === 0; }
+
+    union(other) { this.#lo |= other.#lo; this.#hi |= other.#hi; return this; }
+
+    difference(other) { this.#lo &= ~other.#lo; this.#hi &= ~other.#hi; return this; }
+
+    intersect(other) { this.#lo &= other.#lo; this.#hi &= other.#hi; return this; }
+
+    copy(other) { const l = other.#lo, h = other.#hi; this.#lo = l; this.#hi = h; return this; }
+
+    /** Popcount of this & other. */
+    countMasked(other) { return popcnt32(this.#lo & other.#lo) + popcnt32(this.#hi & other.#hi); }
+
+    // -- raw words (each checked on its own, lo before hi) --
+
+    setWords(lo, hi) {
+        if (!isWord(lo)) fb64BadWord(lo);
+        if (!isWord(hi)) fb64BadWord(hi);
+        this.#lo = lo | 0;
+        this.#hi = hi | 0;
+        return this;
+    }
+
+    equalsWords(lo, hi) {
+        if (!isWord(lo)) fb64BadWord(lo);
+        if (!isWord(hi)) fb64BadWord(hi);
+        return ((this.#lo ^ lo) | (this.#hi ^ hi)) === 0;
+    }
+
+    // -- whole set --
+
+    /** 0..64 */
+    count() { return popcnt32(this.#lo) + popcnt32(this.#hi); }
+
+    isEmpty() { return (this.#lo | this.#hi) === 0; }
+
+    isFull() { return ~(this.#lo & this.#hi) === 0; }
+
+    clear() { this.#lo = 0; this.#hi = 0; return this; }
+
+    /** Lowest set bit, -1 when empty. */
+    lowest() {
+        const c = ctz32(this.#lo), t = c + (ctz32(this.#hi) & -(c >>> 5));
+        return t | ~((t - 64) >> 31);
+    }
+
+    /** Highest set bit, -1 when empty. */
+    highest() {
+        const c = Math.clz32(this.#hi);
+        return 63 - (c + (Math.clz32(this.#lo) & -(c >>> 5)));
+    }
+
+    /** Lowest clear bit, -1 when full. */
+    nextClearBit() {
+        const c = ctz32(~this.#lo), t = c + (ctz32(~this.#hi) & -(c >>> 5));
+        return t | ~((t - 64) >> 31);
+    }
+
+    /** Highest clear bit, -1 when full. */
+    highestClearBit() {
+        const c = Math.clz32(~this.#hi);
+        return 63 - (c + (Math.clz32(~this.#lo) & -(c >>> 5)));
+    }
+
+    // -- cursors --
+
+    /** Lowest set bit >= from, or -1. from 0..64 (64 returns -1). */
+    nextSetBit(from) {
+        if ((from & 127) !== from || from > 64) fb64BadIndex(from, 65);
+        const s = (from - 32) >> 31, sh = -1 << from;
+        const l = this.#lo & sh & s, h = this.#hi & (s | (sh & ((from - 64) >> 31)));
+        const c = ctz32(l), t = c + (ctz32(h) & -(c >>> 5));
+        return t | ~((t - 64) >> 31);
+    }
+
+    /** Highest set bit <= from (inclusive), or -1. from -1..63 (-1 returns -1). */
+    prevSetBit(from) {
+        if (from !== -1 && (from & 63) !== from) fb64BadFrom(from);
+        const inner = ~(-2 << from), h = (31 - from) >> 31;
+        const l = this.#lo & (inner | h) & ~(from >> 31), hh = this.#hi & inner & h;
+        const c = Math.clz32(hh);
+        return 63 - (c + (Math.clz32(l) & -(c >>> 5)));
+    }
+
+    /** Set bits strictly below `bit`, bit 0..63. */
+    rank(bit) {
+        if ((bit & 63) !== bit) fb64BadIndex(bit, 64);
+        const m = (1 << bit) - 1, s = (31 - bit) >> 31;
+        return popcnt32(this.#lo & (m | s)) + popcnt32(this.#hi & m & s);
+    }
+
+    /** The k-th set bit, k 0..63; -1 when k >= count(). select(rank(b)) === b. */
+    select(k) {
+        if ((k & 63) !== k) fb64BadIndex(k, 64);
+        const lo = this.#lo, cl = popcnt32(lo), u = (cl - 1 - k) >> 31;
+        const s = select32((lo & ~u) | (this.#hi & u), k - (cl & u));
+        return (s + (32 & u)) | (s >> 31);
+    }
+
+    // -- half-open ranges [lo, hi), 0 <= lo <= hi <= 64 (FastBit32.countRange is INCLUSIVE) --
+
+    addRange(lo, hi) {
+        if ((lo & 127) !== lo || (hi & 127) !== hi || hi > 64 || lo > hi) fb64BadRange(lo, hi);
+        const a0 = lo < 32 ? lo : 32, b0 = hi < 32 ? hi : 32;
+        this.#lo |= upTo(b0) & ~upTo(a0);
+        this.#hi |= upTo(hi - b0) & ~upTo(lo - a0);
+        return this;
+    }
+
+    removeRange(lo, hi) {
+        if ((lo & 127) !== lo || (hi & 127) !== hi || hi > 64 || lo > hi) fb64BadRange(lo, hi);
+        const a0 = lo < 32 ? lo : 32, b0 = hi < 32 ? hi : 32;
+        this.#lo &= ~(upTo(b0) & ~upTo(a0));
+        this.#hi &= ~(upTo(hi - b0) & ~upTo(lo - a0));
+        return this;
+    }
+
+    countRange(lo, hi) {
+        if ((lo & 127) !== lo || (hi & 127) !== hi || hi > 64 || lo > hi) fb64BadRange(lo, hi);
+        const a0 = lo < 32 ? lo : 32, b0 = hi < 32 ? hi : 32;
+        return popcnt32(this.#lo & upTo(b0) & ~upTo(a0)) + popcnt32(this.#hi & upTo(hi - b0) & ~upTo(lo - a0));
+    }
+
+    /** O(k) ascending. Hoist the callback: a capturing closure allocates. */
+    forEach(callback) {
+        for (let v = this.#lo; v !== 0; v &= v - 1) callback(31 - Math.clz32(v & -v));
+        for (let v = this.#hi; v !== 0; v &= v - 1) callback(63 - Math.clz32(v & -v));
+        return this;
+    }
+
+    // -- save / restore: the FastBit1024 image at capacity 64, [FB1024_IMG_TAG | 64, lo, hi] --
+
+    static get imageLength() { return 3; }
+
+    get imageLength() { return 3; }
+
+    /**
+     * Save [FB1024_IMG_TAG | 64, lo, hi] at out[offset .. offset + 3); returns
+     * offset + 3. `out` must be a genuine Int32Array or a subclass; offset an
+     * integer 0 <= offset < 2^30 that fits the image. Throws before any write.
+     */
+    saveInto(out, offset = 0) {
+        if (!ArrayBuffer.isView(out) || !(out instanceof Int32Array) || fb1024TaTag.call(out) !== 'Int32Array') fb64BadBuf('out');
+        if ((offset & 0x3FFFFFFF) !== offset) fb64BadOffset(offset);
+        if (offset + 3 > fb1024TaLength.call(out)) fb64BadOffset(offset);
+        out[offset + 1] = this.#lo;
+        out[offset + 2] = this.#hi;
+        out[offset] = FB1024_IMG_TAG | 64;
+        return offset + 3;
+    }
+
+    /**
+     * COLD. Restore from any FastBit1024-format image (capacity 1..1024) whose set
+     * bits are all below 64; returns offset + 1 + ceil(capacity / 32). Checks in
+     * FastBit1024's order; every source word is read ONCE into a local and
+     * validated there, and the two fields are written last: on any throw this set
+     * is unchanged, and under a concurrent writer on a shared buffer no bit is
+     * stored that the checks did not see.
+     */
+    loadFrom(src, offset = 0) {
+        if (!ArrayBuffer.isView(src) || !(src instanceof Int32Array) || fb1024TaTag.call(src) !== 'Int32Array') fb64BadBuf('src');
+        if ((offset & 0x3FFFFFFF) !== offset) fb64BadOffset(offset);
+        const len = fb1024TaLength.call(src);
+        if (offset >= len) fb64BadOffset(offset);
+        const h = src[offset];
+        if ((h & FB1024_IMG_MASK) !== FB1024_IMG_TAG) fb64BadImage('header');
+        const icap = h & 2047;
+        if (icap < 1 || icap > 1024) fb64BadImage('capacity');
+        const L = (icap + 31) >>> 5, base = offset + 1;
+        if (base + L > len) fb64BadImage('length');
+        const w0 = src[base], w1 = L > 1 ? src[base + 1] : 0;
+        let last = L === 1 ? w0 : L === 2 ? w1 : src[base + L - 1];
+        const r = icap & 31;
+        if (r !== 0 && (last & (-1 << r)) !== 0) fb64BadImage('bit >= image capacity');
+        for (let w = 2; w < L; w++) if ((w === L - 1 ? last : src[base + w]) !== 0) fb64BadImage('bit >= 64');
+        this.#lo = w0; this.#hi = w1;
+        return base + L;
+    }
+
+    /** COLD, allocating: a fresh 3-word image. */
+    serialize() {
+        const out = new Int32Array(3);
+        this.saveInto(out, 0);
+        return out;
+    }
+
+    /** COLD, allocating: `new FastBit64()` + loadFrom (offset and throws as loadFrom). */
+    static deserialize(src, offset = 0) {
+        const s = new FastBit64();
+        s.loadFrom(src, offset);
+        return s;
+    }
+
+    /** COLD, allocating: a new FastBit64 with the same words. */
+    clone() { return new FastBit64(this.#lo, this.#hi); }
+
+    /** COLD, allocating: the set bits, ascending. */
+    toArray() {
+        const result = [];
+        for (let v = this.#lo; v !== 0; v &= v - 1) result.push(31 - Math.clz32(v & -v));
+        for (let v = this.#hi; v !== 0; v &= v - 1) result.push(63 - Math.clz32(v & -v));
+        return result;
+    }
+
+    /**
+     * COLD. Overwrites the set from an Array or a TypedArray of indices (else
+     * TypeError); every element is read once and must be an index 0..63 (else
+     * RangeError), all checked before the single write.
+     */
+    fromArray(bits) {
+        let n = 0;
+        if (Array.isArray(bits)) n = bits.length;
+        else if (fb1024TaTag.call(bits) !== undefined) n = fb1024TaLength.call(bits);
+        else fb64BadArray(bits);
+        if ((n >>> 0) !== n) fb64BadArray(bits);
+        let l = 0, h = 0;
+        for (let k = 0; k < n; k++) {
+            const i = bits[k];
+            if ((i & 63) !== i) fb64BadIndex(i, 64);
+            if (i < 32) l |= 1 << i; else h |= 1 << i;
+        }
+        this.#lo = l;
+        this.#hi = h;
+        return this;
+    }
+
+    /** COLD, allocating: 64 chars, bit 63 first; unpadded drops leading zeros ('0' when empty). */
+    toBinaryString(padded = true) {
+        const s = (this.#hi >>> 0).toString(2).padStart(32, '0') + (this.#lo >>> 0).toString(2).padStart(32, '0');
+        if (padded) return s;
+        const k = s.indexOf('1');
+        return k < 0 ? '0' : s.slice(k);
+    }
+}

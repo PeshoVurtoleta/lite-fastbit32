@@ -3,7 +3,8 @@
  *
  * Engineered for 60fps hot-path execution, ECS masking, and object pooling.
  * FastBit32's bit and mask ops are branchless bitwise ops on one 32-bit word;
- * FastBit1024 (below) is a two-level 1024-bit pool.
+ * FastBit1024 (below) is a two-level 1024-bit pool; FastBit64 (at the end) is 64 flags in
+ * two int32 words. Both fail closed on a bad index, so the caveats below are FastBit32's only.
  *
  * **Caveats:**
  * - JS bitwise shifts apply modulo 32 silently: `add(32)` == `add(0)`.
@@ -905,4 +906,103 @@ export class FastBit1024 {
      * (torn) image, never a bit at or above its capacity.
      */
     static deserialize(src: Int32Array, offset?: number): FastBit1024;
+}
+
+/**
+ * FastBit64 -- 64 flags in one flat object: two signed int32 words, bits 0..31 in
+ * `lo` and 32..63 in `hi` (SC-4). Every index FAILS CLOSED (Q-3), like FastBit1024.
+ * Every op is O(1) and loop-free except forEach / toArray / fromArray (O(k)). loadFrom / deserialize are O(image words) (<= 33).
+ * 0 B/op on every hot op on Node, inlined and under --no-turbo-inlining (every value is an int32);
+ * pointer-compressed engines (31-bit Smi: Chrome / Electron) are PENDING a d8 lane (R-4).
+ */
+export class FastBit64 {
+    /** Q-4: lo, hi each an integer in [-2^31, 2^32) (signed or unsigned form), stored | 0. @throws {RangeError} */
+    constructor(lo?: number, hi?: number);
+    /** Q-2: the words as signed int32 (bit 31 / bit 63 set -> negative). Read-only. */
+    readonly lo: number;
+    readonly hi: number;
+
+    // one index, 0..63 (Q-3: RangeError otherwise, TypeError for a Symbol, a BigInt or a null-prototype object; nothing written)
+    add(bit: number): this;
+    remove(bit: number): this;
+    toggle(bit: number): this;
+    has(bit: number): boolean;
+
+    // another FastBit64 (Q-2 / Q-5: TypeError on anything else -- {}, {lo, hi}, a Proxy,
+    // an Object.create(FastBit64.prototype) forgery, a FastBit32 / FastBit1024; subclasses pass)
+    hasAll(other: FastBit64): boolean;
+    hasAny(other: FastBit64): boolean;
+    hasNone(other: FastBit64): boolean;
+    isSubsetOf(other: FastBit64): boolean;
+    equals(other: FastBit64): boolean;
+    union(other: FastBit64): this;
+    difference(other: FastBit64): this;
+    intersect(other: FastBit64): this;
+    copy(other: FastBit64): this;
+    /** Q-12: popcount of this & other (FastBit1024's intersectionSize). */
+    countMasked(other: FastBit64): number;
+
+    // raw words (Q-4 law)
+    setWords(lo: number, hi: number): this;
+    equalsWords(lo: number, hi: number): boolean;
+
+    // whole set
+    count(): number;                 // 0..64
+    isEmpty(): boolean;
+    isFull(): boolean;
+    clear(): this;
+    lowest(): number;                // -1 when empty
+    highest(): number;
+    nextClearBit(): number;          // lowest clear bit, -1 when full
+    highestClearBit(): number;
+
+    // cursors (Q-3 domains)
+    /** Lowest set bit >= from, or -1. from 0..64 (64 returns -1: `nextSetBit(b + 1)` ends a walk). */
+    nextSetBit(from: number): number;
+    /** Highest set bit <= from (inclusive), or -1. from -1..63 (-1 returns -1). */
+    prevSetBit(from: number): number;
+    /** Set bits strictly below `bit`, bit 0..63. */
+    rank(bit: number): number;
+    /** The k-th set bit, k 0..63 (RangeError outside); -1 when k >= count(). select(rank(b)) === b. */
+    select(k: number): number;
+
+    // half-open ranges [lo, hi), 0 <= lo <= hi <= 64 (Q-7; FastBit32.countRange is INCLUSIVE)
+    addRange(lo: number, hi: number): this;
+    removeRange(lo: number, hi: number): this;
+    countRange(lo: number, hi: number): number;
+
+    /** O(k) ascending. Hoist the callback: a capturing closure allocates. */
+    forEach(callback: (bit: number) => void): this;
+
+    // save / restore (Q-9): the FastBit1024 image at capacity 64, [0x46420840, lo, hi]
+    readonly imageLength: 3;
+    static readonly imageLength: 3;
+    /**
+     * `out` must be an Int32Array of this realm or a subclass, else TypeError;
+     * offset: an integer 0 <= offset < 2^30 that fits the image, else RangeError (TypeError for a
+     * Symbol, a BigInt or a null-prototype object) before any write. Returns offset + 3.
+     */
+    saveInto(out: Int32Array, offset?: number): number;
+    /**
+     * Any FastBit1024-format image (capacity 1..1024) whose set bits are all < 64.
+     * `src` must be an Int32Array of this realm or a subclass, else TypeError;
+     * offset: an integer 0 <= offset < 2^30 and < src.length, else RangeError (TypeError for a
+     * Symbol, a BigInt or a null-prototype object); an invalid or non-fitting image is RangeError;
+     * nothing written on any throw. Returns offset + 1 + ceil(capacity / 32).
+     */
+    loadFrom(src: Int32Array, offset?: number): number;
+    serialize(): Int32Array;                                     // COLD, allocates 3 words
+    /** COLD; offset and throws as loadFrom. */
+    static deserialize(src: Int32Array, offset?: number): FastBit64;
+
+    // COLD, allocating
+    clone(): FastBit64;
+    toArray(): number[];
+    /**
+     * An Array or a TypedArray, else TypeError; every element an index 0..63, else RangeError
+     * (TypeError for a Symbol / BigInt / null-prototype element, e.g. a non-empty BigInt64Array);
+     * all checked before the single write; overwrites.
+     */
+    fromArray(bits: readonly number[] | (ArrayLike<number> & ArrayBufferView)): this;
+    toBinaryString(padded?: boolean): string;   // padded (default true): 64 chars, bit 63 first; false drops leading zeros ('0' when empty)
 }

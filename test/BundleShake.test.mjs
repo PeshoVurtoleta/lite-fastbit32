@@ -4,6 +4,10 @@
 // getters (C-4 as amended by A13: captured at init inside /* @__PURE__ */ IIFEs).
 // Control: the FastBit1024-only bundle still carries both captures, so the
 // negative rows cannot pass by esbuild failing or emitting nothing.
+// FastBit64 (R-8) reuses the FastBit1024 captures and Int32Array, so it carries
+// them by design: it is excluded from row (c) and gets its own rows -- its bundle
+// keeps the captures but drops the FastBit1024 class (FB1024_CLASS_MARKERS), and a
+// FastBit32-only bundle drops FastBit64.
 //
 // FB_SHAKE_SRC=<abs path> points the gate at another build (e.g. the frozen
 // before); a missing path fails loudly.
@@ -27,6 +31,10 @@ if (!existsSync(SRC)) {
 
 const CAPTURE_MARKERS = ['getOwnPropertyDescriptor', 'toStringTag'];
 const FB1024_MARKERS = ['getOwnPropertyDescriptor', 'toStringTag', 'FastBit1024', 'Int32Array'];
+// 'intersectionSize' is a FastBit1024 method name: only the class body has it
+// (minify keeps member names; the one other mention is a comment). 'FastBit1024'
+// is also in the FastBit1024 throw helpers, which shake out with the class.
+const FB1024_CLASS_MARKERS = ['intersectionSize', 'FastBit1024'];
 
 let dir = '';
 let seq = 0;
@@ -58,7 +66,7 @@ describe('BundleShake: FastBit1024 captures drop out of bundles that never use i
   after(() => { if (dir !== '') rmSync(dir, { recursive: true, force: true }); });
 
   it('the module exports FastBit32, BitMapper, FastBit1024 and the free functions', () => {
-    for (const n of ['FastBit32', 'BitMapper', 'FastBit1024', 'VERSION', 'forEachArray']) {
+    for (const n of ['FastBit32', 'BitMapper', 'FastBit1024', 'FastBit64', 'VERSION', 'forEachArray']) {
       assert.ok(EXPORTS.includes(n), 'export ' + n + ' present');
     }
     assert.ok(EXPORTS.length >= 6, 'export list non-trivial: ' + EXPORTS.join(','));
@@ -73,6 +81,11 @@ describe('BundleShake: FastBit1024 captures drop out of bundles that never use i
     }
   });
 
+  it('(a2) export { FastBit32 } bundle has no FastBit64', () => {
+    const text = bundle('FastBit32');
+    assert.equal(text.includes('FastBit64'), false, 'FastBit32-only bundle contains "FastBit64"');
+  });
+
   it('(b) control: export { FastBit1024 } bundle keeps both captures', () => {
     const text = bundle('FastBit1024');
     for (const m of CAPTURE_MARKERS) {
@@ -81,8 +94,26 @@ describe('BundleShake: FastBit1024 captures drop out of bundles that never use i
     assert.ok(text.includes('Int32Array'), 'FastBit1024 bundle names Int32Array');
   });
 
+  it('(b2) export { FastBit64 } bundle keeps both captures and Int32Array, but not the FastBit1024 class', () => {
+    const text = bundle('FastBit64');
+    for (const m of CAPTURE_MARKERS) {
+      assert.ok(text.includes(m), 'FastBit64 bundle lacks ' + JSON.stringify(m));
+    }
+    assert.ok(text.includes('Int32Array'), 'FastBit64 bundle names Int32Array');
+    for (const m of FB1024_CLASS_MARKERS) {
+      assert.equal(text.includes(m), false, 'FastBit64-only bundle contains ' + JSON.stringify(m));
+    }
+  });
+
+  it('(b3) control: the FastBit1024 class markers are in the FastBit1024 bundle', () => {
+    const text = bundle('FastBit1024');
+    for (const m of FB1024_CLASS_MARKERS) {
+      assert.ok(text.includes(m), 'FastBit1024 bundle lacks ' + JSON.stringify(m));
+    }
+  });
+
   it('(c) every other export bundles without the captures', () => {
-    const rest = EXPORTS.filter((n) => n !== 'FastBit1024' && n !== 'FastBit32');
+    const rest = EXPORTS.filter((n) => n !== 'FastBit1024' && n !== 'FastBit32' && n !== 'FastBit64');
     assert.ok(rest.includes('BitMapper'), 'BitMapper covered');
     for (const n of rest) {
       const text = bundle(n);
