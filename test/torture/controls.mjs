@@ -495,7 +495,12 @@ export const CONTROLS = {
     'bop-unoptimized-callee': { tiers: ['T6'], cheap: false, expect: /T6 B\/op: unsigned lane 0xFFFFFFFF = NaN B\/op, valid=0 \(expected < 0\.1, >= 3 valid\) -- not verified-optimized: callee [^(]+ not optimized and not inlined \(status 0x[0-9a-f]+ (?![^)]*turbofan)/, apply(ctx) { ctx.control.bopUnoptimizedCallee = true; } },
     't6-highest-old': { tiers: ['T6'], cheap: false, expect: /^(?=[\s\S]*T6 B\/op: unsigned lane 0xFFFFFFFF = (?:15\.9\d\d|16\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid\)(?! --))(?=[\s\S]*T6 B\/op: unsigned lane 2\*\*31 = (?:15\.9\d\d|16\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid\)(?! --))(?![\s\S]*T6 B\/op: SIGNED lane)/, apply(ctx) { highestOld(ctx.FB); } },
     'soak-stash': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakStash = true; } },
-    'soak-retain': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakRetain = true; } }
+    'soak-retain': { tiers: ['T7'], cheap: false, apply(ctx) { ctx.control.soakRetain = true; } },
+    // B-S7: pins every FastBit64 row result; must fail T7 on THAT row (the soak
+    // segments and the FastBit1024 image row stay clean; the final
+    // `T7: tracker.size() = 20000` line also fires). live=4000 pins cycle 0 to
+    // the full 1000 x 4 tracked results.
+    'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\)/, apply(ctx) { ctx.control.fb64Retain = true; } }
 };
 
 export const CONTROL_NAMES = Object.keys(CONTROLS);

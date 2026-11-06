@@ -9,6 +9,9 @@
 // long-lived partner, a prevSetBit reverse walk), tracked with tags from
 // FB1024_TAG0 (disjoint from the FastBit32 and image-row ranges) and stashed
 // under soak-stash like the FastBit32 instances.
+// B-S7 (FastBit64): 5 cycles of 1,000 x (clone + serialize + deserialize +
+// toArray), every result tracked from FB64_TAG0; the fb64-soak-retain control
+// (ctx.control.fb64Retain) pins every result on FB64_RETAIN -> that row FAILs.
 
 import {
     createLeakTracker,
@@ -26,6 +29,12 @@ function moduleNoop() { /* must not close over the tracked target */ }
 const STASH = [];    // soak-stash control: retains tracked FastBit32 instances
 const RETAIN = [];   // soak-retain control: retains an on-heap array per cycle
 const FB1024_TAG0 = 1 << 23; // 8388608 + cycle: FastBit32 tags < 64 * CYCLES <= 1 << 23 (CYCLES <= 131072), below the image row's 1 << 24
+// B-S7 tag family. Ranges for CYCLES <= 131072: FastBit32 [0, 64 * CYCLES) within [0, 2^23);
+// FastBit1024 [2^23, 2^23 + 131072); image row [2^24, 2^24 + 5 * 3000 = 2^24 + 15000);
+// FastBit64 [2^25, 2^25 + 5 * 4000 = 2^25 + 20000) = [33554432, 33574432): above all
+// three (2^24 + 15000 < 2^25) and a Smi.
+const FB64_TAG0 = 1 << 25;
+const FB64_RETAIN = []; // fb64-soak-retain control: pins every FastBit64 row result
 
 // One G2 churn instance per cycle. A plain (non-async) function, like imgCycle,
 // so the instance never sits in run()'s suspended async frame across a drain.
@@ -57,6 +66,24 @@ function imgCycle(ctx, C1024, base, img, tracker, tag0, retain) {
     }
 }
 
+// One cycle of the FastBit64 retention row (B-S7). A plain (non-async) function
+// for the same reason as imgCycle: no result may sit in run()'s async frame.
+function fb64Cycle(ctx, C64, base, tracker, tag0, retain) {
+    let tag = tag0;
+    for (let k = 0; k < 1000; k++) {
+        const c = base.clone();
+        const s = c.serialize();
+        const d = C64.deserialize(s);
+        const a = d.toArray();
+        ctx.h.SINK[0] = c.lo ^ d.hi ^ s.length ^ a.length;
+        tracker.track(c, moduleNoop, tag++, { audit: true });
+        tracker.track(s, moduleNoop, tag++, { audit: true });
+        tracker.track(d, moduleNoop, tag++, { audit: true });
+        tracker.track(a, moduleNoop, tag++, { audit: true });
+        if (retain) FB64_RETAIN.push(c, s, d, a);
+    }
+}
+
 export async function run(ctx) {
     const FB = ctx.FB;
     const Mapper = ctx.Mapper;
@@ -64,6 +91,7 @@ export async function run(ctx) {
     let green = 0;
     const stash = ctx.control.soakStash === true;
     const retain = ctx.control.soakRetain === true;
+    const fb64Retain = ctx.control.fb64Retain === true;
 
     const warnings = [];
     const tracker = createLeakTracker({
@@ -147,6 +175,35 @@ export async function run(ctx) {
     }
     ctx.measures.fb1024ImgLive = imgLive;
 
+    // ---- B-S7 FastBit64 retention row ------------------------------------------
+    // 5 cycles of 1,000 x (clone + serialize + deserialize + toArray), every
+    // result tracked (number tag, module-scope cleanup, audit); tracker.size()
+    // must drain to 0 after EVERY cycle. Under fb64-soak-retain every result is
+    // pinned on FB64_RETAIN, so size() stays >= 4000 per cycle and this row FAILs.
+    // It also FAILs under soak-stash / soak-retain: like the image row it reads the
+    // tracker's ABSOLUTE size, which includes the objects those controls pin.
+    // Coverage teeth: size() is read right before and right after each fb64Cycle
+    // (synchronous, no await between, so no finalizer can run): the delta must be
+    // exactly 4000 = 1000 x (clone + serialize + deserialize + toArray), else a
+    // dropped track() would let a leak of that result pass as a clean drain.
+    const fb64Live = [];
+    try {
+        const C64 = ctx.FB64;
+        const base = new C64(0x80000001, 0xC0000003); // bits 0, 31, 32, 33, 62, 63
+        for (let cyc = 0; cyc < 5; cyc++) {
+            const before = tracker.size();
+            fb64Cycle(ctx, C64, base, tracker, FB64_TAG0 + cyc * 4000, fb64Retain);
+            const tracked = tracker.size() - before;
+            if (tracked !== 4000) fails.push('T7: FastBit64 retention cycle ' + cyc + ' tracked ' + tracked + ' results (expected exactly 4000 = 1000 x clone / serialize / deserialize / toArray)');
+            const live = await drain(50);
+            fb64Live.push(live);
+            if (live !== 0) fails.push('T7: FastBit64 retention cycle ' + cyc + ' did not drain to 0 (live=' + live + '; clone / serialize / deserialize / toArray results retained)');
+        }
+    } catch (e) {
+        fails.push('T7: FastBit64 retention row threw ' + e.constructor.name + ': ' + e.message);
+    }
+    ctx.measures.fb64RetainLive = fb64Live;
+
     const finalLive = tracker.size();
     const findings = tracker.audit();
     ctx.measures.soakLive = finalLive;
@@ -172,6 +229,7 @@ export async function run(ctx) {
 
     if (stash) STASH.length = 0; // release for the next process
     if (retain) RETAIN.length = 0;
+    if (fb64Retain) FB64_RETAIN.length = 0;
     void green; void warnings;
     return { fails, green };
 }

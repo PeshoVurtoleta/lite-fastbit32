@@ -20,6 +20,7 @@
 import * as h from './torture/harness.mjs';
 import { buildBaseCtx } from './torture/context.mjs';
 import { CONTROLS, CONTROL_NAMES, suggest, fb1024Faithful } from './torture/controls.mjs';
+import { applyFb64Variant, fb64VariantRow } from './torture/fb64-variants.mjs';
 
 // CI-3: on POSIX, process.stdout / process.stderr on a pipe or socket are
 // asynchronous. Once the kernel buffer is full libuv queues the remaining writes,
@@ -179,6 +180,15 @@ if (controlName) {
     const control = CONTROLS[controlName];
     const ctx = buildBaseCtx(seed);
     control.apply(ctx);
+    // a control may select a FastBit64 variant (ctx.control.fb64Variant); one that
+    // does not build is a broken control, never a pass: exit 1 without "FAIL <tier>"
+    const vfails = await applyFb64Variant(ctx);
+    if (vfails.length > 0) {
+        console.error('torture: control ' + controlName + ': FastBit64 variant not built');
+        for (const f of vfails) console.error('  ' + f);
+        h.stopScavengeWatch();
+        await exitFlushed(1);
+    }
     let anyFailed = false;
     for (const tierName of control.tiers) {
         const r = await runTier(tierName, ctx);
@@ -214,12 +224,28 @@ for (const name of ORDER) {
 {
     const fctx = buildBaseCtx(seed);
     fctx.FB1024 = fb1024Faithful(fctx.FB1024);
+    // B-S2: the same tiers on the data:-URL faithful FastBit64 copy (fb64-variants.mjs).
+    // In B1 no tier of this block reads ctx.FB64 yet (B-S1's T3 SAB row will), so
+    // until then the fidelity of that copy is proven by the FB64 variant row below.
+    fctx.control.fb64Variant = 'faithful';
+    for (const f of await applyFb64Variant(fctx)) allFails.push('control fidelity (faithful FastBit64 copy) ' + f);
     for (const name of ['T0', 'T3', 'T5']) {
         const r = await runTier(name, fctx);
         for (const f of r.fails) allFails.push('control fidelity (faithful fb1024Img copy) ' + f);
         totalGreen += r.green;
         console.error('[' + name + ' faithful fb1024Img copy] fails=' + r.fails.length + ' green=' + r.green);
     }
+}
+
+// ---- B-S2 FastBit64 variant row: builds faithful / reread / u32 / kexport from the
+// live FastBit32.js text; every needle count must match, faithful (and kexport,
+// and reread without a race) must agree with the shipped ctx.FB64, and no variant
+// may be the shipped class.
+{
+    const vr = await fb64VariantRow(ctx.FB64);
+    for (const f of vr.fails) allFails.push(f);
+    ctx.measures.fb64Variants = { needles: vr.needles, kernels: vr.kernels };
+    console.error('[FB64 variants] fails=' + vr.fails.length);
 }
 
 // MEASURE lines (stderr only)
@@ -283,6 +309,8 @@ if (m.fb1024ImgT0) console.error('MEASURE FastBit1024 T0 image laws ' + JSON.str
 if (m.fb1024ImgT3) console.error('MEASURE FastBit1024 T3 image rows ' + JSON.stringify(m.fb1024ImgT3) + ' [gated: 0 failed]');
 if (m.fb1024Sab) console.error('MEASURE FastBit1024 T3 SAB row ' + JSON.stringify(m.fb1024Sab) + ' [gated: br 0, torn>=20 per scenario, deserialize hits>=64, cap500 tail hits>=8, <=64 chunks, rounds>=10]');
 if (m.fb1024ImgLive) console.error('MEASURE FastBit1024 T7 image retention live per cycle=[' + m.fb1024ImgLive.join(',') + '] [gated: 0 each]');
+if (m.fb64RetainLive) console.error('MEASURE FastBit64 T7 retention live per cycle=[' + m.fb64RetainLive.join(',') + '] [gated: 0 each]');
+if (m.fb64Variants) console.error('MEASURE FastBit64 variants needles ' + m.fb64Variants.needles.map((n) => n.variant + ' ' + JSON.stringify(n.needle) + ' ' + n.actual + '/' + n.expected).join('; ') + ' kernels=[' + m.fb64Variants.kernels.join(',') + '] [gated: actual == expected]');
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);
 
 h.stopScavengeWatch();
