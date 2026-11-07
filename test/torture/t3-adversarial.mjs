@@ -1,11 +1,14 @@
 // test/torture/t3-adversarial.mjs -- pool fill/drain, ECS sizes, toggle storms,
 // fromArray edges. isFull() on a signed all-ones word is the teeth for the
 // isfull-unsigned control (=== 0xFFFFFFFF reads false on -1).
+// run() is async (B-S1): the FastBit64 SAB row awaits its data:-URL control class.
 
 import { Worker } from 'node:worker_threads';
+import { availableParallelism } from 'node:os';
+import { fb64Variant } from './fb64-variants.mjs';
 import { oNextClearBit, oToArray, oUnion, oToArray as _t, ubit } from './oracle.mjs';
 
-export function run(ctx) {
+export async function run(ctx) {
     const FB = ctx.FB;
     const fails = [];
     const F = (m) => fails.push('T3: ' + m);
@@ -88,6 +91,7 @@ export function run(ctx) {
     try { fb1024BadInput(ctx, F); } catch (e) { F('FastBit1024 rows threw ' + e.constructor.name + ': ' + e.message); }
     try { fb1024ImageBadInput(ctx, F); } catch (e) { F('FastBit1024 image rows threw ' + e.constructor.name + ': ' + e.message); }
     try { fb1024SabRow(ctx, F); } catch (e) { F('FastBit1024 SAB row threw ' + e.constructor.name + ': ' + e.message); }
+    try { await fb64SabRow(ctx, F); } catch (e) { F('FastBit64 SAB row threw ' + (e && e.constructor ? e.constructor.name : typeof e) + ': ' + (e && e.message)); }
     return { fails, green: 0 };
 }
 
@@ -573,4 +577,119 @@ function fb1024SabRow(ctx, F) {
         if (p.who === 'cap500' && !(p.hits >= SAB_TAIL)) F('FB1024 SAB coverage: loadFrom cap 500 hit the tail-word window ' + p.hits + ' times in ' + p.chunks + ' chunk(s) (need >= ' + SAB_TAIL + ') -- fail closed');
     }
     if (!(rounds >= SAB_ROUNDS)) F('FB1024 SAB coverage: the writer finished ' + rounds + ' rounds during the row (need >= ' + SAB_ROUNDS + ') -- fail closed');
+}
+
+// ---- B-S1: FastBit64 loadFrom under a concurrent writer (T3 FB64 SAB row) ----
+// A worker (sab-writer64.mjs, the p7 shape) flips the high word of a cap-40
+// image [TAG|40, 0x1234, hi] between 0xFF (valid) and -1 (bits 40..63, invalid
+// for capacity 40). Each chunk runs FB64_SAB_N iterations; each iteration calls
+// loadFrom on the shipped class (ctx.FB64) and then on the in-run CONTROL, the
+// 'reread' variant (fb64-variants.mjs: the shipped file with loadFrom storing a
+// second read of src[base + 1]). A FAIL-OPEN is an accepted call that leaves a
+// bit >= 40 (hi & ~0xFF) or a low word != 0x1234. Count-based, no clock.
+// Rule (PLAN-fastbit64-B TASK 2, constants by SPEC A2's quiet p7 x5, evidence
+// fb64-B1b/README.txt): reread fail-opens per 2e6 loadFrom 269 / 260 / 320 /
+// 319 / 456, shipped 0 / 0 / 0 / 0 / 0 (Apple M4 Pro, 12 cores, QUIET). m = 260,
+// r_min = 260 / 2e6 = 1.3e-4 per control call.
+// - one shipped fail-open = FAIL (FB64 SAB: <n> fail-open(s) by the shipped class);
+// - chunks repeat until the control has failed open FB64_SAB_FLOOR = 20 times
+//   (miss probability 2^-20 ~ 9.5e-7, nominal: hits come in bursts) and STOP there;
+// - the cap must satisfy r_min * N * CHUNKS >= 60 (P(INCONCLUSIVE on correct code)
+//   <= 1e-9, nominal): >= 461,539 control calls. That is a MINIMUM; the cap is
+//   FB64_SAB_N * FB64_SAB_CHUNKS = 20,000 * 1024 = 20,480,000 control calls
+//   (expected hits at r_min: 2662.4, 44.4x the rule's 60) for slower hosts (CI
+//   runners: 3-4 cores, macOS seen at load1 ~30; their rates are unmeasured).
+//   REPORTED (2026-11-07, M4 Pro, node 26.8.2, load1 6.84-7.14, 2 unmutated full-cap runs: coder blind, review faithful;
+//   evidence/fb64-B1b/{coder/t3-targeted.log,review/mutants-cap.log}): the full
+//   cap (paid only by a run that ends INCONCLUSIVE) took 4.4-4.6 s. Control below the floor at the cap
+//   = "INCONCLUSIVE ... fail closed" = FAIL;
+// - the writer must finish >= FB64_SAB_ROUNDS = 10 rounds during the row, else FAIL.
+// X-10 (SPEC A1): the race needs truly parallel cores; with
+// os.availableParallelism() < 3 the row is a named SKIP (MEASURE ... SKIP:
+// availableParallelism <n> < 3), never a pass line. ctx.control.fb64SabControl
+// names another control variant (the fb64-sab-blind control: 'faithful').
+const FB64_SAB_N = 20000;
+const FB64_SAB_FLOOR = 20;
+const FB64_SAB_CHUNKS = 1024;
+const FB64_SAB_ROUNDS = 10;
+const FB64_SAB_CORES = 3;
+const FB64_SAB_TAG = 0x46420800;
+let SAB64 = null;
+
+function sabWriter64() {
+    if (SAB64 !== null) return SAB64;
+    const data = new SharedArrayBuffer(12);
+    const ctlBuf = new SharedArrayBuffer(16);
+    const src = new Int32Array(data);
+    src[0] = FB64_SAB_TAG | 40; src[1] = 0x1234; src[2] = 0xFF;
+    const w = new Worker(new URL('./sab-writer64.mjs', import.meta.url), { workerData: { data, ctl: ctlBuf } });
+    w.unref();
+    SAB64 = { src, ctl: new Int32Array(ctlBuf), w };
+    return SAB64;
+}
+
+// null = run the row; a string = the SKIP reason. Only an integer below the
+// floor skips: an unreadable count runs the row (a SKIP is never the fail-closed side).
+export function fb64SabSkip(cores) {
+    return Number.isInteger(cores) && cores < FB64_SAB_CORES ? 'availableParallelism ' + cores + ' < ' + FB64_SAB_CORES : null;
+}
+
+// The torture.mjs MEASURE line for ctx.measures.fb64Sab (one format, two shapes).
+export function fb64SabMeasureLine(m) {
+    if (m.skip !== undefined) return 'MEASURE FastBit64 T3 SAB row SKIP: ' + m.skip;
+    return 'MEASURE FastBit64 T3 SAB row shipped fail-open=' + m.shipped + ' control(' + m.control + ') fail-open=' + m.controlOpen +
+        ' chunks=' + m.chunks + '/' + m.cap + ' rounds=' + m.rounds + ' calls=' + m.calls +
+        ' [gated: shipped 0, control>=' + FB64_SAB_FLOOR + ' within ' + m.cap + ' chunks, rounds>=' + FB64_SAB_ROUNDS + ']';
+}
+
+export async function fb64SabRow(ctx, F, cores = availableParallelism()) {
+    const skip = fb64SabSkip(cores);
+    if (skip !== null) { ctx.measures.fb64Sab = { skip }; return; }
+    const C = ctx.FB64;
+    const ctlName = ctx.control.fb64SabControl === undefined ? 'reread' : ctx.control.fb64SabControl;
+    const v = await fb64Variant(ctlName);
+    if (v.C === null) { F('FB64 SAB: the in-run control (' + ctlName + ' variant) did not build -- fail closed: ' + v.fails.join('; ')); return; }
+    const R = v.C;
+    const { src, ctl } = sabWriter64();
+    Atomics.store(ctl, 0, 1);
+    Atomics.notify(ctl, 0);
+    if (Atomics.load(ctl, 1) === 0) Atomics.wait(ctl, 1, 0, 10000);
+    if (Atomics.load(ctl, 1) !== 1) { Atomics.store(ctl, 0, 0); F('FB64 SAB: the writer worker did not start (fail closed)'); return; }
+    const r0 = Atomics.load(ctl, 2);
+    for (let k = 0; k < 10000 && Atomics.load(ctl, 2) < r0 + 2; k++) Atomics.wait(ctl, 3, 0, 1);
+    const rStart = Atomics.load(ctl, 2);
+    const s = new C(), c = new R();
+    let open = 0, cOpen = 0, acc = 0, cAcc = 0, br = 0, chunks = 0, rounds = 0;
+    let first = '';
+    try {
+        for (let chunk = 0; chunk < FB64_SAB_CHUNKS && !(cOpen >= FB64_SAB_FLOOR); chunk++) {
+            if (chunk > 0) Atomics.wait(ctl, 3, 0, 2);
+            chunks++;
+            for (let k = 0; k < FB64_SAB_N; k++) {
+                try {
+                    s.loadFrom(src, 0);
+                    acc++;
+                    if ((s.hi & ~0xFF) !== 0 || s.lo !== 0x1234) open++;
+                } catch (e) {
+                    if (!(e instanceof RangeError)) { br++; if (!first) first = 'shipped threw ' + (e && e.constructor ? e.constructor.name : typeof e); }
+                }
+                try {
+                    c.loadFrom(src, 0);
+                    cAcc++;
+                    if ((c.hi & ~0xFF) !== 0 || c.lo !== 0x1234) cOpen++;
+                } catch (e) {
+                    if (!(e instanceof RangeError)) { br++; if (!first) first = 'control threw ' + (e && e.constructor ? e.constructor.name : typeof e); }
+                }
+            }
+        }
+        rounds = Atomics.load(ctl, 2) - rStart;
+    } finally {
+        Atomics.store(ctl, 0, 0);
+    }
+    const calls = chunks * FB64_SAB_N;
+    ctx.measures.fb64Sab = { shipped: open, control: ctlName, controlOpen: cOpen, chunks, cap: FB64_SAB_CHUNKS, rounds, calls, accepted: acc, controlAccepted: cAcc };
+    if (open !== 0) F('FB64 SAB: ' + open + ' fail-open(s) by the shipped class (an accepted loadFrom stored a bit >= 40 or a changed low word; ' + acc + ' accepted of ' + calls + ')');
+    if (br !== 0) F('FB64 SAB: ' + br + ' loadFrom call(s) threw a non-RangeError under a concurrent writer, first: ' + first);
+    if (!(cOpen >= FB64_SAB_FLOOR)) F('FB64 SAB coverage: INCONCLUSIVE -- the ' + ctlName + ' control failed open ' + cOpen + ' times in ' + chunks + ' chunk(s) of ' + FB64_SAB_N + ' calls (need >= ' + FB64_SAB_FLOOR + '; ' + cAcc + ' accepted): the race was not shown hit -- fail closed');
+    if (!(rounds >= FB64_SAB_ROUNDS)) F('FB64 SAB coverage: the writer finished ' + rounds + ' rounds during the row (need >= ' + FB64_SAB_ROUNDS + ') -- fail closed');
 }

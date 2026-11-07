@@ -71,6 +71,11 @@ function countExact(lines, want) {
 
 const D8_RAN = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=(\S+) per 1e5 loads \[gated <=2\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
 const D8_SKIP = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: \S/;
+// B-S1 T3 FastBit64 SAB race row (t3-adversarial.mjs fb64SabMeasureLine). Lane S legs
+// have >= 3 cores (SPEC-fastbit64 A1 / X-10), so its SKIP line is a problem there,
+// and the ran line must appear exactly once with its gates met.
+const FB64_SAB_RAN = /^MEASURE FastBit64 T3 SAB row shipped fail-open=(\S+) control\((\S+)\) fail-open=(\S+) chunks=(\S+)\/(\S+) rounds=(\S+) calls=(\S+) \[gated: [^\]]*\]$/;
+const FB64_SAB_SKIP = 'MEASURE FastBit64 T3 SAB row SKIP';
 const SOAK = /^MEASURE soak live=(\S+) findings=(\S+) postDrainKB=\[([^\]]*)\] growthKB=(\S+)$/;
 
 // Problems in ONE `npm run torture` log (stdout + stderr). [] = clean.
@@ -119,6 +124,21 @@ export function checkTortureLog(text, opts) {
         }
         if (m[1] !== '0' || m[2] !== '0') problems.push('soak live=' + m[1] + ' findings=' + m[2] + ' (want 0 / 0)');
         if (!(Number(m[4]) < 1024)) problems.push('soak growthKB=' + m[4] + ' (want < 1024)');
+    }
+
+    // T3 FastBit64 SAB row: never skipped on a soak leg; one ran line, gates met
+    const sab = [];
+    for (const l of lines) {
+        const m = FB64_SAB_RAN.exec(l);
+        if (m) sab.push(m);
+        else if (l.startsWith(FB64_SAB_SKIP)) problems.push('T3 FastBit64 SAB row skipped on a soak leg (lane S legs have >= 3 cores): ' + l);
+    }
+    if (sab.length !== 1) problems.push('T3 FastBit64 SAB row line seen ' + sab.length + ' times (want 1)');
+    else {
+        const [, shipped, ctl, cOpen, chunks, cap, rounds] = sab[0];
+        if (shipped !== '0' || ctl !== 'reread' || !(Number(cOpen) >= 20) || !(Number(chunks) <= Number(cap)) || !(Number(rounds) >= 10)) {
+            problems.push('T3 FastBit64 SAB row shipped fail-open=' + shipped + ' control(' + ctl + ') fail-open=' + cOpen + ' chunks=' + chunks + '/' + cap + ' rounds=' + rounds + ' (want 0, reread, >= 20, chunks <= cap, >= 10)');
+        }
     }
 
     // d8 lane: "ran" = the scavenges line with its gates met; "skip" = the named SKIP line

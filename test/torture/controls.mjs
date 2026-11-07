@@ -4,6 +4,8 @@
 // `apply(ctx)` mutates the ctx in place. `cheap` controls run in-process inside
 // T9; the rest are exercised as child processes by controls-runner.mjs.
 
+import { FB64_LANE_NAMES } from './fb64-lanes.mjs';
+
 function oldHasAll(FB) {
     // The 1.2.0 (pre-FB-01) body: `(value & mask) === mask` compares a signed
     // int32 to an unsigned double, so any mask carrying bit 31 in unsigned form
@@ -435,6 +437,11 @@ function highestOld(FB) {
     Object.defineProperty(FB.prototype, 'highest', { value: old.highest, writable: true, enumerable: false, configurable: true });
 }
 
+// B.B2 fb64-bop-box: every FastBit64 inlined lane (fb64-lanes.mjs, the control
+// lane included) must fail T6 at >= 15.9 B/op with >= 3 valid windows.
+const FB64_BOXED = '(?:15\\.9\\d\\d|(?:1[6-9]|[2-9]\\d|\\d{3,})\\.\\d{3}) B\\/op, valid=[3-7] \\(expected < 0\\.1, >= 3 valid\\)';
+const FB64_BOP_BOX_EXPECT = new RegExp('^' + FB64_LANE_NAMES.map((n) => '(?=[\\s\\S]*T6 FB64 lane ' + n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&') + ' = ' + FB64_BOXED + ')').join(''));
+
 function flipOracle(oracle) {
     // one corrupted function: popcount off by one -> every T5 count check diverges
     return { ...oracle, oCount: (v) => oracle.oCount(v) + 1 };
@@ -500,7 +507,28 @@ export const CONTROLS = {
     // segments and the FastBit1024 image row stay clean; the final
     // `T7: tracker.size() = 20000` line also fires). live=4000 pins cycle 0 to
     // the full 1000 x 4 tracked results.
-    'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\)/, apply(ctx) { ctx.control.fb64Retain = true; } }
+    'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\)/, apply(ctx) { ctx.control.fb64Retain = true; } },
+    // B-S5: the FB64 poison rows without 'highest' -> the census check names it.
+    'fb64-poison-row-drop': { tiers: ['T6'], cheap: false, expect: /T6 FB64 poison census: [^\n]*missing rows \[highest\], rows not in the census \[\]/, apply(ctx) { ctx.control.fb64PoisonRowDrop = 'highest'; } },
+    // B-S5: ctx.FB64 = the u32 variant (`| 0` storage -> `>>> 0`, torture.mjs
+    // applyFb64Variant before T6): its "shipped" word-E setWords store witness
+    // stores 2^31 as one HeapNumber per op.
+    'fb64-u32-storage': { tiers: ['T6'], cheap: false, expect: /T6 FB64 witness: shipped E \(bit 63 only\) setWords store = (?:15\.9\d\d|(?:1[6-9]|[2-9]\d|\d{3,})\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid: /, apply(ctx) { ctx.control.fb64Variant = 'u32'; } },
+    // B-S3: one HeapNumber per op on every FastBit64 inlined lane.
+    'fb64-bop-box': { tiers: ['T6'], cheap: false, expect: FB64_BOP_BOX_EXPECT, apply(ctx) { ctx.control.fb64BopBox = true; } },
+    // A4: every FastBit64 poisoning pass runs WITHOUT FB64_POISON_OPTS (t6-alloc
+    // fb64Poison, the one call site): the public-mirror read witness must read
+    // < 15.9 B/op on verified code and name the pass.
+    'fb64-poison-opts-drop': { tiers: ['T6'], cheap: false, expect: /T6 FB64 witness: pub E \(bit 63 only\) highest\^lowest = -?\d+\.\d{3} B\/op, valid=[3-7] \(expected >= 15\.9, >= 3 valid: a public uint32 word read through a poisoned clz32 slot is one HeapNumber per read\) -- the FB64 poisoning pass did not take(?! -- )/, apply(ctx) { ctx.control.fb64PoisonOptsDrop = true; } },
+    // B-S1 (T3 FB64 SAB row). Both cheap: false -- fb64-sab-reread needs torture.mjs
+    // applyFb64Variant (T9's sub-ctx never applies a variant), and fb64-sab-blind runs
+    // the row to its 1024-chunk cap. fb64-sab-reread: ctx.FB64 = the reread variant,
+    // so the SHIPPED call site stores a second read of the high word -> the shipped
+    // fail-open line. fb64-sab-blind: the in-run control is the faithful copy (no
+    // window), so the control never fails open -> INCONCLUSIVE at the cap, and no
+    // shipped fail-open line may appear.
+    'fb64-sab-reread': { tiers: ['T3'], cheap: false, expect: /T3: FB64 SAB: \d+ fail-open\(s\) by the shipped class/, apply(ctx) { ctx.control.fb64Variant = 'reread'; } },
+    'fb64-sab-blind': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB64 SAB: \d+ fail-open)[\s\S]*T3: FB64 SAB coverage: INCONCLUSIVE -- the faithful control failed open 0 times in 1024 chunk\(s\) of 20000 calls \(need >= 20; \d+ accepted\): the race was not shown hit -- fail closed/, apply(ctx) { ctx.control.fb64SabControl = 'faithful'; } }
 };
 
 export const CONTROL_NAMES = Object.keys(CONTROLS);

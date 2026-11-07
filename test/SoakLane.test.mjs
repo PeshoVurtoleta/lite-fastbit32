@@ -155,6 +155,12 @@ test('B1 CLI check: --cycles "" exits 1 (empty is never push volume)', () => {
 const TIERS = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T8', 'T6', 'T7', 'T9']; // torture.mjs ORDER
 const D8_RAN = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=0 per 1e5 loads [gated <=2], box control=5 [gated >=2], result=true';
 const D8_SKIP = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: no d8 on PATH (set FASTBIT_D8)';
+// B.B1b (SPEC-fastbit64 X-10 / A1): the T3 FastBit64 SAB race row; lane S legs have >= 3 cores.
+const SAB_SKIP = 'MEASURE FastBit64 T3 SAB row SKIP: availableParallelism 2 < 3';
+function sabRan(o) {
+    return 'MEASURE FastBit64 T3 SAB row shipped fail-open=' + (o.shipped === undefined ? 0 : o.shipped) + ' control(' + (o.ctl || 'reread') + ') fail-open=' + (o.cOpen === undefined ? 37 : o.cOpen) +
+        ' chunks=' + (o.chunks === undefined ? 1 : o.chunks) + '/1024 rounds=' + (o.rounds === undefined ? 55 : o.rounds) + ' calls=20000 [gated: shipped 0, control>=20 within 1024 chunks, rounds>=10]';
+}
 
 function tortureLog(o) {
     const n = o.entries === undefined ? 16 : o.entries;
@@ -164,6 +170,9 @@ function tortureLog(o) {
     for (const t of TIERS) L.push(o.t6skip && t === 'T6' ? '[T6] SKIP' : '[' + t + '] fails=0 green=0');
     for (const t of ['T0', 'T3', 'T5']) L.push('[' + t + ' faithful fb1024Img copy] fails=0 green=0');
     L.push('MEASURE FastBit1024 image scavenge lane (saveInto+loadFrom+copy+equals) over 2e6 = 0 [gated <=2]');
+    const sab = o.sab || {};
+    if (sab.skip) L.push(SAB_SKIP);
+    for (let i = 0; i < (sab.ran === undefined ? 1 : sab.ran); i++) L.push(sabRan(sab));
     if (o.d8 === 'ran') L.push(D8_RAN);
     if (o.d8 === 'skip') L.push(D8_SKIP);
     L.push('MEASURE soak live=' + (o.live === undefined ? 0 : o.live) + ' findings=' + (o.findings === undefined ? 0 : o.findings) + ' postDrainKB=[' + kb.join(',') + '] growthKB=' + (o.growth === undefined ? (n > 1 ? 15 : 0) : o.growth));
@@ -215,6 +224,30 @@ test('S-5 checkTortureLog: T7 heap growth >= 1024 KB, live != 0, findings != 0 -
     assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'ran', growth: 5000 }), c)));
     assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'ran', live: 1 }), c)));       // mutant: live not checked
     assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'ran', findings: 2 }), c)));   // mutant: findings not checked
+});
+
+test('B.B1b checkTortureLog: T3 FastBit64 SAB row SKIP on a soak leg -> problem (X-10: lane S legs have >= 3 cores)', () => {
+    assert.deepEqual(checkTortureLog(tortureLog({ d8: 'ran', sab: { ran: 1 } }), { d8: 'ran', cycles: 16384 }), []); // positive control
+    for (const d8 of ['ran', 'skip']) {
+        const c = { d8, cycles: 16384 };
+        const p = checkTortureLog(tortureLog({ d8, sab: { skip: true, ran: 0 } }), c);
+        assert.ok(nonEmpty(p), 'SKIP alone, d8=' + d8);                                   // mutant: SKIP read as a pass
+        assert.ok(p.some((x) => x.includes(SAB_SKIP)), 'the SKIP line is named: ' + p.join(' | ')); // mutant: only "line missing" fires
+        assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8, sab: { skip: true, ran: 1 } }), c)), 'SKIP beside a ran line, d8=' + d8); // mutant: SKIP ignored when a ran line exists
+    }
+});
+
+test('B.B1b checkTortureLog: T3 FastBit64 SAB ran line required exactly once, gates met', () => {
+    const c = { d8: 'ran', cycles: 16384 };
+    const T = (sab) => checkTortureLog(tortureLog({ d8: 'ran', sab }), c);
+    assert.deepEqual(T({ cOpen: 20, rounds: 10, chunks: 1024 }), []);  // boundary positive (gates are >= 20, >= 10, <= cap)
+    assert.ok(nonEmpty(T({ ran: 0 })));                 // mutant: the row may vanish silently
+    assert.ok(nonEmpty(T({ ran: 2 })));                 // mutant: >= 1 instead of exactly 1
+    assert.ok(nonEmpty(T({ shipped: 1 })));             // mutant: shipped fail-open not gated
+    assert.ok(nonEmpty(T({ cOpen: 19 })));              // mutant: floor off by one / dropped
+    assert.ok(nonEmpty(T({ rounds: 9 })));              // mutant: writer rounds not gated
+    assert.ok(nonEmpty(T({ chunks: 1025 })));           // mutant: chunks over the cap accepted
+    assert.ok(nonEmpty(T({ ctl: 'faithful' })));        // mutant: any control variant accepted
 });
 
 test('A4 checkTortureLog: empty log -> problem', () => {

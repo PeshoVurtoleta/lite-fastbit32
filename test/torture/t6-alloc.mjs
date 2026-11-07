@@ -33,6 +33,8 @@
 //   Closure scavenge lane: the ROADMAP FB-11 shape forEach(b => a += b + i)
 //     through the real forEach. Module-scope callback churns 0; a per-op closure
 //     (foreach-closure control) churns dozens. Gate <= 2.
+//
+//   FastBit64 lanes (B-S3 / B-S5, 1.7.0): see fb64Lanes below.
 
 import { measureOps, GcProfiler, checkNoGc } from '@zakkster/lite-gc-profiler';
 import { spawnSync } from 'node:child_process';
@@ -40,6 +42,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fb64Variant, LIB_PATH } from './fb64-variants.mjs';
+import { FB64_LANES, fb64Fixture, fb64LaneCallees, fb64FixtureMoved } from './fb64-lanes.mjs';
 
 const MASK = 0x0F0F0F0F;       // int32 mask (no bit 31): signedness-safe
 // a lane whose code was not verified-optimized names the reason (cold path)
@@ -259,6 +263,10 @@ export async function run(ctx) {
         }
     }
     measures.witnessByLane = witnessByLane;
+
+    // ---- B-S3 / B-S5 FastBit64: census, poisoning pass, inlined + witness +
+    // scavenge lanes (see fb64Lanes); a throw is a fail row, never a crash
+    try { await fb64Lanes(ctx, fails, baseline, bop, bopOpts); } catch (e) { fails.push('T6 FB64: lanes threw ' + e.constructor.name + ': ' + e.message); }
 
     // ---- per-lane composite B/op (signed gated, unsigned read-only/printed) -
     const bopByLane = [];
@@ -677,4 +685,238 @@ async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
     if (d.skip === undefined) {
         if (d.result !== true || !(d.loads <= 2) || !(d.box >= 2)) fails.push('T6 FB1024 img: d8 lane loadFrom scavenges=' + d.loads + ' (expected <= 2 per 1e5), box control=' + d.box + ' (expected >= 2), result=' + d.result + ' -- ' + d.tail);
     }
+}
+
+// ---- B-S3 / B-S5 (1.7.0) FastBit64 lanes -----------------------------------
+// Census (B-S5): FB64_POISON_ROWS must equal harness mathFieldCensus(ctx.FB64,
+// { field: /\.#(?:lo|hi)\b/, kernels: mathKernels(FastBit32.js text) }) both
+// ways: a method whose body reads #lo / #hi AND reaches Math.* directly or
+// through a Math-reaching private kernel (ctz32, popcnt32). Kernels live
+// between the fb64-kernels markers (the contract): a field-reading method that
+// calls a Math-reaching top-level function outside them (harness
+// mathOutsideFunctions) fails the census closed, naming it. Args see only
+// literals, `cb` (the harness no-op) and `x` (the caller's own instance, for
+// countMasked(other)).
+// Poisoning pass: the same harness pre-pass, through the caller store
+// `x.setWords((~w) >>> 0, (~w) >>> 0)` after one `new C(0xFFFFFFFF, 0xFFFFFFFF)`,
+// on ctx.FB64, on the u32 witness (fb64Variant('u32'): FastBit64 with its
+// `| 0` word storage turned into `>>> 0`; a build failure is a FAIL row) AND on
+// the public mirror Fb64PubMirror (its census rows only), all through ONE call
+// site, fb64Poison (FB64_POISON_OPTS appears there and nowhere else).
+// Witness lanes, word E = bit 63 only (B.B2 finding, probe-field.mjs: a PRIVATE
+// field holding a uint32 >= 2^31 is a HeapNumber, so a READ through a poisoned
+// clz32 slot passes that object and allocates nothing -- 0.000 B/op for a private
+// field vs 16.000 for a public one, the pass having deopted the caller at clz32
+// either way. The u32 mutant boxes on the STORE instead):
+//   read  highest() ^ lowest(): ctx.FB64 < 0.1; the u32 witness < 0.1 too, a
+//         PIN (if a V8 starts boxing private-field reads, it goes red: re-check
+//         the shipped lanes and flip it on purpose); the public mirror >= 15.9
+//         (A4: its uint32 public word boxes through the poisoned clz32 slot --
+//         proof, every run, that the FB64 pass took; the fb64-poison-opts-drop
+//         control drops the opts and must turn this lane, and only it, red).
+//   store setWords(lo, hi) of words read from a Float64Array (never constants):
+//         ctx.FB64 < 0.1 (`| 0` stores the int32 -2^31, a Smi); the u32 witness
+//         >= 15.9 (`>>> 0` stores 2^31: one HeapNumber per store -- proof, every
+//         run, that this lane sees the u32 storage mutant); the u32 witness on
+//         bit 62 only < 0.1 (0x40000000 is a Smi either way).
+// Inlined lanes: fb64-lanes.mjs FB64_LANES on the bit-31 / bit-63 words, each
+// verified TurboFan (bop: ctx.FB64's methods, the lane callees and every FB32
+// lane callee forced + verified), gated < 0.1 B/op with >= 3 valid windows, NaN
+// fails closed; the read-only words are read back after every lane. The
+// fb64-bop-box control wraps each op with one HeapNumber per op (>= 15.9 on
+// every lane). Scavenge mix: every lane op once per op, 2e6 ops, <= 2.
+// Setup (fixtures, callers, census) allocates before any window opens.
+const FB64_POISON_ROWS = [
+    ['countMasked', 'x'],
+    ['count', ''],
+    ['lowest', ''],
+    ['highest', ''],
+    ['nextClearBit', ''],
+    ['highestClearBit', ''],
+    ['nextSetBit', '0'],
+    ['prevSetBit', '63'],
+    ['rank', '63'],
+    ['select', '0'],
+    ['countRange', '0, 64'],
+    ['forEach', 'cb'],
+    ['toArray', '']
+];
+const FB64_FIELD = /\.#(?:lo|hi)\b/;
+const FB64_POISON_OPTS = { store: 'x.setWords((~w) >>> 0, (~w) >>> 0)', ctorArgs: '0, 0', preArgs: [0xFFFFFFFF, 0xFFFFFFFF] };
+
+// No feedback prime (B.B2 r2, FIX 2): r1 primed the isWord uint32 branch
+// (256 uint32 constructions + setWords per class) before the pass, claiming the
+// u32 witness never reached Math.clz32 without it. In the full T6 context that
+// did not reproduce (r1 review mutE; r2 t6-only noPrime: pub read 16.000, u32
+// store 16.000 B/op, fails 0), so the prime is gone.
+// A4 read witness (the pass's proof): FastBit64's shape with PUBLIC words
+// stored `>>> 0`. A public uint32 >= 2^31 is a Double field, so a read through
+// a poisoned Math.clz32 slot boxes it (16 B/op, B.B2 review probe
+// pub-read-poison-prime); without the FB64 pass the slot keeps its Number
+// feedback and the read is free. highest / lowest are the shipped bodies with
+// `this.#lo` -> `this.lo` (and the shipped ctz32 kernel, copied).
+function fb64PubCtz32(x) { return 32 - Math.clz32(~x & (x - 1)); }
+class Fb64PubMirror {
+    constructor(lo = 0, hi = 0) {
+        this.lo = lo >>> 0;
+        this.hi = hi >>> 0;
+    }
+
+    setWords(lo, hi) {
+        this.lo = lo >>> 0;
+        this.hi = hi >>> 0;
+        return this;
+    }
+
+    lowest() {
+        const c = fb64PubCtz32(this.lo), t = c + (fb64PubCtz32(this.hi) & -(c >>> 5));
+        return t | ~((t - 64) >> 31);
+    }
+
+    highest() {
+        const c = Math.clz32(this.hi);
+        return 63 - (c + (Math.clz32(this.lo) & -(c >>> 5)));
+    }
+}
+// the mirror's rows: the census rows it has (never the row-drop control's list)
+const FB64_PUB_ROWS = FB64_POISON_ROWS.filter((r) => typeof Fb64PubMirror.prototype[r[0]] === 'function');
+
+// The ONE poisoning call site for every FastBit64 pass (ctx.FB64, the u32
+// witness, the public mirror): dropping FB64_POISON_OPTS here reaches all three
+// at once, and the fb64-poison-opts-drop control does exactly that.
+function fb64Poison(h, ctx, K, rows, tag) {
+    return h.poisonCallFeedback(K, rows, tag, ctx.control.fb64PoisonOptsDrop === true ? undefined : FB64_POISON_OPTS);
+}
+
+function fb64WitnessOp(h, inst) {
+    return (i) => { h.SINK[0] = inst.highest() ^ inst.lowest(); };
+}
+
+function fb64StoreOp(h, inst, words) {
+    return (i) => { inst.setWords(words[0], words[1]); h.SINK[0] = inst.lo ^ inst.hi; };
+}
+
+// fb64-bop-box: the lane op plus one HeapNumber per op (the op is a verified callee)
+function fb64BoxWrap(h, inner) {
+    return (i) => { inner(i); BOX[0] = i + 0.5; h.SINK[2] = BOX[0] | 0; };
+}
+
+const fmt3 = (x) => Number(x).toFixed(3);
+
+async function fb64Lanes(ctx, fails, baseline, bop, bopOpts) {
+    const h = ctx.h;
+    const C = ctx.FB64;
+    const measures = ctx.measures;
+
+    // census, both ways
+    let kernels = null;
+    let census = [];
+    try {
+        const libSrc = readFileSync(LIB_PATH, 'utf8');
+        kernels = h.mathKernels(libSrc);
+        census = h.mathFieldCensus(C, { field: FB64_FIELD, kernels, outside: h.mathOutsideFunctions(libSrc) });
+    } catch (e) { kernels = null; fails.push('T6 FB64 poison census: no census (' + e.message + ') -- fail closed'); }
+    const drop = ctx.control.fb64PoisonRowDrop;
+    const rows = drop === undefined ? FB64_POISON_ROWS : FB64_POISON_ROWS.filter((r) => r[0] !== drop);
+    const rowNames = rows.map((r) => r[0]);
+    if (kernels !== null) {
+        const missing = census.filter((n) => !rowNames.includes(n));
+        const extra = rowNames.filter((n) => !census.includes(n));
+        if (missing.length > 0 || extra.length > 0 || census.length === 0) {
+            fails.push('T6 FB64 poison census: FB64_POISON_ROWS != mathFieldCensus(FB64, field ' + FB64_FIELD + ', kernels [' + kernels.join(',') + ']) (constructor excluded): missing rows [' + missing.join(',') + '], rows not in the census [' + extra.join(',') + '] -- fail closed');
+        }
+    }
+
+    // the u32 witness class
+    let wv;
+    try { wv = await fb64Variant('u32'); } catch (e) { wv = { C: null, fails: ['build threw ' + e.constructor.name + ': ' + e.message] }; }
+    const U = wv.C;
+    if (U === null) fails.push('T6 FB64 u32 witness: variant not built (' + (wv.fails.length > 0 ? wv.fails.join(' | ') : 'no reason') + ') -- fail closed');
+
+    // poisoning pass (setup: callers allocate here, before any window)
+    const pz = fb64Poison(h, ctx, C, rows, 't6poison_fb64');
+    if (pz.fail !== null) fails.push('T6 FB64 poison pre-pass: ' + pz.fail);
+    const pw = U === null ? null : fb64Poison(h, ctx, U, rows, 't6poison_fb64u32');
+    if (pw !== null && pw.fail !== null) fails.push('T6 FB64 poison pre-pass (u32 witness): ' + pw.fail);
+    const pp = fb64Poison(h, ctx, Fb64PubMirror, FB64_PUB_ROWS, 't6poison_fb64pub');
+    if (pp.fail !== null) fails.push('T6 FB64 poison pre-pass (pub mirror): ' + pp.fail);
+    measures.fb64Poison = {
+        rows: rows.length | 0,
+        census: census.length | 0,
+        censusNames: census.join(','),
+        kernels: kernels === null ? '' : kernels.join(','),
+        maglev: pz.maglev | 0,
+        deopted: pz.deopted.join(','),
+        witnessMaglev: pw === null ? 0 : pw.maglev | 0,
+        witnessDeopted: pw === null ? '' : pw.deopted.join(','),
+        pubRows: FB64_PUB_ROWS.length | 0,
+        pubMaglev: pp.maglev | 0,
+        pubDeopted: pp.deopted.join(','),
+        fail: [pz.fail, pw === null ? 'u32 witness not built' : pw.fail, pp.fail].filter((x) => x !== null).join(' | ')
+    };
+    console.error('MEASURE T6 FastBit64 poison pass rows=' + rows.length + ' census=' + census.length + ' (constructor excluded; kernels [' + measures.fb64Poison.kernels + ']) maglev=' + pz.maglev + '/' + rows.length +
+        ' deopted=[' + measures.fb64Poison.deopted + ']; u32 witness maglev=' + measures.fb64Poison.witnessMaglev + '/' + rows.length + ' deopted=[' + measures.fb64Poison.witnessDeopted + ']; pub mirror maglev=' + measures.fb64Poison.pubMaglev + '/' + FB64_PUB_ROWS.length + ' deopted=[' + measures.fb64Poison.pubDeopted + '] [gated: rows == census both ways, every caller Maglev-compiled]');
+
+    // witness lanes (measured right after the pass)
+    const callees = [...bopOpts.callees, ...h.collectMethods(C)];
+    fb64WitnessOp(h, new C(0, 0));                             // throwaway first closures
+    fb64StoreOp(h, new C(0, 0), new Float64Array(2));
+    fb64WitnessOp(h, new Fb64PubMirror(0, 0));
+    const witness = [];
+    // boxes: false = gated < 0.1; 'store' / 'read' = gated >= 15.9 (u32 store, pub read)
+    const wrows = [['shipped E (bit 63 only)', 'highest^lowest', C, 0, -0x80000000, false, '']];
+    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'highest^lowest', U, 0, -0x80000000, false, ' [pin: a private uint32 field is a HeapNumber; a poisoned read passes it unboxed]']);
+    wrows.push(['pub E (bit 63 only)', 'highest^lowest', Fb64PubMirror, 0, -0x80000000, 'read', ' [A4: a public uint32 field boxes through the FB64-poisoned clz32 slot]']);
+    wrows.push(['shipped E (bit 63 only)', 'setWords store', C, 0, -0x80000000, false, '']);
+    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'setWords store', U, 0, -0x80000000, 'store', ''], ['u32 E62 (bit 62 only)', 'setWords store', U, 0, 0x40000000, false, '']);
+    const wCallees = [...callees, ...h.collectMethods(Fb64PubMirror), fb64PubCtz32];
+    const wOpts = { callees: U === null ? wCallees : [...wCallees, ...h.collectMethods(U)], withhold: bopOpts.withhold };
+    for (const [name, kind, K, lo, hi, boxes, note] of wrows) {
+        const inst = new K(lo, hi);
+        const l0 = inst.lo, h0 = inst.hi;
+        const op = kind === 'setWords store' ? fb64StoreOp(h, inst, new Float64Array([lo, hi])) : fb64WitnessOp(h, inst);
+        const m = await bop(op, wOpts);
+        witness.push({ name, kind, perOp: m.perOp, window0: m.window0, valid: m.valid, status: m.status, boxes: boxes !== false });
+        console.error('MEASURE T6 FastBit64 witness lane ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op (window0 ' + fmt3(m.window0) + ', ' + m.valid + ' valid, ' + m.status + ') [gated ' + (boxes ? '>=15.9' : '<0.1') + ']' + note);
+        if (boxes === 'read') {
+            if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: a public uint32 word read through a poisoned clz32 slot is one HeapNumber per read) -- the FB64 poisoning pass did not take' + optNote(m));
+        } else if (boxes === 'store') {
+            if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: a uint32 word stored >>> 0 is one HeapNumber per store) -- the lane cannot see the u32 storage mutant' + optNote(m));
+        } else if (m.valid < 3 || !(m.perOp < 0.1)) {
+            fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid: ' + (kind === 'setWords store' ? 'an int32 word stores as a Smi' : 'an int32 word passes a poisoned slot as a Smi') + ')' + optNote(m));
+        }
+        if (!Object.is(inst.lo, l0) || !Object.is(inst.hi, h0)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' words moved to (' + inst.lo + ', ' + inst.hi + ') during measurement (expected (' + l0 + ', ' + h0 + '))');
+    }
+    measures.fb64Witness = witness;
+
+    // inlined lanes on the bit-31 / bit-63 words
+    const tf = fb64Fixture(C, h.SINK);                         // throwaway first closures
+    for (const L of FB64_LANES) fb64BoxWrap(h, L.op(tf));
+    const f = fb64Fixture(C, h.SINK);
+    const built = fb64FixtureMoved(f);
+    if (built !== null) fails.push('T6 FB64 lanes: fixture built off the int32 word contract: ' + built + ' -- fail closed');
+    const laneCallees = [...callees, ...fb64LaneCallees(f)];
+    const boxOn = ctx.control.fb64BopBox === true;
+    const ops = [];
+    const byLane = [];
+    for (const L of FB64_LANES) {
+        const inner = L.op(f);
+        ops.push(inner);
+        const m = boxOn
+            ? await bop(fb64BoxWrap(h, inner), { callees: [...laneCallees, inner], withhold: bopOpts.withhold })
+            : await bop(inner, { callees: laneCallees, withhold: bopOpts.withhold });
+        byLane.push({ name: L.name, control: L.control === true, perOp: m.perOp, window0: m.window0, valid: m.valid, status: m.status });
+        if (m.valid < 3 || !(m.perOp < 0.1)) fails.push('T6 FB64 lane ' + L.name + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid)' + optNote(m));
+        const moved = built === null ? fb64FixtureMoved(f) : null;
+        if (moved !== null) fails.push('T6 FB64 lane ' + L.name + ': a read-only word moved during measurement: ' + moved);
+    }
+    measures.fb64ByLane = byLane;
+
+    // scavenge mix: every lane op once per op
+    const mix = (i) => { for (let k = 0; k < ops.length; k++) ops[k](i); };
+    const sc = await h.measureScavenges(mix, 2000000);
+    measures.fb64Scavenges = sc;
+    if (!(sc <= 2)) fails.push('T6 FB64 scavenge mix: all ' + ops.length + ' lanes churned ' + sc + ' scavenges over 2e6 ops (expected <= 2; NaN = an unclassifiable GC, fail closed)');
+    const movedMix = built === null ? fb64FixtureMoved(f) : null;
+    if (movedMix !== null) fails.push('T6 FB64 scavenge mix: a read-only word moved: ' + movedMix);
 }

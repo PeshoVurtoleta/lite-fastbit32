@@ -639,19 +639,90 @@ export { K as BOP_K, WINDOWS as BOP_WINDOWS };
 // first so the field representation is Double before any caller compiles
 // (a Smi field would deopt at the caller's store instead).
 // Returns { fail: null | reason, maglev: callers Maglev-compiled, deopted: names }.
+//
+// B-S5 (FastBit64, B.B2): opts (optional, a plain object) generalizes the caller
+// for a class whose words are not a public `value` field:
+//   store     the caller's store statement (source text; `x` the instance, `w`
+//             the caller argument), default `x.value = (~w) >>> 0`; FastBit64:
+//             `x.setWords((~w) >>> 0, (~w) >>> 0)`
+//   ctorArgs  the caller's `new C(<ctorArgs>)` (source text), default `0`
+//   preArgs   the pre-construct `new C(...preArgs)` (numbers), default
+//             [0xFFFFFFFF]; FastBit64: [0xFFFFFFFF, 0xFFFFFFFF]
+// With no opts the caller text is byte for byte the pre-B.B2 text (the
+// defaults ARE that text; poisonCallerSource builds it for both paths).
 function poisonNoop(bit) { return bit; }
 const POISON_ROW_NAME = /^[A-Za-z_$][\w$]*$/;
 const POISON_ROW_ARGS = /^[\w$, ]*$/;
-export function poisonCallFeedback(C, rows, tag) {
+const POISON_STORE = /^[\w$.,()~<>|&^ =+-]+$/;    // one expression: no ';', braces, quotes
+const POISON_OPTS = ['store', 'ctorArgs', 'preArgs'];
+const POISON_DEFAULT_STORE = 'x.value = (~w) >>> 0';
+const POISON_DEFAULT_CTOR = '0';
+const POISON_DEFAULT_PRE = [0xFFFFFFFF];
+
+// Closest known key (cold; did-you-mean for option errors).
+function nearestKey(k, known) {
+    let best = known[0], bd = Infinity;
+    for (const c of known) {
+        const d = editDistance(k, c);
+        if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+}
+function editDistance(a, b) {
+    const row = [];
+    for (let j = 0; j <= b.length; j++) row.push(j);
+    for (let i = 1; i <= a.length; i++) {
+        let prev = row[0];
+        row[0] = i;
+        for (let j = 1; j <= b.length; j++) {
+            const cur = row[j];
+            row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+            prev = cur;
+        }
+    }
+    return row[b.length];
+}
+function plainOpts(fn, opts, known) {
+    if (opts === null || typeof opts !== 'object' || Array.isArray(opts) || Object.getPrototypeOf(opts) !== Object.prototype || Object.getOwnPropertySymbols(opts).length > 0) {
+        throw new TypeError(fn + ': opts must be a plain object (known keys: ' + known.join(', ') + ')');
+    }
+    for (const k of Object.keys(opts)) {
+        if (!known.includes(k)) throw new TypeError(fn + ': unknown option "' + k + '" (did you mean "' + nearestKey(k, known) + '"? known: ' + known.join(', ') + ')');
+    }
+}
+
+// The resolved caller options (cold): { store, ctorArgs, preArgs }. Throws on a
+// bad opts object or value (a broken pre-pass is a test bug, never a skip).
+function poisonOptions(opts) {
+    if (opts === undefined) return { store: POISON_DEFAULT_STORE, ctorArgs: POISON_DEFAULT_CTOR, preArgs: POISON_DEFAULT_PRE };
+    plainOpts('poisonCallFeedback', opts, POISON_OPTS);
+    const store = opts.store === undefined ? POISON_DEFAULT_STORE : opts.store;
+    const ctorArgs = opts.ctorArgs === undefined ? POISON_DEFAULT_CTOR : opts.ctorArgs;
+    const preArgs = opts.preArgs === undefined ? POISON_DEFAULT_PRE : opts.preArgs;
+    if (typeof store !== 'string' || !POISON_STORE.test(store)) throw new TypeError('poisonCallFeedback: opts.store must be one expression of identifiers / literals / operators (no ";", braces or quotes), got ' + JSON.stringify(store));
+    if (typeof ctorArgs !== 'string' || !POISON_ROW_ARGS.test(ctorArgs)) throw new TypeError('poisonCallFeedback: opts.ctorArgs must be args source of literals, got ' + JSON.stringify(ctorArgs));
+    if (!Array.isArray(preArgs) || !preArgs.every((v) => typeof v === 'number')) throw new TypeError('poisonCallFeedback: opts.preArgs must be an array of numbers, got ' + JSON.stringify(preArgs));
+    return { store, ctorArgs, preArgs };
+}
+
+// The body text handed to `new Function('C', 'cb', <text>)` for one row (cold).
+// Exported so a parity check can compare it with the pre-B.B2 text.
+export function poisonCallerSource(name, args, tag, opts) {
+    const o = poisonOptions(opts);
+    return 'return function ' + tag + '_' + name + '(w) { const x = new C(' + o.ctorArgs + '); ' + o.store + '; return x.' + name + '(' + args + '); };';
+}
+
+export function poisonCallFeedback(C, rows, tag, opts) {
     if (typeof C !== 'function' || !Array.isArray(rows) || typeof tag !== 'string' || !POISON_ROW_NAME.test(tag)) {
         throw new TypeError('poisonCallFeedback(C, rows, tag): C a class, rows an array of [name, args], tag an identifier');
     }
+    const po = poisonOptions(opts);
     const res = { fail: null, maglev: 0, deopted: [] };
     const N = natives();
     if (N === false) { res.fail = 'needs --allow-natives-syntax (' + NATIVES_REMEDY + ')'; return res; }
     if (N.shift === null) { res.fail = layoutUnknownReason(N); return res; }
     if (N.maglev === null) { res.fail = '%OptimizeMaglevOnNextCall is unavailable on V8 ' + process.versions.v8 + ': the poisoning pre-pass cannot run -- failing closed'; return res; }
-    new C(0xFFFFFFFF);
+    new C(...po.preArgs);
     for (let r = 0; r < rows.length; r++) {
         const row = rows[r];
         const name = Array.isArray(row) ? row[0] : undefined;
@@ -661,7 +732,7 @@ export function poisonCallFeedback(C, rows, tag) {
         }
         const fn = C.prototype[name];
         if (typeof fn !== 'function') { res.fail = 'row ' + name + ' is not a method of ' + (C.name || 'the class') + '.prototype'; return res; }
-        const caller = new Function('C', 'cb', 'return function ' + tag + '_' + name + '(w) { const x = new C(0); x.value = (~w) >>> 0; return x.' + name + '(' + args + '); };')(C, poisonNoop);
+        const caller = new Function('C', 'cb', poisonCallerSource(name, args, tag, opts))(C, poisonNoop);
         N.prep(caller);
         N.prep(fn);
         for (let i = 0; i < 50; i++) caller((0x80000000 | i) >>> 0);
@@ -685,13 +756,46 @@ export function poisonCallFeedback(C, rows, tag) {
 // EXCLUDED explicitly: its source text is the whole class, so it always
 // matches. A matching getter / setter / Symbol-keyed method is listed as
 // 'get x' / 'set x' / its String() form, which no row can name: fail closed.
-export function mathFieldCensus(C) {
+//
+// B-S5 (B.B2) opts (optional, a plain object):
+//   field    the field regex, default /\bthis\.value\b/ (FastBit64:
+//            /\.#(?:lo|hi)\b/); no g / y flag (a stateful test is refused)
+//   kernels  names of module-private functions that reach Math.* (mathKernels
+//            of the source text); a method that calls one, `name(`, counts as
+//            reaching Math.* too. Default [] (no opts = the pre-B.B2 census).
+//   outside  names of Math-reaching top-level functions declared OUTSIDE the
+//            kernel markers (mathOutsideFunctions of the same text). A
+//            field-reading method that calls one THROWS, naming both: the
+//            census cannot count it, so it fails closed. Default [].
+const CENSUS_OPTS = ['field', 'kernels', 'outside'];
+export function mathFieldCensus(C, opts) {
+    let field = /\bthis\.value\b/;
+    let calls = [];
+    let outside = [];
+    if (opts !== undefined) {
+        plainOpts('mathFieldCensus', opts, CENSUS_OPTS);
+        if (opts.field !== undefined) {
+            if (!(opts.field instanceof RegExp) || opts.field.global || opts.field.sticky) throw new TypeError('mathFieldCensus: opts.field must be a RegExp without the g / y flag');
+            field = opts.field;
+        }
+        if (opts.kernels !== undefined) {
+            if (!Array.isArray(opts.kernels) || !opts.kernels.every((k) => typeof k === 'string' && POISON_ROW_NAME.test(k))) throw new TypeError('mathFieldCensus: opts.kernels must be an array of identifiers');
+            calls = opts.kernels.map((k) => new RegExp('\\b' + k.replace(/\$/g, '\\$') + '\\('));
+        }
+        if (opts.outside !== undefined) {
+            if (!Array.isArray(opts.outside) || !opts.outside.every((k) => typeof k === 'string' && POISON_ROW_NAME.test(k))) throw new TypeError('mathFieldCensus: opts.outside must be an array of identifiers');
+            outside = opts.outside.map((k) => [k, new RegExp('(?<![.\\w$])' + k.replace(/\$/g, '\\$') + '\\(')]);
+        }
+    }
     const out = [];
     const seen = new Set();
-    const hit = (f) => {
+    const hit = (f, label) => {
         if (typeof f !== 'function') return false;
         const src = Function.prototype.toString.call(f);
-        return /\bMath\.\w+\(/.test(src) && /\bthis\.value\b/.test(src);
+        if (field.test(src)) {
+            for (const [k, re] of outside) if (re.test(src)) throw new Error('mathFieldCensus: ' + label + ' reads the field and calls ' + k + '(), a Math-reaching top-level function outside the kernel markers: the census cannot count it -- move ' + k + ' between the markers (fail closed)');
+        }
+        return (/\bMath\.\w+\(/.test(src) || calls.some((re) => re.test(src))) && field.test(src);
     };
     for (let p = C.prototype; p !== null && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
         for (const k of Reflect.ownKeys(p)) {
@@ -699,12 +803,74 @@ export function mathFieldCensus(C) {
             seen.add(k);
             const d = Object.getOwnPropertyDescriptor(p, k);
             const label = typeof k === 'symbol' ? String(k) : k;
-            if (hit(d.value)) out.push(label);
-            if (hit(d.get)) out.push('get ' + label);
-            if (hit(d.set)) out.push('set ' + label);
+            if (hit(d.value, label)) out.push(label);
+            if (hit(d.get, 'get ' + label)) out.push('get ' + label);
+            if (hit(d.set, 'set ' + label)) out.push('set ' + label);
         }
     }
     return out;
+}
+
+// B-S5: the Math-reaching kernels of a source text (cold). Kernels = the
+// top-level `function name(` declarations between the `// fb64-kernels:begin`
+// and `// fb64-kernels:end` markers, each body running to the next one (or the
+// end marker). Math-reaching = the body matches /\bMath\.\w+\(/ or calls a
+// Math-reaching kernel (fixpoint). Returns the names in source order; markers
+// missing, out of order or duplicated, or no kernel between them, throws (a
+// census without its kernels would under-count: fail closed).
+// CONTRACT: every Math-reaching helper a census method calls lives between the
+// markers. A helper outside them is invisible to mathKernels; T6 passes
+// mathOutsideFunctions(src) as the census `outside` opt, so a field-reading
+// method calling one throws instead of under-counting.
+export const KERNEL_BEGIN = '// fb64-kernels:begin';
+export const KERNEL_END = '// fb64-kernels:end';
+export function mathKernels(src) {
+    if (typeof src !== 'string') throw new TypeError('mathKernels(src): src must be the source text');
+    const b = src.indexOf(KERNEL_BEGIN), e = src.indexOf(KERNEL_END);
+    if (b < 0 || e < 0 || e < b || src.indexOf(KERNEL_BEGIN, b + 1) >= 0 || src.indexOf(KERNEL_END, e + 1) >= 0) {
+        throw new Error('mathKernels: need exactly one "' + KERNEL_BEGIN + '" before one "' + KERNEL_END + '" (begin at ' + b + ', end at ' + e + ')');
+    }
+    const ksrc = src.slice(b, e);
+    const starts = [];
+    const re = /^function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
+    for (let m = re.exec(ksrc); m !== null; m = re.exec(ksrc)) starts.push([m[1], m.index]);
+    if (starts.length === 0) throw new Error('mathKernels: no function between the kernel markers');
+    const body = new Map();
+    for (let i = 0; i < starts.length; i++) body.set(starts[i][0], ksrc.slice(starts[i][1], i + 1 < starts.length ? starts[i + 1][1] : ksrc.length));
+    const reach = new Set();
+    for (const [k, s] of body) if (/\bMath\.\w+\(/.test(s)) reach.add(k);
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const [k, s] of body) {
+            if (reach.has(k)) continue;
+            for (const r of reach) {
+                if (new RegExp('\\b' + r.replace(/\$/g, '\\$') + '\\(').test(s.slice(s.indexOf('(')))) { reach.add(k); changed = true; break; }
+            }
+        }
+    }
+    return starts.map((s) => s[0]).filter((k) => reach.has(k));
+}
+
+// B.B2 r2: the top-level `function name(` declarations OUTSIDE the kernel
+// markers that reach Math.* directly, through a marker kernel, or through
+// another such function (fixpoint); each body runs to the next top-level
+// declaration or marker. Same marker checks as mathKernels (cold).
+export function mathOutsideFunctions(src) {
+    const kernels = mathKernels(src);
+    const b = src.indexOf(KERNEL_BEGIN), e = src.indexOf(KERNEL_END);
+    const cuts = [b, e, src.length];
+    const starts = [];
+    const re = /^(?:export\s+)?(?:async\s+)?(function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+    for (let m = re.exec(src); m !== null; m = re.exec(src)) { cuts.push(m.index); if (m[1].startsWith('function') && !(m.index > b && m.index < e)) starts.push([m[2], m.index]); }
+    cuts.sort((x, y) => x - y);
+    const body = starts.map(([k, i]) => [k, src.slice(i, cuts.find((c) => c > i))]);
+    const callRe = (k) => new RegExp('(?<![.\\w$])' + k.replace(/\$/g, '\\$') + '\\(');
+    const reach = new Set(body.filter(([, s]) => /\bMath\.\w+\(/.test(s) || kernels.some((k) => callRe(k).test(s))).map(([k]) => k));
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const [k, s] of body) if (!reach.has(k) && [...reach].some((r) => callRe(r).test(s.slice(s.indexOf('('))))) { reach.add(k); changed = true; }
+    }
+    return starts.map((s) => s[0]).filter((k) => reach.has(k));
 }
 
 // ---- scavenge-count lane --------------------------------------------------

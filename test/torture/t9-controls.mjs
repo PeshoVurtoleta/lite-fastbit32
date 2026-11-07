@@ -1,5 +1,6 @@
 // test/torture/t9-controls.mjs -- in-process self-validation of the CHEAP
-// controls (the synchronous tiers). Each control must make EVERY one of its
+// controls (the in-process tiers; T3 is async since B-S1, so every tier result
+// is awaited and run() is async -- torture.mjs runTier awaits it). Each control must make EVERY one of its
 // target tiers fail; a control that leaves ANY listed tier green means that
 // gate is decorative, and that is itself a T9 failure. The expensive controls (foreach-closure,
 // budget-major, soak-stash) are exercised as child processes by
@@ -22,7 +23,7 @@ import { run as t8 } from './t8-cross.mjs';
 
 const SYNC_TIERS = { T0: t0, T1: t1, T2: t2, T3: t3, T4: t4, T5: t5, T8: t8 };
 
-export function run(ctx) {
+export async function run(ctx) {
     const fails = [];
     let green = 0;
 
@@ -35,7 +36,7 @@ export function run(ctx) {
         for (const tierName of control.tiers) {
             const tierRun = SYNC_TIERS[tierName];
             if (!tierRun) { fails.push('T9: control ' + name + ' targets unknown sync tier ' + tierName); notFailed.push(tierName); continue; }
-            const res = tierRun(sub);
+            const res = await tierRun(sub);
             if (!(res.fails.length > 0 || res.green > 0)) notFailed.push(tierName);
             for (const f of res.fails) got.push(f);
         }
