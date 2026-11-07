@@ -24,7 +24,7 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S4b** | `FastBit1024`: fixed 32 x 32 two-level bitmap, fail-closed, pool `acquire/release` (SC-5) | 1.4.0 | additive, new export | **RELEASED 1.4.0 2026-10-11** |
 | **S5** | Tier-2 members, one greenlight each: `select`, `nextSubset`, `nextCombination` | 1.5.0 | additive, gated | **RELEASED 1.5.0 2026-10-11** (select/nextSubset/nextCombination; FastBit1024.select and reverse/rotl/rotr rejected) |
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned; starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-s6-input-law.md` (the SC-2 / SC-3 options as Q-ids), ruled by the maintainer before any planner pass |
-| **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned |
+| **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned; runs LAST, after every scheduled release (1.7.0, any 1.8.0, 2.0.0, 2.0.1) -- maintainer 2026-11-07. Panel 5 = the maintainer's 1024-slot pool mockup (2026-10-11) |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
 | **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 1.7.0 (ahead of S6) | additive, new export | planned (amended 2026-11-05: ships ahead of S6, no longer last); starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-fastbit64.md` (draft .d.ts surface, kernels, naming as Q-ids; SC-4's flat lo/hi shape is SETTLED, not reopened), ruled before any planner pass |
 
@@ -397,8 +397,12 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
   renumber to 2.1.0/2.2.0.
 - **S5 is a queue, not a block.** Each member is greenlit individually and may
   be rejected into the ledger.
-- **S7 runs any time after S4.** It needs the cursor API for the pool panel and
-  S2's corpora for `#measure`.
+- **S7 runs last (maintainer 2026-11-07: "Demo comes after all versions
+  released").** It starts only after the last scheduled release (S9 1.7.0,
+  any 1.8.0 word ops, S6 2.0.0, S8 2.0.1), so it demos the shipped surface
+  once and is never rebuilt for a breaking change. It still needs the cursor
+  API for the pool panel and S2's corpora for `#measure`. S8 no longer waits
+  for it; the README gains a demo link in a later patch.
 - **S8 is last.** The README describes the shipped package, with S2's numbers.
 - **Candidates, not scheduled (2026-10-14 external audit, RESEARCH 14.2).** Each
   needs a named consumer before a planner pass:
@@ -422,6 +426,38 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
   RoaringSet R2 can reuse. Separately, a test-only unit with no PROPOSAL: a
   `FastBit1024` COUNT gate (Proxy word-read ledger, as lite-loglogn
   `Count.test.js`) that moves its loop bounds from STATISTICAL to DETERMINISTIC.
+- **1.8.0 candidate: word ops (external proposal reviewed 2026-11-07, top session).**
+  Scope: FastBit32 + FastBit64 together, AFTER 1.7.0 ships. 1.7.0 is under HOLD-RELEASE; this does not widen
+  it. New public surface, so it starts with a RESEARCH BURST and a ruled PROPOSAL before any planner pass.
+  - Verdicts:
+    - `xor(mask)` (FastBit64: `xor(other)`): YES. It completes the existing set algebra (`union` /
+      `intersect` / `difference`). One word op, no edge cases.
+    - `invert()`: YES on FastBit32 and FastBit64 (fixed width, so trivial). NOT on FastBit1024: under a
+      capacity < 1024 it must mask the bits at and above capacity and rebuild the summaries and the count, and
+      FastBit1024 has no in-place set algebra by design (SC-5 point 4).
+    - `shl(n)` / `shr(n)`: CONSUMER-GATED, the same bar as `reverse` / `rotl` / `rotr` (rejected in S5,
+      "reopen when a consumer appears"). Reopen all five together when one appears.
+      - JS counts shifts mod 32, so `shl(32)` leaves the value unchanged where `std::bitset` clears. The
+        PROPOSAL must rule "clear at n >= 32" (branchless `(x << n) & -(n < 32)`) vs the documented wrap.
+      - `shr` is logical (`>>>`) then `| 0`.
+      - FastBit64 shifts carry across lo / hi, which is the cross-word risk.
+    - `slice(from, to)` as proposed: NO, for three reasons.
+      1. The name: JS `slice` is half-open, the proposal is inclusive, and FastBit1024 `addRange` is half-open,
+         so the library would mix conventions.
+      2. It mutates `this`; an extraction returns a number.
+      3. It calls the validated, throwing `rangeMask` from a hot method.
+      If packed fields get a consumer, the shape is `getField(start, len) -> int` / `setField(start, len, v)`
+      (BEXTR / UBFX style). The `len = 0` and `len = 32` masks are the edge rows.
+  - Representation law (non-negotiable): every result is stored `| 0`, never `>>> 0`.
+    - The proposal's prose used `>>> 0`. With bit 31 set that stores a uint32 double, which boxes 16 B: the
+      exact 1.6.1 `highest()` defect.
+    - `x >>> n` returns uint32, so `shr` needs the trailing `| 0`.
+  - Gates per method:
+    - a lib-free oracle;
+    - T0 laws (`x.xor(m).xor(m) == x`, `invert(invert(x)) == x`, `xor(x) == 0`);
+    - a T6 0 B/op lane on the bit-31 / bit-63 words, verified TurboFan;
+    - a must-fail control (a `>>> 0` store must turn the T6 lane red);
+    - exact-surface pins (S5QA / BundleShake / Surface) updated in the same unit.
 
 ---
 
@@ -1503,7 +1539,7 @@ package: "@zakkster/lite-fastbit32"
 version_target: -- (demo/ never in files[])
 status: planned
 findings: [FB-12 (browser half)]
-depends_on: [S4]
+depends_on: [S4, S9, S6, S8]   # runs last: after every scheduled release (maintainer 2026-11-07)
 ---
 
 # lite-fastbit32 -- see the word
@@ -1511,6 +1547,9 @@ depends_on: [S4]
 PURPOSE
   There is no demo. Build the four-panel page from RESEARCH section 9, under
   the demo-audit law, and use it to answer the browser Smi question (FB-12).
+  Runs after every scheduled release (maintainer 2026-11-07), so it shows the
+  shipped family as released: FastBit32, FastBit1024 (panel 5) and FastBit64,
+  plus the 1.8.0 word ops if they shipped.
 
 TASKS
   - demo/index.html + demo/kernels.mjs (pure, importable by tests) +
@@ -1592,7 +1631,7 @@ package: "@zakkster/lite-fastbit32"
 version_target: 2.0.1
 status: planned
 findings: [FB-08, FB-10 (README ASCII + license holder)]
-depends_on: [S2, S6, S7]
+depends_on: [S2, S6]   # S7 dropped 2026-11-07: the demo now runs after S8
 ---
 
 # lite-fastbit32 -- a README that only says what a gate proves
