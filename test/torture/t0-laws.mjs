@@ -261,6 +261,13 @@ function s5StaticWalks(ctx, F) {
 // cap >= 128, >= 100 acquires in words >= 16, and >= 3 clears at cap >= 512
 // while a raw word >= 16 is non-zero (read from _data directly, not a method).
 // The fb1024-nofull (no _full summary) and fb1024-clear-low16 controls break I1/I2 here.
+// After the random part, FIXED rows (fb1024FixedRows below; no RNG drawn, so h,
+// KEY and measures.fb1024T0 / fb1024CountsT0 are unchanged) build the
+// distinguishing acquire state on purpose: a target word >= 16 that is
+// non-empty, has bit 0 clear and >= 2 clear bits (words 16, 23 and 31 at cap
+// 1024, word 31 at the partial cap 999). The random part may never reach that
+// state for some RNG states (lane S seed 2503656438), so fb1024-acq-highword
+// fails T0 here deterministically.
 // G2 (1.6.0) laws at the same checkpoints (fb1024G2 below), over a PRIVATE
 // xorshift seeded KEY[0] ^ 0x9e3779b9 before the first key() draw, so the h
 // and KEY streams -- and measures.fb1024T0 -- are unchanged.
@@ -346,6 +353,38 @@ function fb1024Laws(ctx, F) {
     if (!(acqHigh >= 100) || !(clearBig >= 3)) F('FB1024 coverage: acquires in words >= 16 ' + acqHigh + ' (need >= 100), clears at cap >= 512 with a high word set ' + clearBig + ' (need >= 3) -- fail closed');
     ctx.measures.fb1024T0 = { fullBig, acqHigh, clearBig };
     ctx.measures.fb1024CountsT0 = g2.finish();
+    fb1024FixedRows(C, ctx, F);
+}
+
+// ---- FB1024 fixed acquire rows (SOAK-1) -------------------------------------
+// Deterministic, NO RNG: per row, new C(cap), add bits 0..fill-1 (whole words
+// below the target word), add the extra bits of the target word, then
+// acquire() === the nextClearBit() read before it, the slot is held, and I1-I4
+// hold. Each target word must be non-empty, have bit 0 clear and >= 2 clear
+// bits -- the state where fb1024-acq-highword takes the second-lowest clear bit.
+// That precondition is ASSERTED before the acquire (fail closed), so a table
+// edit that drops the state fails here instead of passing vacuously.
+// [cap, fill, extra bits]: word 16 = 0b110 at cap 1024; word 23 = 0b110 at cap
+// 1024 (a middle word); word 31 = 0b110 at cap 1024; word 31 = 0b10 at the
+// partial cap 999 (its last word holds 7 bits).
+const FB1024_FIXED = [[1024, 512, [513, 514]], [1024, 736, [737, 738]], [1024, 992, [993, 994]], [999, 992, [993]]];
+function fb1024FixedRows(C, ctx, F) {
+    for (let r = 0; r < FB1024_FIXED.length; r++) {
+        const cap = FB1024_FIXED[r][0], fill = FB1024_FIXED[r][1], extra = FB1024_FIXED[r][2];
+        const s = new C(cap);
+        for (let b = 0; b < fill; b++) s.add(b);
+        for (let j = 0; j < extra.length; j++) s.add(extra[j]);
+        const tw = fill >>> 5;
+        const old = s._data[tw], cw = ~old;
+        if (tw < 16 || old === 0 || (old & 1) !== 0 || (cw & (cw - 1)) === 0) { F('FB1024 fixed row: word ' + tw + ' is not in the acq-highword state (word >= 16, non-empty, bit 0 clear, >= 2 clear bits) cap ' + cap); continue; }
+        const want = s.nextClearBit();
+        const got = s.acquire();
+        if (got !== want) { F('FB1024 fixed row: acquire ' + got + ' !== prior nextClearBit ' + want + ' (word ' + tw + ' non-empty, bit 0 clear) cap ' + cap); continue; }
+        if (want !== fill) { F('FB1024 fixed row: nextClearBit ' + want + ' !== ' + fill + ' (word ' + tw + ') cap ' + cap); continue; }
+        if (!s.has(got)) { F('FB1024 fixed row: acquired slot ' + got + ' not held cap ' + cap); continue; }
+        const bad = ctx.oracle.fb1024Invariants(s);
+        if (bad !== null) F('FB1024 fixed row: ' + bad + ' after acquire cap ' + cap);
+    }
 }
 
 // ---- G2 (1.6.0) FastBit1024 prevSetBit + count laws ------------------------
