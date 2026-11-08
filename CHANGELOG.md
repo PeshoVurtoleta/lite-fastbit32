@@ -3,6 +3,23 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- CI lane S, `.github/workflows/soak-nightly.yml`: a daily torture soak (3 seeds per leg, each printed as a replay
+  command) at 4x the push volume, plus the T7 soak controls. DETERMINISTIC and gating. New env
+  `TORTURE_SOAK_CYCLES` sets the T7 soak volume (unset or empty = 4096; a decimal multiple of 1024 in
+  [4096, 131072]; anything else exits 2).
+- CI lane P, `.github/workflows/perf-nightly.yml`: a daily STATISTICAL perf night (the `gate:release` statistic,
+  with a slowed-`countMasked` control) on ubuntu and macos. REPORT-ONLY until its calibration closes
+  (RESEARCH.md, "Lane P calibration"); gates nothing.
+
+### Changed
+
+- Docs: `npm run test:perf` is relabelled the DETERMINISTIC scavenge-count gate (it counts scavenges, it does not
+  time anything). The statistical gates are `witness` and `gate:release`.
+
 ## [1.6.1] - 2026-11-05
 
 ### Fixed

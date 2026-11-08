@@ -1722,3 +1722,37 @@ signed; cross-set methods take another FastBit64; the full draft surface without
 ops; half-open ranges; private kernels (exports and K1 wait for S6); the FastBit1024
 image at capacity 64; the Int32Array recipe, tested; BitMapper unchanged; FastBit32's
 names first; `fromArray` takes an Array or a TypedArray only.
+
+---
+
+## 19. Lane P calibration (NIGHTLY program, 2026-11-06)
+
+Lane P is `.github/workflows/perf-nightly.yml` (REPORT-ONLY, STATISTICAL tier). Its numbers are REPORTED until this
+protocol closes per OS; nothing below is measured yet. Source: SPEC-nightly (Q-N2 ruling, CAL-1..CAL-5, addenda A2
+and A3 applied).
+
+- CAL-1 Window. At least 10 DECISIVE nights per OS over at least 7 UTC days. Manual dispatches count for at most
+  floor(n/3) of the samples; excess dispatches are dropped, latest first. A change to any pinned harness sha
+  (the `sha256` map in night.json) restarts the window. Only DECISIVE nights count (no HARNESS in either arm, the
+  control tripped, arm-A exit 0 or 1); on a loaded runner (macOS) HARNESS / HOST nights are expected and do not count.
+- CAL-2 Split-half. In time order, derive from each half: S = q99 of the real-row spreadN; Nc = q90 of
+  noise/floor; F = min of the control and foilSubEps spreadN; plus p (real-arm FAIL per round), q (control row FAIL
+  per round), h (HOST + demoted share). The halves match when |S1 - S2| and |Nc1 - Nc2| are each <= 0.15 x the
+  larger, AND S_i < F_j crosswise, AND half 1's (S, Nc) replayed on half 2's stdout reproduce >= 90% of its verdicts
+  (and the reverse). Per-round per-row verdicts live only in the uploaded round stdout files, not in night.json
+  (A2), so the replay reads those files. The bounds are 95% one-sided Clopper-Pearson upper bounds over >= 50
+  counted rounds per OS, and are VOID when within-night overdispersion (variance of per-night FAIL counts /
+  5r(1-r)) exceeds 2: then the night count, not K, bounds the false-fail rate, and NIGHTLY-2 must say so.
+- CAL-3 Control. Control trip rate = nights where the slowed-`countMasked` arm tripped / nights with no HARNESS.
+  A rate below 0.8 means that OS cannot close.
+- CAL-4 Collection (NIGHTLY-2). `gh run list --workflow perf-nightly.yml --json databaseId,event,headSha,createdAt`,
+  then `gh run download <id>` for each run, into the table below with provenance (date, host, load, Node, run count).
+- CAL-5 Earliest close. A push on day D closes at the earliest after the D+7 cron (7 nights + 3 dispatches, all
+  decisive), or D+10 with no dispatches. For a push on 2026-11-07: 2026-11-14 (with 3 dispatches) or 2026-11-17.
+  A never-acquired macOS runner is no data, not a fail, and delays the close; if macOS cannot close, that is a
+  NIGHTLY-2 gap.
+
+Results (empty until NIGHTLY-2 fills it from run logs of that cycle):
+
+| OS | nights decisive | S | Nc | control trip rate | closes | provenance |
+|---|---|---|---|---|---|---|
