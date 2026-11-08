@@ -1082,7 +1082,8 @@ function isWord(x) {
 
 export class FastBit64 {
     // The only state: two int32 words. `other.#lo` is the brand.
-    #lo; #hi;
+    // `= 0`, not bare: with 31-bit Smis a bare field is Tagged and boxes each out-of-Smi store; a Smi-first field is Double, stored in place.
+    #lo = 0; #hi = 0;
 
     /** lo, hi: each an int32 or a uint32 number (default 0), stored `| 0`; else RangeError. */
     constructor(lo = 0, hi = 0) {

@@ -723,22 +723,22 @@ async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
 // `| 0` word storage turned into `>>> 0`; a build failure is a FAIL row) AND on
 // the public mirror Fb64PubMirror (its census rows only), all through ONE call
 // site, fb64Poison (FB64_POISON_OPTS appears there and nowhere else).
-// Witness lanes, word E = bit 63 only (B.B2 finding, probe-field.mjs: a PRIVATE
-// field holding a uint32 >= 2^31 is a HeapNumber, so a READ through a poisoned
-// clz32 slot passes that object and allocates nothing -- 0.000 B/op for a private
-// field vs 16.000 for a public one, the pass having deopted the caller at clz32
-// either way. The u32 mutant boxes on the STORE instead):
-//   read  highest() ^ lowest(): ctx.FB64 < 0.1; the u32 witness < 0.1 too, a
-//         PIN (if a V8 starts boxing private-field reads, it goes red: re-check
-//         the shipped lanes and flip it on purpose); the public mirror >= 15.9
-//         (A4: its uint32 public word boxes through the poisoned clz32 slot --
-//         proof, every run, that the FB64 pass took; the fb64-poison-opts-drop
-//         control drops the opts and must turn this lane, and only it, red).
+// Witness lanes, word E = bit 63 only (A16, amending A3 for the Smi-first
+// `#lo = 0; #hi = 0;` fields of A9): a private field that takes a uint32 >= 2^31
+// is a Double field, holding the number in place. So the u32 mutant boxes on the
+// poisoned READ (the double has to become a HeapNumber to enter the clz32 slot,
+// 16.000 B/op, evidence/fb64pc-a/t0-z.log) and its `>>> 0` STORE is free
+// (0.000 B/op, same log):
+//   read  highest() ^ lowest(): ctx.FB64 < 0.1; the u32 witness >= 15.9 (one
+//         HeapNumber per read -- proof, every run, that this lane sees the u32
+//         storage mutant); the public mirror >= 15.9 (A4: its uint32 public word
+//         boxes through the poisoned clz32 slot -- proof, every run, that the
+//         FB64 pass took; the fb64-poison-opts-drop control drops the opts and
+//         must turn the public row red; the u32 read row goes red with it).
 //   store setWords(lo, hi) of words read from a Float64Array (never constants):
 //         ctx.FB64 < 0.1 (`| 0` stores the int32 -2^31, a Smi); the u32 witness
-//         >= 15.9 (`>>> 0` stores 2^31: one HeapNumber per store -- proof, every
-//         run, that this lane sees the u32 storage mutant); the u32 witness on
-//         bit 62 only < 0.1 (0x40000000 is a Smi either way).
+//         < 0.1 on word E (`>>> 0` writes 2^31 in place in the Double field) and
+//         on bit 62 only (0x40000000 fits the same field).
 // Inlined lanes: fb64-lanes.mjs FB64_LANES on the bit-31 / bit-63 words, each
 // verified TurboFan (bop: ctx.FB64's methods, the lane callees and every FB32
 // lane callee forced + verified), gated < 0.1 B/op with >= 3 valid windows, NaN
@@ -883,12 +883,12 @@ async function fb64Lanes(ctx, fails, baseline, bop, bopOpts) {
     fb64StoreOp(h, new C(0, 0), new Float64Array(2));
     fb64WitnessOp(h, new Fb64PubMirror(0, 0));
     const witness = [];
-    // boxes: false = gated < 0.1; 'store' / 'read' = gated >= 15.9 (u32 store, pub read)
+    // boxes: false = gated < 0.1; 'u32read' / 'read' = gated >= 15.9 (private u32 read, pub read)
     const wrows = [['shipped E (bit 63 only)', 'highest^lowest', C, 0, -0x80000000, false, '']];
-    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'highest^lowest', U, 0, -0x80000000, false, ' [pin: a private uint32 field is a HeapNumber; a poisoned read passes it unboxed]']);
+    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'highest^lowest', U, 0, -0x80000000, 'u32read', '']);
     wrows.push(['pub E (bit 63 only)', 'highest^lowest', Fb64PubMirror, 0, -0x80000000, 'read', ' [A4: a public uint32 field boxes through the FB64-poisoned clz32 slot]']);
     wrows.push(['shipped E (bit 63 only)', 'setWords store', C, 0, -0x80000000, false, '']);
-    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'setWords store', U, 0, -0x80000000, 'store', ''], ['u32 E62 (bit 62 only)', 'setWords store', U, 0, 0x40000000, false, '']);
+    if (U !== null) wrows.push(['u32 E (bit 63 only)', 'setWords store', U, 0, -0x80000000, false, ''], ['u32 E62 (bit 62 only)', 'setWords store', U, 0, 0x40000000, false, '']);
     const wCallees = [...callees, ...h.collectMethods(Fb64PubMirror), fb64PubCtz32];
     const wOpts = { callees: U === null ? wCallees : [...wCallees, ...h.collectMethods(U)], withhold: bopOpts.withhold };
     for (const [name, kind, K, lo, hi, boxes, note] of wrows) {
@@ -900,10 +900,11 @@ async function fb64Lanes(ctx, fails, baseline, bop, bopOpts) {
         console.error('MEASURE T6 FastBit64 witness lane ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op (window0 ' + fmt3(m.window0) + ', ' + m.valid + ' valid, ' + m.status + ') [gated ' + (boxes ? '>=15.9' : '<0.1') + ']' + note);
         if (boxes === 'read') {
             if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: a public uint32 word read through a poisoned clz32 slot is one HeapNumber per read) -- the FB64 poisoning pass did not take' + optNote(m));
-        } else if (boxes === 'store') {
-            if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: a uint32 word stored >>> 0 is one HeapNumber per store) -- the lane cannot see the u32 storage mutant' + optNote(m));
+        } else if (boxes === 'u32read') {
+            if (m.valid < 3 || !(m.perOp >= 15.9)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected >= 15.9, >= 3 valid: a private uint32 word in a Double field is one HeapNumber per read through a poisoned clz32 slot) -- the lane cannot see the u32 storage mutant' + optNote(m));
         } else if (m.valid < 3 || !(m.perOp < 0.1)) {
-            fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid: ' + (kind === 'setWords store' ? 'an int32 word stores as a Smi' : 'an int32 word passes a poisoned slot as a Smi') + ')' + optNote(m));
+            const why = kind !== 'setWords store' ? 'an int32 word passes a poisoned slot as a Smi' : name.startsWith('u32 ') ? 'a private word of the u32 witness stores in place in a Double field' : 'an int32 word stores as a Smi';
+            fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' = ' + fmt3(m.perOp) + ' B/op, valid=' + m.valid + ' (expected < 0.1, >= 3 valid: ' + why + ')' + optNote(m));
         }
         if (!Object.is(inst.lo, l0) || !Object.is(inst.hi, h0)) fails.push('T6 FB64 witness: ' + name + ' ' + kind + ' words moved to (' + inst.lo + ', ' + inst.hi + ') during measurement (expected (' + l0 + ', ' + h0 + '))');
     }

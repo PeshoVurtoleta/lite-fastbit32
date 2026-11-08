@@ -510,10 +510,13 @@ export const CONTROLS = {
     'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\)/, apply(ctx) { ctx.control.fb64Retain = true; } },
     // B-S5: the FB64 poison rows without 'highest' -> the census check names it.
     'fb64-poison-row-drop': { tiers: ['T6'], cheap: false, expect: /T6 FB64 poison census: [^\n]*missing rows \[highest\], rows not in the census \[\]/, apply(ctx) { ctx.control.fb64PoisonRowDrop = 'highest'; } },
-    // B-S5: ctx.FB64 = the u32 variant (`| 0` storage -> `>>> 0`, torture.mjs
-    // applyFb64Variant before T6): its "shipped" word-E setWords store witness
-    // stores 2^31 as one HeapNumber per op.
-    'fb64-u32-storage': { tiers: ['T6'], cheap: false, expect: /T6 FB64 witness: shipped E \(bit 63 only\) setWords store = (?:15\.9\d\d|(?:1[6-9]|[2-9]\d|\d{3,})\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid: /, apply(ctx) { ctx.control.fb64Variant = 'u32'; } },
+    // B-S5, re-pinned by A16: ctx.FB64 = the u32 variant (`| 0` storage -> `>>> 0`,
+    // torture.mjs applyFb64Variant before T6). Its fields are Double, so the store
+    // is in place and the box is on the READ: the "shipped" word-E witness takes
+    // 2^31 out of the private field through the poisoned clz32 slot, one HeapNumber
+    // per read, on verified code. The fixture, lowest/highest and scavenge-mix rows
+    // co-occur; this row names the mutant's read box.
+    'fb64-u32-storage': { tiers: ['T6'], cheap: false, expect: /T6 FB64 witness: shipped E \(bit 63 only\) highest\^lowest = (?:15\.9\d\d|(?:1[6-9]|[2-9]\d|\d{3,})\.\d{3}) B\/op, valid=[3-7] \(expected < 0\.1, >= 3 valid: an int32 word passes a poisoned slot as a Smi\)(?! -- )/, apply(ctx) { ctx.control.fb64Variant = 'u32'; } },
     // B-S3: one HeapNumber per op on every FastBit64 inlined lane.
     'fb64-bop-box': { tiers: ['T6'], cheap: false, expect: FB64_BOP_BOX_EXPECT, apply(ctx) { ctx.control.fb64BopBox = true; } },
     // A4: every FastBit64 poisoning pass runs WITHOUT FB64_POISON_OPTS (t6-alloc

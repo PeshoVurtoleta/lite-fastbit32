@@ -1768,8 +1768,8 @@ rung picked by the last result) on scratch copies of FastBit32.js; the shipped f
 Draft decision, alternatives and Q-ids: `.handoff/PROPOSAL-fb64-pc.md`; scripts and logs:
 `.handoff/research/fb64-pc/` (both gitignored). Apple M4 Pro, d8 15.7.37 arm64 (pointer-compressed), Node
 v26.8.2 / V8 14.6.202.34-node.28; scavenges counted with --trace-gc and 1 MB semi-spaces between MARK prints
-(the T6 d8 lane method); every count REPORTED, runs repeated 2-3x (R3, R4c and R4's node rows: one run each). Calibration: one 12 B box per op = 11
-scavenges per 1e6 ops on d8. No timing: the quiet lock was held (exit 75); the timing rung is PENDING.
+(the T6 d8 lane method); every count REPORTED, runs repeated 2-3x (R3, R4c, R7g and R4's node rows: one run each). Calibration: one 12 B box per op = 11
+scavenges per 1e6 ops on d8. Timing: section 20.3.
 
 ### 20.1 Findings
 
@@ -1806,3 +1806,39 @@ Q-PC1 storage (field initializers / keep + caveat / Int32Array(2)); Q-PC2 the FB
 pre-window gc() and gate stores + a mutator window / chunked gate / REPORTED for good / a regression bound);
 Q-PC3 the FastBit1024 d8 window (1e6 + revert checks / + a permanent control / keep 1e5); Q-PC4 a representation
 rule for the main file (code rule + source pin / rule only / none).
+
+### 20.3 Timing: R6 and R6b (REPORTED)
+
+a = the pre-A9 (b9447cb) `#lo; #hi;`, z = `#lo = 0; #hi = 0;`, a2 = an A/A twin of a. Both rungs ran once under
+`quiet-lock run --strict` on a QUIET host (exit 0), Apple M4 Pro, d8 15.7.37, Node v26.8.2, K = 7, medians in ns/op.
+Scripts and logs are in `.handoff/research/fb64-pc/`. An op whose A/A sits outside [0.95, 1.05] is HOST-INCONCLUSIVE.
+
+R6 (load1 2.32 -> 2.94; logs/r6-timing-strict-3.log). d8 a -> z: toggle on out-of-Smi words 7.201 -> 4.012 (z/a 0.557),
+setWords 8.500 -> 2.471 (0.291), hasAll 1.005, count 1.016, toggle on Smi words 1.653 -> 4.052 (2.451, A/A 0.994). Node
+z/a 0.898-1.006, every A/A inside the band.
+
+R6b asks whether that Smi-word cost needs the process to also hold an out-of-Smi instance (2026-11-08T20:52:53Z, load1
+2.33 -> 2.45; logs/r6b-timing-strict-2.log). Every timed word is Smi-range; mode `smi` never stores an out-of-Smi word,
+mode `mixed` constructs one out-of-Smi instance first. One process per (engine, candidate, mode), best of 5 windows of
+2e6 ops after a 4e5-op warm-up, median over K. A must-fail control (a + a fixed spin) read slow/a >= 4.97 in every cell.
+
+| d8 | a | z | z/a | A/A | |
+|---|---|---|---|---|---|
+| smi toggle | 0.946 | 0.801 | 0.847 | 1.060 | HOST-INCONCLUSIVE |
+| smi add | 1.504 | 1.496 | 0.995 | 1.026 | |
+| smi union | 1.336 | 0.797 | 0.597 | 1.123 | HOST-INCONCLUSIVE |
+| smi setWords | 2.291 | 2.182 | 0.952 | 0.971 | |
+| mixed toggle | 1.002 | 3.685 | 3.678 | 1.020 | |
+| mixed add | 1.644 | 3.752 | 2.282 | 0.934 | HOST-INCONCLUSIVE |
+| mixed union | 1.221 | 5.881 | 4.817 | 0.810 | HOST-INCONCLUSIVE |
+| mixed setWords | 2.303 | 2.298 | 0.998 | 0.998 | |
+
+Node, both modes: z/a 0.848-1.004, A/A 0.987-1.037, no flag on any op.
+
+- **Pre-stated reading: H-NOT-CONFIRMED.** The rule also withholds confirmation when a d8 `smi` op has no verdict, and
+  smi toggle and smi union are HOST-INCONCLUSIVE. No verdict cell went against the hypothesis: smi add 0.995, smi setWords
+  0.952, mixed toggle 3.678.
+- **What the verdict cells do show.** With one out-of-Smi instance in the process, z's toggle on Smi words costs +2.683
+  ns/op on d8 (1.002 -> 3.685); setWords is unchanged. Mixed add and union point the same way but carry no verdict.
+- **What this rung does not show.** It times; it does not trace field representations, so the class-wide Double field
+  stays a mechanism inferred from R1b's generalization trace, not observed here.

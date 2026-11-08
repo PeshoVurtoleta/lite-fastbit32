@@ -10,8 +10,12 @@
 //   faithful  no edit (the control-fidelity copy; must agree with ctx.FB64)
 //   reread    loadFrom re-reads the high word (X-6: cut from the LANDED loadFrom):
 //             `this.#lo = w0; this.#hi = w1;` (1) -> `this.#lo = w0; this.#hi = src[base + 1];`
-//   u32       FastBit64's `| 0` word STORAGE -> `>>> 0`. The sites (#lo / #hi are
-//             private to FastBit64, so a whole-file count is the class count):
+//   u32       FastBit64's `| 0` word STORAGE -> `>>> 0`. On the landed Smi-first
+//             `#lo = 0; #hi = 0;` fields a uint32 >= 2^31 makes the private field
+//             Double: the `>>> 0` store is in place and the box is on the poisoned
+//             READ (one HeapNumber per read; t6-alloc.mjs witness rows). The sites
+//             (#lo / #hi are private to FastBit64, so a whole-file count is the
+//             class count):
 //             `this.#lo = lo | 0;` (2: constructor, setWords)
 //             `this.#hi = hi | 0;` (2: constructor, setWords)
 //             Every other #lo / #hi store is a compound bit op (int32 already),
