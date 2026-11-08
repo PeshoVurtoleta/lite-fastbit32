@@ -1756,3 +1756,53 @@ Results (empty until NIGHTLY-2 fills it from run logs of that cycle):
 
 | OS | nights decisive | S | Nc | control trip rate | closes | provenance |
 |---|---|---|---|---|---|---|
+
+---
+
+## 20. FastBit64 on pointer-compressed engines: the FB64-PC research burst (2026-11-08)
+
+Question (maintainer ruling A7 in the program spec): on a pointer-compressed engine (31-bit Smi: d8, Chrome,
+Electron) FastBit64's stores box a HeapNumber per word outside [-2^30, 2^30 - 1]. Keep the storage with a
+caveat, or change it? Method: a probe ladder (one small script per rung, each with a must-fail control, the next
+rung picked by the last result) on scratch copies of FastBit32.js; the shipped file (a60bcedf) was only read.
+Draft decision, alternatives and Q-ids: `.handoff/PROPOSAL-fb64-pc.md`; scripts and logs:
+`.handoff/research/fb64-pc/` (both gitignored). Apple M4 Pro, d8 15.7.37 arm64 (pointer-compressed), Node
+v26.8.2 / V8 14.6.202.34-node.28; scavenges counted with --trace-gc and 1 MB semi-spaces between MARK prints
+(the T6 d8 lane method); every count REPORTED, runs repeated 2-3x (R3, R4c and R4's node rows: one run each). Calibration: one 12 B box per op = 11
+scavenges per 1e6 ops on d8. No timing: the quiet lock was held (exit 75); the timing rung is PENDING.
+
+### 20.1 Findings
+
+- **Cause: the bare field declaration.** `#lo; #hi;` defines each field as undefined first, so the
+  constructor's Smi store generalizes it to a Tagged field (d8 --trace-generalization). A Tagged field must
+  allocate a fresh HeapNumber for every stored int32 outside the Smi range. A field that starts as Smi 0
+  generalizes to a Double field instead: one mutable box per field, written in place.
+- **Today's storage boxes on every mutator, not only setWords / loadFrom.** Per 1e6 ops on d8: setWords 23-24 (Maglev
+  47), loadFrom 22, union 22, toggle 11, add 11, in TurboFan (inlined) and Maglev (Sparkplug / Ignition:
+  setWords 93, toggle 34); reads 0,
+  copy 0 (it copies the existing box), Smi-range words 0. A word is out of range exactly when its bits 31 and 30
+  differ. Node is unaffected (32-bit Smi: 0 on every op).
+- **`#lo = 0; #hi = 0;` removes them.** Inlined: 0 on every op (setWords 1 per 1e6, 2 per 4e6: not per op);
+  Maglev: 0 on reads and mutators except loadFrom (11 per 1e6, today 22); Ignition / Sparkplug box more
+  than today (toggle 57 vs 34 per 1e6). Remaining cost class (any untagged storage has it): an out-of-Smi word boxes
+  when it crosses a NON-inlined call -- setWords / equalsWords arguments (22 per 1e6, also today), and, new with
+  this storage, lo / hi returns and kernel arguments under --no-turbo-inlining (11-19 per 1e6; today 0, except
+  nextSetBit 11).
+  Per instance ~24-27 B more on d8 when the words are Smi-range (two boxes from birth); node unchanged.
+  Differential vs the shipped class: 400,000 random ops, 0 fails on node and d8 (a one-token mutant fails
+  17,921); no deopt loop.
+- **Int32Array(2) backing loses:** ~186 B per instance on d8 and ~361 B on node (vs ~48 / ~42 B), with the same
+  call-boundary boxing at best.
+- **The lane's warm-up.** d8-fb64.mjs pointed at the candidate reads read 2 / store 2-3 per 1e6: all in the first
+  1e5 ops of each window (0 in the other nine tenths), between the post-gc() re-tier and the window function's
+  TurboFan OSR (which lower tier boxes is not isolated). Without that gc() the candidate reads 0 / 0.
+- **FastBit1024 already uses the Smi-first pattern** (`_active` / `_full` assigned 0 in the constructor;
+  `_active` -> Double on an out-of-Smi store). Its d8 loadFrom window (1e5 loads, gate <= 2) is blind to one box per load: a mutant declaring those
+  fields bare, and a one-box-per-load mutant, both read 1 per 1e5 and 11 per 1e6.
+
+### 20.2 Open questions (ruled in the PROPOSAL)
+
+Q-PC1 storage (field initializers / keep + caveat / Int32Array(2)); Q-PC2 the FB64 d8 lane shape (drop the
+pre-window gc() and gate stores + a mutator window / chunked gate / REPORTED for good / a regression bound);
+Q-PC3 the FastBit1024 d8 window (1e6 + revert checks / + a permanent control / keep 1e5); Q-PC4 a representation
+rule for the main file (code rule + source pin / rule only / none).
