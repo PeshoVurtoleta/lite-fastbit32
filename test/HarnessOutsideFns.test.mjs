@@ -71,7 +71,7 @@ test('row 7: whole list, source order, no marker kernel in it', () => {
     assert.deepEqual(OUT, ['h1', 'h2', 'h5', 'h3', 'h4', 'h6', 'oldForm']);
 });
 
-test('row 9: a param-less-paren const arrow calling row 1 is listed (fixpoint, B1)', () => {
+test('row 9: a paren-less param const arrow calling row 1 is listed (fixpoint, B1)', () => {
     assert.ok(OUT.includes('h5'), 'outside=' + JSON.stringify(OUT));
 });
 

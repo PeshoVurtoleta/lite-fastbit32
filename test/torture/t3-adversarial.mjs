@@ -599,10 +599,11 @@ function fb1024SabRow(ctx, F) {
 //   FB64_SAB_N * FB64_SAB_CHUNKS = 20,000 * 1024 = 20,480,000 control calls
 //   (expected hits at r_min: 2662.4, 44.4x the rule's 60) for slower hosts (CI
 //   runners: 3-4 cores, macOS seen at load1 ~30; their rates are unmeasured).
-//   REPORTED (2026-11-07, M4 Pro, node 26.8.2, load1 6.84-7.14, 2 unmutated full-cap runs: coder blind, review faithful;
+//   REPORTED (2026-11-07, M4 Pro, node 26.8.2, load1 6.84-7.14, 2 unmutated
+//   full-cap runs: coder blind, review faithful;
 //   evidence/fb64-B1b/{coder/t3-targeted.log,review/mutants-cap.log}): the full
-//   cap (paid only by a run that ends INCONCLUSIVE) took 4.4-4.6 s. Control below the floor at the cap
-//   = "INCONCLUSIVE ... fail closed" = FAIL;
+//   cap (paid only by a run that ends INCONCLUSIVE) took 4.4-4.6 s. Control
+//   below the floor at the cap = "INCONCLUSIVE ... fail closed" = FAIL;
 // - the writer must finish >= FB64_SAB_ROUNDS = 10 rounds during the row, else FAIL.
 // X-10 (SPEC A1): the race needs truly parallel cores; with
 // os.availableParallelism() < 3 the row is a named SKIP (MEASURE ... SKIP:
