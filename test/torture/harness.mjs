@@ -831,6 +831,7 @@ export function mathKernels(src) {
         throw new Error('mathKernels: need exactly one "' + KERNEL_BEGIN + '" before one "' + KERNEL_END + '" (begin at ' + b + ', end at ' + e + ')');
     }
     const ksrc = src.slice(b, e);
+    if (/^(?:export|async|const|let|var|class)\b/m.test(ksrc)) throw new Error('mathKernels: only top-level `function name(` declarations may sit between the kernel markers (an export / async / const / let / var / class there is invisible to the census: fail closed)');
     const starts = [];
     const re = /^function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
     for (let m = re.exec(ksrc); m !== null; m = re.exec(ksrc)) starts.push([m[1], m.index]);
@@ -851,24 +852,27 @@ export function mathKernels(src) {
     return starts.map((s) => s[0]).filter((k) => reach.has(k));
 }
 
-// B.B2 r2: the top-level `function name(` declarations OUTSIDE the kernel
-// markers that reach Math.* directly, through a marker kernel, or through
-// another such function (fixpoint); each body runs to the next top-level
+// B.B2 r2: the top-level declarations OUTSIDE the kernel markers (`function`,
+// `const` / `let` / `var` -- arrow and function-expression helpers too; `class`
+// excepted) that reach Math.* directly, through a marker kernel, or through
+// another such declaration (fixpoint); each body runs to the next top-level
 // declaration or marker. Same marker checks as mathKernels (cold).
+// Single-name declarations only: `let z = 1, a = ...`, destructuring,
+// `function *a` and aliases (`const a = h1;`) are not listed.
 export function mathOutsideFunctions(src) {
     const kernels = mathKernels(src);
     const b = src.indexOf(KERNEL_BEGIN), e = src.indexOf(KERNEL_END);
     const cuts = [b, e, src.length];
     const starts = [];
     const re = /^(?:export\s+)?(?:async\s+)?(function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
-    for (let m = re.exec(src); m !== null; m = re.exec(src)) { cuts.push(m.index); if (m[1].startsWith('function') && !(m.index > b && m.index < e)) starts.push([m[2], m.index]); }
+    for (let m = re.exec(src); m !== null; m = re.exec(src)) { cuts.push(m.index); if (m[1] !== 'class' && !(m.index > b && m.index < e)) starts.push([m[2], m.index]); }
     cuts.sort((x, y) => x - y);
     const body = starts.map(([k, i]) => [k, src.slice(i, cuts.find((c) => c > i))]);
     const callRe = (k) => new RegExp('(?<![.\\w$])' + k.replace(/\$/g, '\\$') + '\\(');
     const reach = new Set(body.filter(([, s]) => /\bMath\.\w+\(/.test(s) || kernels.some((k) => callRe(k).test(s))).map(([k]) => k));
     for (let changed = true; changed;) {
         changed = false;
-        for (const [k, s] of body) if (!reach.has(k) && [...reach].some((r) => callRe(r).test(s.slice(s.indexOf('('))))) { reach.add(k); changed = true; }
+        for (const [k, s] of body) if (!reach.has(k) && [...reach].some((r) => callRe(r).test(s))) { reach.add(k); changed = true; }
     }
     return starts.map((s) => s[0]).filter((k) => reach.has(k));
 }
