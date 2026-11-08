@@ -155,11 +155,22 @@ test('B1 CLI check: --cycles "" exits 1 (empty is never push volume)', () => {
 const TIERS = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T8', 'T6', 'T7', 'T9']; // torture.mjs ORDER
 const D8_RAN = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=0 per 1e5 loads [gated <=2], box control=5 [gated >=2], result=true';
 const D8_SKIP = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: no d8 on PATH (set FASTBIT_D8)';
+// B.B3 (B-S6): the FastBit64 d8 lane lines (torture.mjs MEASURE formats).
+const FB64_D8_SKIP = 'MEASURE FastBit64 d8 pointer-compressed lane SKIP: no d8 on this host (/x/d8; set FASTBIT_D8 or install jsvu v8)';
+// SPEC-fastbit64 A7 + A8: read window gated (inlined, per 1e6 ops), store window REPORTED (PENDING FB64-PC).
+function fb64D8Inl(o) {
+    return 'MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + (o.read === undefined ? 0 : o.read) + ' per 1e6 ops [gated <=2], store scavenges=' + (o.store === undefined ? 47 : o.store) +
+        ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
+}
+function fb64D8Noinl(o) {
+    return 'MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + (o.read === undefined ? 0 : o.read) + ' per 1e6 ops [REPORTED], store scavenges=' + (o.store === undefined ? 68 : o.store) +
+        ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
+}
 // B.B1b (SPEC-fastbit64 X-10 / A1): the T3 FastBit64 SAB race row; lane S legs have >= 3 cores.
 const SAB_SKIP = 'MEASURE FastBit64 T3 SAB row SKIP: availableParallelism 2 < 3';
 function sabRan(o) {
     return 'MEASURE FastBit64 T3 SAB row shipped fail-open=' + (o.shipped === undefined ? 0 : o.shipped) + ' control(' + (o.ctl || 'reread') + ') fail-open=' + (o.cOpen === undefined ? 37 : o.cOpen) +
-        ' chunks=' + (o.chunks === undefined ? 1 : o.chunks) + '/1024 rounds=' + (o.rounds === undefined ? 55 : o.rounds) + ' calls=20000 [gated: shipped 0, control>=20 within 1024 chunks, rounds>=10]';
+        ' chunks=' + (o.chunks === undefined ? 1 : o.chunks) + '/' + (o.cap === undefined ? 1024 : o.cap) + ' rounds=' + (o.rounds === undefined ? 55 : o.rounds) + ' calls=20000 [gated: shipped 0, control>=20 within 1024 chunks, rounds>=10]';
 }
 
 function tortureLog(o) {
@@ -175,6 +186,15 @@ function tortureLog(o) {
     for (let i = 0; i < (sab.ran === undefined ? 1 : sab.ran); i++) L.push(sabRan(sab));
     if (o.d8 === 'ran') L.push(D8_RAN);
     if (o.d8 === 'skip') L.push(D8_SKIP);
+    // FastBit64 d8 lane: follows o.d8 unless o.fb64d8 says otherwise
+    const f8 = o.fb64d8 || {};
+    const f8mode = f8.mode === undefined ? o.d8 : f8.mode;
+    if (f8mode === 'ran') {
+        for (let i = 0; i < (f8.inlN === undefined ? 1 : f8.inlN); i++) L.push(fb64D8Inl(f8.inl || {}));
+        for (let i = 0; i < (f8.noinlN === undefined ? 1 : f8.noinlN); i++) L.push(fb64D8Noinl(f8.noinl || {}));
+    }
+    if (f8mode === 'skip') L.push(FB64_D8_SKIP);
+    if (f8.extraSkip) L.push(FB64_D8_SKIP);
     L.push('MEASURE soak live=' + (o.live === undefined ? 0 : o.live) + ' findings=' + (o.findings === undefined ? 0 : o.findings) + ' postDrainKB=[' + kb.join(',') + '] growthKB=' + (o.growth === undefined ? (n > 1 ? 15 : 0) : o.growth));
     if (o.ok !== false) L.push('ok');
     return L.join('\n') + '\n';
@@ -247,7 +267,60 @@ test('B.B1b checkTortureLog: T3 FastBit64 SAB ran line required exactly once, ga
     assert.ok(nonEmpty(T({ cOpen: 19 })));              // mutant: floor off by one / dropped
     assert.ok(nonEmpty(T({ rounds: 9 })));              // mutant: writer rounds not gated
     assert.ok(nonEmpty(T({ chunks: 1025 })));           // mutant: chunks over the cap accepted
+    assert.ok(nonEmpty(T({ chunks: 1500, cap: 2048 })));  // mutant: cap taken from the line
     assert.ok(nonEmpty(T({ ctl: 'faithful' })));        // mutant: any control variant accepted
+});
+
+test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=ran: both ran lines, inlined read gate met, noinline harness clean (A6 + A7)', () => {
+    const c = { d8: 'ran', cycles: 16384 };
+    const T = (fb64d8) => checkTortureLog(tortureLog({ d8: 'ran', fb64d8 }), c);
+    assert.deepEqual(T({}), []);                                                          // ran ok (positive control)
+    assert.deepEqual(T({ inl: { read: 2, box: 2 } }), []);                                // boundary positive (gates are <= 2, >= 2)
+    assert.deepEqual(T({ noinl: { read: 400 } }), []);                                    // noinline read high, harness clean = still ok (REPORTED)
+    assert.deepEqual(T({ inl: { store: 900 }, noinl: { store: 900 } }), []);              // A7: store counts high = still ok (REPORTED, PENDING FB64-PC)
+    assert.ok(nonEmpty(T({ inl: { read: 3 } })), 'inlined read 3');                       // mutant: inlined read gate dropped / off by one
+    assert.ok(nonEmpty(T({ inl: { read: 40 } })), 'inlined read high');                   // mutant: store and read gates swapped
+    assert.ok(nonEmpty(T({ inl: { read: '1.5' } })), 'inlined read non-integer');          // mutant: !COUNT.test(rd) dropped (1.5 <= 2)
+    assert.ok(nonEmpty(T({ inl: { read: '-1' } })), 'inlined read negative');              // mutant: !COUNT.test(rd) dropped (-1 <= 2)
+    assert.ok(nonEmpty(T({ inl: { read: 'undefined' } })), 'inlined read undefined');     // mutant: Number(undefined) NaN read as pass
+    assert.ok(nonEmpty(T({ inl: { store: 'undefined' } })), 'inlined store undefined');   // A7: a REPORTED count must still be present and numeric
+    assert.ok(nonEmpty(T({ noinl: { store: 'NaN' } })), 'noinline store NaN');
+    assert.ok(nonEmpty(T({ noinl: { read: 'undefined' } })), 'noinline read undefined');
+    assert.ok(nonEmpty(T({ inl: { box: 1 } })), 'inlined box 1');                         // mutant: inlined box gate dropped
+    assert.ok(nonEmpty(T({ inl: { result: 'false' } })), 'inlined result false');         // mutant: result not checked
+    assert.ok(nonEmpty(T({ noinl: { box: 1 } })), 'noinline box 1');                      // mutant: noinline harness not gated
+    assert.ok(nonEmpty(T({ noinl: { result: 'null' } })), 'noinline result null');        // mutant: noinline result not checked
+    assert.ok(nonEmpty(T({ inlN: 0 })), 'FB64 inlined line missing on ran');              // mutant: absence read as ok
+    assert.ok(nonEmpty(T({ noinlN: 0 })), 'FB64 noinline line missing on ran');           // mutant: only the inlined line required
+    assert.ok(nonEmpty(T({ inlN: 0, noinlN: 0 })), 'FB64 lines missing on ran');
+    assert.ok(nonEmpty(T({ inlN: 2 })), 'two inlined lines');                             // mutant: >= 1 instead of exactly 1
+    assert.ok(nonEmpty(T({ noinlN: 2 })), 'two noinline lines');
+    assert.ok(nonEmpty(T({ extraSkip: true })), 'FB64 SKIP beside the ran lines');        // one lane ran + the other skipped = a problem
+});
+
+test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=skip: exactly the one SKIP line, no ran line', () => {
+    const c = { d8: 'skip', cycles: 16384 };
+    const T = (fb64d8) => checkTortureLog(tortureLog({ d8: 'skip', fb64d8 }), c);
+    assert.deepEqual(T({}), []);                                                          // skip ok (positive control)
+    assert.ok(nonEmpty(T({ mode: 'none' })), 'FB64 SKIP line missing on skip');           // mutant: skip leg does not require the named SKIP
+    assert.ok(nonEmpty(T({ mode: 'ran' })), 'FB64 ran on a skip leg');                    // mutant: skip leg accepts either
+    assert.ok(nonEmpty(T({ extraSkip: true })), 'two FB64 SKIP lines on a skip leg');      // mutant: fbSkips !== 1 -> fbSkips < 1
+    assert.ok(nonEmpty(T({ mode: 'ran', inlN: 1, noinlN: 0, extraSkip: true })), 'FB64 inlined ran + SKIP on a skip leg');
+    assert.ok(nonEmpty(T({ mode: 'ran', inlN: 0, noinlN: 1, extraSkip: true })), 'FB64 noinline ran + SKIP on a skip leg');
+});
+
+test('B.B3 checkTortureLog: FB1024 and FB64 d8 lanes are checked independently (mixed legs are problems)', () => {
+    // FB1024 ran + FB64 skip, on either leg kind
+    assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'ran', fb64d8: { mode: 'skip' } }), { d8: 'ran', cycles: 16384 })), 'FB1024 ran + FB64 skip, d8=ran'); // mutant: FB64 lane not checked on ran
+    const fb1024RanFb64Skip = tortureLog({ d8: 'ran', fb64d8: { mode: 'skip' } });
+    assert.ok(nonEmpty(checkTortureLog(fb1024RanFb64Skip, { d8: 'skip', cycles: 16384 })), 'FB1024 ran + FB64 skip, d8=skip'); // the FB1024 check still fires
+    // FB1024 skip + FB64 ran
+    assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'skip', fb64d8: { mode: 'ran' } }), { d8: 'skip', cycles: 16384 })), 'FB1024 skip + FB64 ran, d8=skip');
+    assert.ok(nonEmpty(checkTortureLog(tortureLog({ d8: 'skip', fb64d8: { mode: 'ran' } }), { d8: 'ran', cycles: 16384 })), 'FB1024 skip + FB64 ran, d8=ran'); // mutant: FB64 lines satisfy the FB1024 check
+    // the FB64 problem is named, not only the FB1024 one
+    const p = checkTortureLog(tortureLog({ d8: 'ran', fb64d8: { mode: 'skip' } }), { d8: 'ran', cycles: 16384 });
+    assert.ok(p.some((x) => x.includes('FastBit64 d8')), p.join(' | '));
+    assert.ok(!p.some((x) => /^d8 /.test(x)), 'the FB1024 check stays clean on its own lines: ' + p.join(' | ')); // mutant: FB64 SKIP read as an FB1024 SKIP
 });
 
 test('A4 checkTortureLog: empty log -> problem', () => {

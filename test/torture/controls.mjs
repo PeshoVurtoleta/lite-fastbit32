@@ -520,6 +520,11 @@ export const CONTROLS = {
     // fb64Poison, the one call site): the public-mirror read witness must read
     // < 15.9 B/op on verified code and name the pass.
     'fb64-poison-opts-drop': { tiers: ['T6'], cheap: false, expect: /T6 FB64 witness: pub E \(bit 63 only\) highest\^lowest = -?\d+\.\d{3} B\/op, valid=[3-7] \(expected >= 15\.9, >= 3 valid: a public uint32 word read through a poisoned clz32 slot is one HeapNumber per read\) -- the FB64 poisoning pass did not take(?! -- )/, apply(ctx) { ctx.control.fb64PoisonOptsDrop = true; } },
+    // B-S4: the --no-turbo-inlining child spawned WITHOUT the flag (t6-alloc
+    // fb64NoinlineLane): the u32 control lane inlines and reads < 15.9 B/op on
+    // verified code. Only that row is expected (the execArgv row co-occurs);
+    // no non-control noinline lane may fail.
+    'fb64-noinline-flag-drop': { tiers: ['T6'], cheap: false, expect: /^(?![\s\S]*T6 FB64 noinline: lane )[\s\S]*T6 FB64 noinline: control lane CONTROL u32\(lo\) return = -?\d+\.\d{3} B\/op, valid=[3-7] \(expected >= 15\.9, >= 3 valid: a uint32 returned through a call that is not inlined is one HeapNumber per op\) -- the run cannot see boxing(?! -- )/, apply(ctx) { ctx.control.fb64NoinlineFlagDrop = true; } },
     // B-S1 (T3 FB64 SAB row). Both cheap: false -- fb64-sab-reread needs torture.mjs
     // applyFb64Variant (T9's sub-ctx never applies a variant), and fb64-sab-blind runs
     // the row to its 1024-chunk cap. fb64-sab-reread: ctx.FB64 = the reread variant,

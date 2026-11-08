@@ -34,7 +34,9 @@
 //     through the real forEach. Module-scope callback churns 0; a per-op closure
 //     (foreach-closure control) churns dozens. Gate <= 2.
 //
-//   FastBit64 lanes (B-S3 / B-S5, 1.7.0): see fb64Lanes below.
+//   FastBit64 lanes (B-S3 / B-S5, 1.7.0): see fb64Lanes below; the
+//     --no-turbo-inlining child (B-S4) and the d8 lane (B-S6): see
+//     fb64NoinlineLane / fb64D8Lane at the end.
 
 import { measureOps, GcProfiler, checkNoGc } from '@zakkster/lite-gc-profiler';
 import { spawnSync } from 'node:child_process';
@@ -42,7 +44,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fb64Variant, LIB_PATH } from './fb64-variants.mjs';
+import { fb64Variant, LIB_PATH, KEXPORT_KERNELS } from './fb64-variants.mjs';
 import { FB64_LANES, fb64Fixture, fb64LaneCallees, fb64FixtureMoved } from './fb64-lanes.mjs';
 
 const MASK = 0x0F0F0F0F;       // int32 mask (no bit 31): signedness-safe
@@ -267,6 +269,9 @@ export async function run(ctx) {
     // ---- B-S3 / B-S5 FastBit64: census, poisoning pass, inlined + witness +
     // scavenge lanes (see fb64Lanes); a throw is a fail row, never a crash
     try { await fb64Lanes(ctx, fails, baseline, bop, bopOpts); } catch (e) { fails.push('T6 FB64: lanes threw ' + e.constructor.name + ': ' + e.message); }
+    // B-S4: the same table in a --no-turbo-inlining child; B-S6: the d8 lane
+    try { fb64NoinlineLane(ctx, fails); } catch (e) { fails.push('T6 FB64 noinline: lane threw ' + e.constructor.name + ': ' + e.message); }
+    try { fb64D8Lane(ctx, fails); } catch (e) { fails.push('T6 FB64 d8: lane threw ' + e.constructor.name + ': ' + e.message); }
 
     // ---- per-lane composite B/op (signed gated, unsigned read-only/printed) -
     const bopByLane = [];
@@ -572,27 +577,42 @@ async function measureSmallK(h, fn, base, K) {
     return { perOp: valid >= 3 ? min : NaN, valid, window0 };
 }
 
-function d8Lane() {
+// One d8 run of a script in this directory: { skip } when there is no
+// pointer-compressed d8, else { counts: { <window>: scavenges }, results: the
+// RESULT lines, tail }. `flags` go after the four GC flags and before the
+// script, so a caller passing [] spawns exactly the FastBit1024 arguments.
+function d8Lane(script, flags) {
     const bin = process.env.FASTBIT_D8 || join(homedir(), '.jsvu', 'engines', 'v8', 'd8');
     if (!existsSync(bin)) return { skip: 'no d8 on this host (' + bin + '; set FASTBIT_D8 or install jsvu v8)' };
     let pc = null;
     try { pc = JSON.parse(readFileSync(join(dirname(bin), 'v8_build_config.json'), 'utf8')).pointer_compression; } catch (e) { pc = null; }
     if (pc !== true) return { skip: 'd8 at ' + bin + ' is not a pointer-compressed build (v8_build_config.json pointer_compression=' + pc + ')' };
-    const script = fileURLToPath(new URL('./d8-loadfrom.mjs', import.meta.url));
-    const r = spawnSync(bin, ['--expose-gc', '--trace-gc', '--min-semi-space-size=1', '--max-semi-space-size=1', script], { encoding: 'utf8', timeout: 60000 });
+    const path = fileURLToPath(new URL(script, import.meta.url));
+    const r = spawnSync(bin, ['--expose-gc', '--trace-gc', '--min-semi-space-size=1', '--max-semi-space-size=1', ...flags, path], { encoding: 'utf8', timeout: 60000 });
     const out = (r.stdout || '') + (r.stderr || '');
     const counts = {};
+    const results = [];
     let cur = null;
-    let result = null;
     for (const line of out.split('\n')) {
         const mb = /^MARK begin (\S+)/.exec(line);
         if (mb) { cur = mb[1]; counts[cur] = 0; continue; }
         if (line.startsWith('MARK end')) { cur = null; continue; }
         if (cur !== null && line.includes('Scavenge')) counts[cur]++;
+        if (line.startsWith('RESULT ')) results.push(line);
+    }
+    return { counts, results, tail: out.split('\n').filter((l) => l && !l.includes('Scavenge')).slice(-3).join(' | ') };
+}
+
+// The FastBit1024 loadFrom lane (d8-loadfrom.mjs): { skip } or { loads, box, result, tail }.
+function fb1024D8Lane() {
+    const d = d8Lane('./d8-loadfrom.mjs', []);
+    if (d.skip !== undefined) return d;
+    let result = null;
+    for (const line of d.results) {
         const rm = /^RESULT size=(\d+) want=(\d+)/.exec(line);
         if (rm) result = rm[1] === rm[2];
     }
-    return { loads: counts.loadFrom, box: counts.box, result, tail: out.split('\n').filter((l) => l && !l.includes('Scavenge')).slice(-3).join(' | ') };
+    return { loads: d.counts.loadFrom, box: d.counts.box, result, tail: d.tail };
 }
 
 async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
@@ -680,7 +700,7 @@ async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
     ctx.measures.fb1024ImgAlloc = alloc;
 
     // d8 pointer-compressed lane
-    const d = d8Lane();
+    const d = fb1024D8Lane();
     ctx.measures.fb1024ImgD8 = d;
     if (d.skip === undefined) {
         if (d.result !== true || !(d.loads <= 2) || !(d.box >= 2)) fails.push('T6 FB1024 img: d8 lane loadFrom scavenges=' + d.loads + ' (expected <= 2 per 1e5), box control=' + d.box + ' (expected >= 2), result=' + d.result + ' -- ' + d.tail);
@@ -919,4 +939,109 @@ async function fb64Lanes(ctx, fails, baseline, bop, bopOpts) {
     if (!(sc <= 2)) fails.push('T6 FB64 scavenge mix: all ' + ops.length + ' lanes churned ' + sc + ' scavenges over 2e6 ops (expected <= 2; NaN = an unclassifiable GC, fail closed)');
     const movedMix = built === null ? fb64FixtureMoved(f) : null;
     if (movedMix !== null) fails.push('T6 FB64 scavenge mix: a read-only word moved: ' + movedMix);
+}
+
+// ---- B-S4 (1.7.0) FastBit64 lanes under --no-turbo-inlining (child) --------
+// t6-fb64-noinline.mjs runs the SAME FB64_LANES table on the kexport variant
+// (its private kernels exported and verified TurboFan as callees) in a child
+// spawned with the torture flags + --no-turbo-inlining, and prints one
+// `RESULT <json>` line. Gated here: the child ran (no spawn error, exit 0,
+// within FB64_NOINLINE_TIMEOUT_MS), exactly one parsable RESULT, the flag in
+// the child's own execArgv, variant kexport built with its 4 kernels all
+// TurboFan, every lane verified-optimized (status 'optimized'), every
+// non-control lane < 0.1 B/op with >= 3 valid windows, the u32 control lane
+// >= 15.9 B/op with >= 3 valid (a uint32 returned through a call that is not
+// inlined is one HeapNumber per op: proof the run can see boxing), and no
+// fixture word moved. JSON carries NaN as null: every number read here goes
+// through num(), so a null reads NaN (fails closed), never 0. The child never
+// poisons feedback (A5: fb64Poison stays the one call site).
+// ctx.control.fb64NoinlineFlagDrop (control fb64-noinline-flag-drop) spawns
+// the child WITHOUT --no-turbo-inlining, everything else identical: the
+// control lane inlines, reads ~0 B/op, and its >= 15.9 row must fail.
+const FB64_NOINLINE_FLAGS = ['--allow-natives-syntax', '--expose-gc', '--min-semi-space-size=4', '--max-semi-space-size=4'];
+const FB64_NOINLINE_TIMEOUT_MS = 180000;   // generous: the child takes ~5 s on an idle host
+const num = (x) => (typeof x === 'number' ? x : NaN);
+
+function fb64NoinlineLane(ctx, fails) {
+    const F = (m) => fails.push('T6 FB64 noinline: ' + m);
+    const script = fileURLToPath(new URL('./t6-fb64-noinline.mjs', import.meta.url));
+    const flags = ctx.control.fb64NoinlineFlagDrop === true ? FB64_NOINLINE_FLAGS : [...FB64_NOINLINE_FLAGS, '--no-turbo-inlining'];
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [...flags, script], {
+        env: { ...process.env, FB64_VARIANT: 'kexport' },
+        encoding: 'utf8',
+        timeout: FB64_NOINLINE_TIMEOUT_MS,
+        maxBuffer: 1 << 24
+    });
+    const wallMs = Date.now() - t0;
+    const tail = () => ((r.stderr || '') + (r.stdout || '')).split('\n').filter((l) => l && !l.startsWith('RESULT ')).slice(-3).join(' | ');
+    if (r.error) { F('child spawn error ' + (r.error.code || '') + ' ' + r.error.message + ' (timeout ' + FB64_NOINLINE_TIMEOUT_MS + ' ms, signal ' + r.signal + ') -- fail closed'); return; }
+    if (r.status !== 0) { F('child exited ' + r.status + (r.signal ? ' (signal ' + r.signal + ')' : '') + ' -- fail closed: ' + tail()); return; }
+    const lines = (r.stdout || '').split('\n').filter((l) => l.startsWith('RESULT '));
+    if (lines.length !== 1) { F('child printed ' + lines.length + ' RESULT line(s) (want exactly 1) -- fail closed: ' + tail()); return; }
+    let res;
+    try { res = JSON.parse(lines[0].slice(7)); } catch (e) { F('child RESULT is not JSON (' + e.message + ') -- fail closed'); return; }
+    if (res === null || typeof res !== 'object' || !Array.isArray(res.execArgv) || !Array.isArray(res.lanes) || !Array.isArray(res.fails)) { F('child RESULT lacks execArgv / lanes / fails -- fail closed'); return; }
+    const flagOk = res.execArgv.includes('--no-turbo-inlining');
+    const kernels = Array.isArray(res.kernels) ? res.kernels : [];
+    const kernelsTf = Array.isArray(res.kernelsTurbofan) ? res.kernelsTurbofan : [];
+    const lanes = res.lanes.map((l) => ({ name: String(l.name), control: l.control === true, perOp: num(l.perOp), window0: num(l.window0), valid: num(l.valid), status: String(l.status) }));
+    ctx.measures.fb64Noinline = { variant: res.variant, execArgv: res.execArgv.join(' '), flagOk, kernels, kernelsTurbofan: kernelsTf, lanes, moved: res.moved, wallMs };
+    if (!flagOk) F('child execArgv [' + res.execArgv.join(' ') + '] lacks --no-turbo-inlining: the run is inlined and cannot see a non-inlined box -- fail closed');
+    if (res.pins !== true) F('child semi-space pins not both 4 (execArgv [' + res.execArgv.join(' ') + ']) -- fail closed');
+    if (res.variant !== 'kexport') F('child variant ' + JSON.stringify(res.variant) + ' (want "kexport") -- fail closed');
+    for (const f of res.fails) F('child: ' + f);
+    if (kernels.length !== KEXPORT_KERNELS.length || kernelsTf.length !== KEXPORT_KERNELS.length) {
+        F('kexport kernels verified TurboFan [' + kernelsTf.join(',') + '] of callees [' + kernels.join(',') + '] (want all of [' + KEXPORT_KERNELS.join(',') + ']) -- fail closed');
+    }
+    const want = FB64_LANES.map((L) => L.name).join(',');
+    if (lanes.length !== FB64_LANES.length || lanes.some((l, i) => l.name !== FB64_LANES[i].name)) F('child lanes [' + lanes.map((l) => l.name).join(',') + '] != FB64_LANES [' + want + '] -- fail closed');
+    // the control flag is the parent's, never the child's (a child marking every lane control would pass)
+    lanes.forEach((l, i) => { l.control = i < FB64_LANES.length && FB64_LANES[i].control === true; });
+    for (const l of lanes) {
+        const note = l.status === 'optimized' ? '' : ' -- ' + l.status;
+        if (l.control) {
+            if (!(l.valid >= 3) || !(l.perOp >= 15.9)) F('control lane ' + l.name + ' = ' + fmt3(l.perOp) + ' B/op, valid=' + l.valid + ' (expected >= 15.9, >= 3 valid: a uint32 returned through a call that is not inlined is one HeapNumber per op) -- the run cannot see boxing' + note);
+            else if (note !== '') F('control lane ' + l.name + ' not verified-optimized' + note);
+        } else if (!(l.valid >= 3) || !(l.perOp < 0.1)) {
+            F('lane ' + l.name + ' = ' + fmt3(l.perOp) + ' B/op, valid=' + l.valid + ' (expected < 0.1, >= 3 valid)' + note);
+        } else if (note !== '') F('lane ' + l.name + ' not verified-optimized' + note);
+    }
+    if (res.moved !== null) F('a read-only fixture word moved: ' + res.moved);
+}
+
+// ---- B-S6 (1.7.0, amended by SPEC-fastbit64 A7 + A8) FastBit64 d8 lane ---
+// d8-fb64.mjs on words 0x40000000 / -0x40000001 (not 31-bit Smis), twice:
+// flags [] = inlined: the READ window GATED (read scavenges <= 2 per 1e6 ops, A8; box
+// >= 2, result ok); ['--no-turbo-inlining']: gated only on a clean harness
+// (result ok, box >= 2), its read count REPORTED. The STORE window (setWords from
+// memory + loadFrom) is REPORTED in both runs, PENDING FB64-PC: on a
+// pointer-compressed engine each out-of-Smi word stored into a FastBit64 field
+// is a fresh HeapNumber even inlined (the B.B3 finding). A missing or
+// non-numeric read / store count fails closed in either run, REPORTED or not.
+// No d8 / not pointer-compressed = one named SKIP (measures.fb64D8.skip), never ok.
+function fb64D8Run(flags) {
+    const d = d8Lane('./d8-fb64.mjs', flags);
+    if (d.skip !== undefined) return d;
+    let result = null;
+    for (const line of d.results) {
+        const rm = /^RESULT ok=(true|false)\b/.exec(line);
+        if (rm) result = rm[1] === 'true';
+    }
+    return { read: d.counts.read, store: d.counts.store, box: d.counts.box, result, tail: d.tail };
+}
+
+const isCount = (n) => Number.isInteger(n) && n >= 0;
+
+function fb64D8Lane(ctx, fails) {
+    const inl = fb64D8Run([]);
+    if (inl.skip !== undefined) { ctx.measures.fb64D8 = { skip: inl.skip }; return; }
+    const noinl = fb64D8Run(['--no-turbo-inlining']);
+    if (noinl.skip !== undefined) { ctx.measures.fb64D8 = { skip: noinl.skip }; fails.push('T6 FB64 d8: the --no-turbo-inlining run skipped after the inlined run ran (' + noinl.skip + ') -- fail closed'); return; }
+    ctx.measures.fb64D8 = { inl, noinl };
+    if (inl.result !== true || !(inl.read <= 2) || !(inl.box >= 2)) fails.push('T6 FB64 d8: inlined lane read scavenges=' + inl.read + ' (expected <= 2 per 1e6 ops), box control=' + inl.box + ' (expected >= 2), result=' + inl.result + ' (store scavenges=' + inl.store + ' REPORTED, PENDING FB64-PC) -- ' + inl.tail);
+    if (noinl.result !== true || !(noinl.box >= 2)) fails.push('T6 FB64 d8: --no-turbo-inlining lane harness not clean: box control=' + noinl.box + ' (expected >= 2), result=' + noinl.result + ' (read scavenges=' + noinl.read + ', store scavenges=' + noinl.store + ' REPORTED, not gated) -- ' + noinl.tail);
+    for (const [run, x] of [['inlined', inl], ['--no-turbo-inlining', noinl]]) {
+        if (!isCount(x.read) || !isCount(x.store)) fails.push('T6 FB64 d8: ' + run + ' lane read / store window count missing or not a count (read=' + x.read + ', store=' + x.store + ') -- fail closed -- ' + x.tail);
+    }
 }

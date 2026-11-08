@@ -56,6 +56,7 @@ test('X-10 the real MEASURE lines against the soak-lane checker (formats cannot 
     const base = TIER_NAMES.map((t) => '[' + t + '] fails=0 green=0')
         .concat(FAITHFUL_NAMES.map((t) => '[' + t + ' faithful fb1024Img copy] fails=0 green=0'))
         .concat(['MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: no d8 on PATH (set FASTBIT_D8)',
+            'MEASURE FastBit64 d8 pointer-compressed lane SKIP: no d8 on PATH (set FASTBIT_D8)',
             'MEASURE soak live=0 findings=0 postDrainKB=[1,2,3,4] growthKB=15', 'ok']);
     const c = { d8: 'skip', cycles: 4096 };
     assert.deepEqual(checkTortureLog(base.concat([ran]).join('\n') + '\n', c), []);

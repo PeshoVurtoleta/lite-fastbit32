@@ -321,6 +321,21 @@ if (m.fb64ByLane) {
     }
 }
 if (m.fb64Scavenges !== undefined) console.error('MEASURE FastBit64 scavenge mix (every lane op once per op) over 2e6 = ' + m.fb64Scavenges + ' [gated <=2]');
+if (m.fb64Noinline) {
+    const n = m.fb64Noinline;
+    for (const lane of n.lanes) {
+        console.error('MEASURE FastBit64 noinline lane ' + lane.name + ' = ' + Number(lane.perOp).toFixed(3) + ' B/op (window0 ' + Number(lane.window0).toFixed(3) + ', ' + lane.valid + ' valid, ' + lane.status + ')' + (lane.control ? ' [gated >=15.9]' : ' [gated <0.1]'));
+    }
+    console.error('MEASURE FastBit64 noinline child variant=' + n.variant + ' --no-turbo-inlining in execArgv=' + n.flagOk + ' kernels verified TurboFan ' + n.kernelsTurbofan.length + '/' + n.kernels.length + ' [' + n.kernelsTurbofan.join(',') + '] lanes=' + n.lanes.length + ' wallMs=' + n.wallMs + ' [gated: flag in execArgv, variant kexport, 4/4 kernels, every lane verified]');
+}
+if (m.fb64D8) {
+    const d = m.fb64D8;
+    if (d.skip !== undefined) console.error('MEASURE FastBit64 d8 pointer-compressed lane SKIP: ' + d.skip);
+    else {
+        console.error('MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + d.inl.read + ' per 1e6 ops [gated <=2], store scavenges=' + d.inl.store + ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + d.inl.box + ' [gated >=2], result=' + d.inl.result);
+        console.error('MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + d.noinl.read + ' per 1e6 ops [REPORTED], store scavenges=' + d.noinl.store + ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + d.noinl.box + ' [gated >=2], result=' + d.noinl.result);
+    }
+}
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);
 
 h.stopScavengeWatch();
