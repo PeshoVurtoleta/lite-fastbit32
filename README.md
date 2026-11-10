@@ -37,9 +37,9 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size** (min+gz) | **1059 B** FastBit32 alone; 3511 B whole module (see note) | ~8KB | ~6KB |
+| **Bundle size** (min+gz) | **1064 B** FastBit32 alone; 4784 B whole module (see note) | ~8KB | ~6KB |
 
-> Bundle sizes of the 1.6.0 build (REPORTED: one run, 2026-11-05): an entry file `export { <names> } from '@zakkster/lite-fastbit32'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 3511 B (2254 B in 1.5.0). `{ FastBit32 }` alone: 1059 B (unchanged; it carries no FastBit1024 code). `{ FastBit1024 }` alone: 2350 B (1006 B in 1.5.0; the 1.6.0 members are on the class, so they ship with it). Every export except FastBit1024 (VERSION included): 1486 B (1485 B in 1.5.0).
+> Bundle sizes of the 1.7.0 build (REPORTED: one run, 2026-11-10): an entry file `export { <names> } from '<the module>'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 4784 B (3515 B in 1.6.1). `{ FastBit32 }` alone: 1064 B (1064 B in 1.6.1; it carries no FastBit1024 or FastBit64 code). `{ FastBit1024 }` alone: 2347 B (2350 B in 1.6.1). `{ FastBit64 }` alone: 2103 B (new in 1.7.0). Every export except FastBit1024 and FastBit64 (VERSION included): 1489 B (1490 B in 1.6.1, where only FastBit1024 is excluded).
 
 > FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0); for 33 to 64 flags, [`FastBit64`](#fastbit64-64-flags-in-two-words) (1.7.0).
 
@@ -485,7 +485,7 @@ entity.lo; entity.hi;      // 8, -2147483392 (bit 63 set -> hi is negative)
 entity.has(64);            // RangeError: fails closed, nothing written
 ```
 
-**Input law (fail closed).** Every index is an integer 0..63, else a `RangeError` (a `TypeError` for a Symbol, a BigInt or a null-prototype object); a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once before the throw. Constructor and `setWords` / `equalsWords` words are integers in [-2^31, 2^32) in the signed or the unsigned form, stored `| 0`, else a `RangeError`. A method that takes another set (`hasAll`, `union`, `equals`, ...) requires a real `FastBit64` (subclasses pass); anything else, a `{ lo, hi }` look-alike, a `Proxy`, an `Object.create(FastBit64.prototype)` forgery, a `FastBit32` or a `FastBit1024`, throws a `TypeError`. That brand check is V8's own private-field check, so the message text is the engine's, not the package's. `lo` and `hi` are read-only getters returning the signed words.
+**Input law (fail closed).** Every index is an integer 0..63, else a `RangeError` (a `TypeError` for a Symbol, a BigInt or a null-prototype object); a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once before the throw (a conversion that itself throws propagates its own error). Constructor and `setWords` / `equalsWords` words are integers in [-2^31, 2^32) in the signed or the unsigned form, stored `| 0`, else a `RangeError`. A method that takes another set (`hasAll`, `union`, `equals`, ...) requires a real `FastBit64` (subclasses pass); anything else, a `{ lo, hi }` look-alike, a `Proxy`, an `Object.create(FastBit64.prototype)` forgery, a `FastBit32` or a `FastBit1024`, throws a `TypeError`. That brand check is V8's own private-field check, so the message text is the engine's, not the package's. `lo` and `hi` are read-only getters returning the signed words.
 
 | Member | Returns | Notes |
 |---|---|---|
@@ -512,7 +512,7 @@ entity.has(64);            // RangeError: fails closed, nothing written
 | `imageLength` | `3` | instance and static, `readonly` |
 | `saveInto(out, offset = 0)` / `loadFrom(src, offset = 0)` | next offset | the FastBit1024 image at capacity 64, `[0x46420840, lo, hi]` |
 | `serialize()` / `FastBit64.deserialize(src, offset = 0)` | `Int32Array` / instance | COLD, allocate |
-| `clone()`, `toArray()`, `fromArray(bits)` | instance / `number[]` / `this` | COLD, allocate; `fromArray` checks every index before its single write and overwrites |
+| `clone()`, `toArray()`, `fromArray(bits)` | instance / `number[]` / `this` | COLD, allocate; `fromArray` checks every index before its single write and overwrites; a detached TypedArray reads as length 0, so the set is cleared (no throw) |
 | `toBinaryString(padded = true)` | `string` | 64 chars, bit 63 first; `false` drops leading zeros (`'0'` when empty) |
 
 **Not carried from FastBit32** (a 64-bit mask is not one number): `static rangeMask(start, end)` (use `addRange`), `static nextSubset` / `nextCombination` (the result would be two words), the `serialize()` number / `deserialize(number)` form (the image is an `Int32Array`), the permissive modulo-32 input law and the `>>> 0` constructor storage. **Not carried from FastBit1024:** `acquire` / `release` / `size` (`nextClearBit()` then `add()` does a 64-slot pool; for 4096 slots see the recipe below). The `forEachArray` / `forEachMapped` / `BitMapper` helpers stay 32-bit and are not extended.
@@ -523,7 +523,7 @@ entity.has(64);            // RangeError: fails closed, nothing written
 
 **Save and restore.** The image is `[0x46420840, lo, hi]`, the same words a `FastBit1024` of capacity 64 writes. `FastBit64.loadFrom` accepts any FastBit1024-format image (capacity 1..1024) whose set bits are all below 64 (a `RangeError` otherwise, nothing written), and `FastBit1024.loadFrom` accepts a FastBit64 image: each class loads the other's.
 
-**64 x 64 = 4096 recipe (1.7.0, a doc recipe, not an export).** `Bits4096` is the FastBit1024 shape one size up: an `Int32Array(128)` of words and two `FastBit64` summaries over its 64 slots of 64 bits (`active`: the slot has a set bit; `full`: the slot is all ones). `acquire()` and `lowest()` are O(1) through the summaries; every index fails closed (a `RangeError`, state unchanged). Retained bytes: nominal (p8), not yet measured.
+**64 x 64 = 4096 recipe (1.7.0, a doc recipe, not an export).** `Bits4096` is the FastBit1024 shape one size up: an `Int32Array(128)` of words and two `FastBit64` summaries over its 64 slots of 64 bits (`active`: the slot has a set bit; `full`: the slot is all ones). `acquire()` and `lowest()` are O(1) through the summaries; every index fails closed (a `RangeError`; a `TypeError` for a Symbol, a BigInt or a null-prototype object; state unchanged). Retained bytes: nominal (p8), not yet measured.
 
 ```js
 import { FastBit64 } from '@zakkster/lite-fastbit32';
@@ -621,11 +621,11 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 <details>
 <summary><strong>FastBit64 zero-GC notes</strong></summary>
 
-**Node (DETERMINISTIC).** 0 B/op in torture T6 (an allocation count gated in `npm run torture`, verified TurboFan code, below 0.1 B/op) on 24 FastBit64 lanes, each run inlined and again in a child under `--no-turbo-inlining`: `has`, `add+remove`, `toggle`, `hasAll`, `hasAny/hasNone`, `isSubsetOf/equals`, `union/diff/intersect`, `count/countMasked`, `lowest/highest`, `nextClearBit/hiClear`, `nextSetBit walk`, `prevSetBit walk`, `rank/select`, `rank(31)/rank(63)`, `addRange/removeRange`, `countRange`, `setWords/equalsWords`, `lo/hi getters`, `isEmpty/isFull`, `clear`, `forEach (hoisted cb)`, `saveInto`, `loadFrom` and `copy`. `serialize`, `deserialize`, `clone`, `toArray`, `fromArray` and `toBinaryString` are COLD and allocate. Every stored word is an int32, so every value stays in the Smi range on Node (32-bit Smi). A source pin in `npm test` (Hygiene) requires every numeric field of a `FastBit32.js` class to start as a Smi (`#lo = 0; #hi = 0;`), because a bare `#lo;` field boxes every out-of-Smi store on a pointer-compressed engine.
+**Node (DETERMINISTIC).** 0 B/op on Node (node 26.x; T6 SKIPs below V8 14) in torture T6 (an allocation count gated in `npm run torture`, verified TurboFan code, below 0.1 B/op) on 24 FastBit64 lanes, each run inlined and again in a child under `--no-turbo-inlining`: `has`, `add+remove`, `toggle`, `hasAll`, `hasAny/hasNone`, `isSubsetOf/equals`, `union/diff/intersect`, `count/countMasked`, `lowest/highest`, `nextClearBit/hiClear`, `nextSetBit walk`, `prevSetBit walk`, `rank/select`, `rank(31)/rank(63)`, `addRange/removeRange`, `countRange`, `setWords/equalsWords`, `lo/hi getters`, `isEmpty/isFull`, `clear`, `forEach (hoisted cb)`, `saveInto`, `loadFrom` and `copy`. `serialize`, `deserialize`, `clone`, `toArray`, `fromArray` and `toBinaryString` are COLD and allocate. Every stored word is an int32, so every value stays in the Smi range on Node (32-bit Smi). A source pin in `npm test` (Hygiene) requires every numeric field of a `FastBit32.js` class to start as a Smi (`#lo = 0; #hi = 0;`), because a bare `#lo;` field boxes every out-of-Smi store on a pointer-compressed engine.
 
 **Pointer-compressed engines (31-bit Smi: Chrome, Electron).** Two statements.
 
-- (a) The d8 lane (d8 15.7.37, pointer-compressed) gates the read, store and mutator (`toggle` / `add` / `union`) windows at <= 2 scavenges per 1e6 ops with the inlined build; the `--no-turbo-inlining` d8 run is REPORTED, not gated. The remaining cost: a word outside the 31-bit Smi range (bits 31 and 30 differ) boxes when it crosses a call V8 does not inline (the `setWords` / `equalsWords` arguments, the `lo` / `hi` returns, kernel calls when the inlining budget runs out), in Maglev-compiled `loadFrom` (one box per call), and in interpreter or Sparkplug code. An instance with such a word costs about 24 B more than a plain two-field object (two in-place number boxes).
+- (a) The d8 lane (d8 15.7.37, pointer-compressed) gates the read, store and mutator (`toggle` / `add` / `union`) windows at <= 2 scavenges per 1e6 ops with the inlined build; the `--no-turbo-inlining` d8 run is REPORTED, not gated. The remaining cost: a word outside the 31-bit Smi range (bits 31 and 30 differ) boxes when it crosses a call V8 does not inline (the `setWords` / `equalsWords` arguments, the `lo` / `hi` returns, kernel calls when the inlining budget runs out), in Maglev-compiled `loadFrom` (one box per call, nominal), and in interpreter or Sparkplug code. An instance with such a word costs about 24 B more than a plain two-field object (two in-place number boxes; nominal).
 - (b) REPORTED, not gated (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2 harness): once a d8 process holds an out-of-Smi instance, the mutators on Smi words were measured slower, `toggle` about 1.0 -> about 3.7 ns/op, with no allocation either way. Treat it as a measurement of that process, not a law.
 
 </details>
@@ -743,7 +743,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 
 ## Testing
 
-`npm test` runs 880 tests (node:test, 115 suites; 879 pass, 1 skip: the V8 11-13 row; DETERMINISTIC; run 2026-11-05, Node v26.8.2). The package scripts:
+`npm test` runs 1148 tests (node:test, 155 suites; 1146 pass, 2 skip: the V8 11-13 row and the torture-log row that runs only with FB64_TORTURE_LOG set; DETERMINISTIC; run 2026-11-10, Node v26.8.2). The package scripts:
 
 | Script | What it does |
 |---|---|

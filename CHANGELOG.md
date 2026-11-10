@@ -10,8 +10,8 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - `FastBit64`: 64 flags in two signed int32 words (`lo` bits 0..31, `hi` bits 32..63), fail-closed on every index
   and word, half-open ranges, the FastBit1024 image at capacity 64 (`[0x46420840, lo, hi]`, each class loads the
   other's). Docs: README section "FastBit64: 64 flags in two words" and the llms.txt section carry the member
-  table, the input law and two runnable recipes: a 64 x 64 = 4096 `Bits4096` pool (retained bytes nominal, not yet
-  measured) and the name -> index `Map` recipe for names above 32.
+  table (README) and member list (llms.txt), the input law and two runnable recipes: a 64 x 64 = 4096 `Bits4096`
+  pool (retained bytes nominal, not yet measured) and the name -> index `Map` recipe for names above 32.
 - Source rule (FB64-PC, A12): every numeric field of a `FastBit32.js` class starts as a Smi (`#lo = 0; #hi = 0;`);
   the brand field is the only bare field. A Hygiene source pin in `npm test` enforces it (a bare `#x;` field boxes
   every out-of-Smi store on a pointer-compressed engine).
@@ -28,18 +28,30 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - T7 retention row for FastBit64 (live per cycle 0, gated 0 each; control `fb64-soak-retain`).
 - T6 FastBit64 lanes: 24 inlined lanes plus one u32 control, verified TurboFan, below 0.1 B/op (DETERMINISTIC).
   The u32 witness reads >= 15.9 B/op and its store reads < 0.1 (FB64-PC A16); a public-field read witness; one
-  poisoning call site; the method census checked both ways (13 methods); 5 controls (fb64-poison-row-drop, fb64-u32-storage, fb64-bop-box, fb64-poison-opts-drop, fb64-noinline-flag-drop). The same lanes run in a
+  poisoning call site; the method census checked both ways (13 methods); 5 controls (fb64-poison-row-drop,
+  fb64-u32-storage, fb64-bop-box, fb64-poison-opts-drop, fb64-noinline-flag-drop). The same lanes run in a
   child under `--no-turbo-inlining`.
-- T3 FastBit64 SAB race row: 0 fail-open; the re-read control reads >= 20 within 1024 x 20,000 calls; SKIP under 3
-  cores (named); lane S requires the ran line; 2 controls (fb64-sab-reread, fb64-sab-blind).
-- d8 pointer-compressed lane (d8 15.7.37): the inlined read, store and mutator (toggle / add / union) windows are each
-  gated at <= 2 scavenges per 1e6 ops; the `--no-turbo-inlining` d8 run is REPORTED. FastBit1024 `loadFrom` has its
-  own d8 window (1e6 loads, gate <= 2). Final torture log: inlined 0 / 0 / 0 per 1e6, noinline 69 / 46 / 0
-  (REPORTED), FastBit1024 0 per 1e6, box control 5. Revert checks: a bare `#lo; #hi;` mutant reads store 46 /
-  mutator 46, a one-box-per-read mutant reads 12, FastBit1024 mutants read 11 per 1e6.
-- Torture controls: 44 at 1.6.1 -> 52 (8 FastBit64 controls).
-- REPORTED (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2 harness): once a d8 process holds an out-of-Smi FastBit64, mutators
-  on Smi words were measured slower (`toggle` about 1.0 -> about 3.7 ns/op, no allocation either way); not gated.
+- T3 FastBit64 SAB race row: 0 fail-open; the writer holds each value, a dwell witness, fail closed: >= 20,000 of
+  200,000 sampled reads see the invalid high word and >= 10 of 20 bursts see both values; the re-read control
+  reads >= 20 within 1024 x 20,000 calls; SKIP under 3 cores (named); lane S requires the ran line; 3 controls
+  (fb64-sab-reread, fb64-sab-blind, fb64-sab-flip). REPORTED, hosted (CI run 42760677836, 2026-11-10,
+  GitHub-hosted ubuntu and macos, node 20-26.8.2, 10 legs, one run per leg): dwell 80,763-114,510 of 200,000,
+  mixed 15-20 of 20, reread control 58-1,106 fail-opens in the first chunk; shipped 0 on every leg. REPORTED,
+  local qa torture (2026-11-10, one run, M4 Pro, node v26.8.2, host PRELIMINARY: load1 5.71, baseline 2.21):
+  dwell 104,394 / 200,000, mixed 20 / 20.
+- d8 pointer-compressed lane (d8 15.7.37): the inlined read, store and mutator (toggle / add / union) windows are
+  each gated at <= 2 scavenges per 1e6 ops; the `--no-turbo-inlining` d8 run is REPORTED. FastBit1024 `loadFrom`
+  has its own d8 window (1e6 loads, gate <= 2). Final torture log (2026-11-10): inlined 0 / 0 / 0 per 1e6,
+  noinline 69 / 46 / 0 (REPORTED), FastBit1024 0 per 1e6, box control 5. Revert checks: a bare `#lo; #hi;` build
+  reads store 45 / mutator 45-46 per 1e6 (3 runs, 2026-11-10, qa); the one-box-per-read mutant and the FastBit1024
+  mutants each read above the gate of 2 per 1e6 (revert checks at landing, FB64-PC A10 / A11; not re-run this cycle).
+- Torture controls: 44 at 1.6.1 -> 53 (9 FastBit64 controls).
+- Totals: `npm test`: 1148 tests, 1146 pass, 0 fail, 2 skip (2026-11-10, node v26.8.2). The qa suites: FastBit64QA
+  (a 400,000-op differential against a BigInt model and the pre-FB64-PC class), FastBit64TortureQA and
+  FastBit64DocsQA.
+- REPORTED (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2
+  harness): once a d8 process holds an out-of-Smi FastBit64, mutators on Smi words were measured slower (`toggle`
+  about 1.0 -> about 3.7 ns/op, no allocation either way); not gated.
 
 ### Changed
 

@@ -912,11 +912,11 @@ export class FastBit1024 {
  * FastBit64 -- 64 flags in one flat object: two signed int32 words, bits 0..31 in
  * `lo` and 32..63 in `hi` (SC-4). Every index FAILS CLOSED (Q-3), like FastBit1024.
  * Every op is O(1) and loop-free except forEach / toArray / fromArray (O(k)). loadFrom / deserialize are O(image words) (<= 33).
- * 0 B/op on every hot op on Node, inlined and under --no-turbo-inlining (every value is an int32).
+ * 0 B/op on every hot op on Node (node 26.x; T6 SKIPs below V8 14), inlined and under --no-turbo-inlining (every value is an int32).
  * Pointer-compressed engines (31-bit Smi: Chrome / Electron): a d8 lane gates the read, store and mutator
  * windows at <= 2 scavenges per 1e6 ops inlined; a word outside the Smi range still boxes across a
- * non-inlined call, in Maglev-compiled loadFrom and in interpreter / Sparkplug code, and an instance costs
- * about 24 B more than a plain two-field object. REPORTED: on d8, once the process holds an out-of-Smi
+ * non-inlined call, in Maglev-compiled loadFrom (one box per call, nominal) and in interpreter / Sparkplug code, and an instance costs
+ * about 24 B more than a plain two-field object (nominal). REPORTED: on d8, once the process holds an out-of-Smi
  * instance, mutators on Smi words were measured slower (toggle about 1.0 -> about 3.7 ns/op), no allocation.
  */
 export class FastBit64 {
@@ -1005,7 +1005,8 @@ export class FastBit64 {
     /**
      * An Array or a TypedArray, else TypeError; every element an index 0..63, else RangeError
      * (TypeError for a Symbol / BigInt / null-prototype element, e.g. a non-empty BigInt64Array);
-     * all checked before the single write; overwrites.
+     * all checked before the single write; overwrites. A detached TypedArray reads as length 0, so the set is
+     * cleared (no throw).
      */
     fromArray(bits: readonly number[] | (ArrayLike<number> & ArrayBufferView)): this;
     toBinaryString(padded?: boolean): string;   // padded (default true): 64 chars, bit 63 first; false drops leading zeros ('0' when empty)
