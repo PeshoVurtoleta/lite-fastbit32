@@ -629,7 +629,106 @@ cross-platform half.
 
 ## E. Audit 1.7 findings
 
-Filled after the audit 1.7 triage (verdicts only, pointing at audit/2026-11-10/ by name).
+Audit 1.7 ran on the frozen commit 9cb0213 (FastBit32.js 95ab856e) with two auditors: A
+(claude-opus-5-5) and B (claude-fable-5-2). Cross-checks: an Opus 5.5 sub-agent on B's findings
+(independent of B by model and context, not by memory), and CONFIRM, a separate Fable 5.2 session
+with fresh context and the package
+memory loaded (NOT independent). Triage by the maintainer on 2026-11-10. Verdicts only here; the
+evidence is in `audit/2026-11-10/RECONCILE.md`, `audit/2026-11-10/opus-5.5_FINDINGS.md` and
+`audit/2026-11-10/fable-5.2_FINDINGS.md`. No cross-check refuted any finding.
+
+### E1. Verdict table (U-1..U-21)
+
+Verdicts are RECONCILE's Step 3 rulings. FIX BEFORE 1.7.0 = must close before `/release 1.7.0`.
+
+| U | ids | severity | verdict | what |
+|---|---|---|---|---|
+| U-1 | B-1 A-1 A-2 | High | FIX LATER (S6); doc, pin, type rows before 1.7.0 | set object / `undefined` masks fail open |
+| U-2 | B-2 A-3 | Medium | FIX BEFORE 1.7.0 (docs only) | `value` / `serialize()` documented unsigned, signed after bit 31 |
+| U-3 | B-3 | Low | FIX BEFORE 1.7.0 (FIX-1) | `countRange(start, 31)` boxes its `>>> 0` mask |
+| U-4 | B-4 A-4 | Low | FIX LATER (S6, FB-03); docs before 1.7.0 | `>>> 0` widens the `value` field; README:81 inverted |
+| U-5 | B-5 | Low | FIX BEFORE 1.7.0 (FIX-5) | FastBit1024 methods do not brand-check the receiver |
+| U-6 | B-6 | Low | FIX BEFORE 1.7.0 (FIX-6) | d.ts does not reserve FastBit1024 / BitMapper private names |
+| U-7 | B-7 | Low | CARRIED (KNOWN FB-06, no ruling) | `forEachMapped(Object)` passes `undefined` as a `string` |
+| U-8 | B-8 A-6 | Low | FIX BEFORE 1.7.0 (docs) | shipped README / llms.txt name files that do not ship |
+| U-9 | B-9 | Low | FIX BEFORE 1.7.0 (docs) | `test:perf` called DETERMINISTIC, no workflow runs it |
+| U-10 | B-10 A-7 | Low | FIX BEFORE 1.7.0 (docs) | perf claims with no tier or provenance |
+| U-11 | B-11 | Info | FIX BEFORE 1.7.0 (docs) | `JSON.stringify` / `structuredClone` of FastBit64 give `{}` |
+| U-12 | B-12 | Info | CARRIED (KNOWN, the `/release` step) | tree versioned 1.6.1 with the 1.7.0 surface |
+| U-13 | B-13 A-9 | Test-gap | FIX BEFORE 1.7.0 (doc + pin; NOT FIX-13, see E2) | `FastBit64.forEach` mutation rule undocumented |
+| U-14 | B-14 A-13 | Test-gap | FIX BEFORE 1.7.0 (test rows) | FastBit64 mutants survive `npm test` |
+| U-15 | B-15 | Low | FIX BEFORE 1.7.0 (test-only pin) | Hygiene pin checks an initializer exists, not a Smi |
+| U-16 | B-16 A-5 | Test-gap | FIX BEFORE 1.7.0 (rows + `skipLibCheck: false`) | d.ts mutants pass `test:types` |
+| U-17 | B-17 | Test-gap | FIX BEFORE 1.7.0 (test rows) | no gate reads `sideEffects` / `engines` |
+| U-18 | A-8 | Info | CARRIED (KNOWN FB-06, no ruling) | BitMapper duplicate name keeps the stale reverse entry |
+| U-19 | A-10 | Low | FIX BEFORE 1.7.0 (docs) | README ships 21 non-ASCII code points |
+| U-20 | A-11 | Info | FIX BEFORE 1.7.0 (docs) | ci.yml says "6 T6 controls"; the tree has 11 |
+| U-21 | A-12 | Test-gap | FIX BEFORE 1.7.0 (test rows) | `FastBit64#loadFrom` reading `src.length` survives |
+
+U-15 severity is CONFIRM's re-grade (B said Test-gap); torture kills the mutant, `npm test` does not,
+and the README:624 / CHANGELOG:15-17 wording is false. Ruled separately (Q5, "Tighten the pin"):
+`bareFields()` requires an integer-literal initializer for every numeric field (brand excepted), so the
+docs then hold as written. Severity is overrulable by the maintainer.
+
+### E2. Declined: snapshot FastBit64 `hi` before `forEach` (CONFIRM's FIX-13)
+
+- **What happened.** CONFIRM proposed that `FastBit64.forEach` snapshot `#hi` before the walk, to
+  close U-13 (the mutation semantics were undocumented and a mutant survived `npm test` and torture).
+- **Root cause.** FastBit64 already follows FastBit1024's documented rule ("each word is read once
+  (snapshot)", llms.txt:229, README:411, d.ts:823). The orchestrator ran one script on both classes:
+  seeds {1, 5, 40}, the callback at 1 adds 3, removes 40, adds 50. FastBit64 visits `1,5,50` and so
+  does FastBit1024. FIX-13 would make the two classes diverge.
+- **Evidence.** `audit/2026-11-10/RECONCILE.md` sha256/8 b0a73dda (gitignored), audited commit 9cb0213,
+  "Disputed items" (U-13) and "Fix notes".
+- **Law.** Sibling classes share one documented iteration rule; fix the sentence and the pin, not
+  the behaviour.
+- **Gate.** PENDING: the fix burst lands the `FastBit64.forEach` doc sentence and a pin row matching
+  FastBit1024's rule. `FastBit64DocsQA.test.mjs:302` claims only "ascending, terminates" until then.
+
+### E3. Deferred designs: FIX-2 (fail closed on object arguments) and FIX-4 (FB-03 `| 0`)
+
+- **What happened.** Two fixes were proposed and ruled out for now (Q1, Q3), both to S6. FIX-2 makes
+  `equals`, `copy`, `fromArray` and the seven free iterators throw TypeError on a set object; U-1's
+  mask ops are SC-3 itself and FIX-2 leaves them as they are. FIX-4 applies `| 0` at the constructor /
+  `fromArray` / `deserialize` sites (U-4, FB-03).
+- **Root cause.** FIX-2 pre-empts the OPEN SC-3 and trips the S5QA "identical outcomes vs 1.4.0" row;
+  it is a behaviour change in a minor. FIX-4 pre-empts the OPEN SC-2 (option B is a 2.0.0 major:
+  `new FastBit32(0x80000000).value` changes) and turns 7 pinned rows red (FB-03, FB-04, T1 bit 31,
+  T1 bit -1, S3 parity, two-builders, S5 corpus floor) plus the parity pins. A-3's `serialize() >>> 0`
+  was also refused: every bit-31 word would box on a non-inlined call (CONFIRM: 77 vs 0 scavenges per 5e6
+  non-inlined calls; node v26.8.2, Apple M4 Pro, host PRELIMINARY; a count, not a timing; run count
+  not stated).
+- **Evidence.** `audit/2026-11-10/RECONCILE.md` sha256/8 b0a73dda (gitignored), audited commit 9cb0213,
+  Step 3 Q1 / Q2 / Q3 and "Fix notes". Design context: D4 (S6 / 2.0.0: SC-2 and SC-3).
+- **Law.** A behaviour change that moves pinned outcomes waits for the settle call that owns it; until
+  then the docs, the type rows and named pins state today's outcome.
+- **Gate.** PENDING: the fix burst lands the doc, `@ts-expect-error` and pin rows. The fixes themselves
+  are D4's Reopen-with (the S6 settle calls).
+
+### E4. Measurement trap: a tree without git history fails the git-pinned parity rows
+
+- **What happened.** Both auditors reported 37 test failures on their copy of the tree.
+- **Root cause.** The copy had no git history, so the rows that read `git show <sha>:FastBit32.js`
+  at a pinned commit, or an unshipped file such as ROADMAP.md, failed. CONFIRM's full-history tree of
+  9cb0213 gives 1148 tests / 1146 pass / 0 fail / 2 skip, the same as burst ae's closing verify.
+  Settled, not a finding.
+- **Evidence.** `audit/2026-11-10/RECONCILE.md` sha256/8 b0a73dda (gitignored), audited commit 9cb0213,
+  "Test totals" paragraph and the Unproven table.
+- **Law.** Compare a mutant against an unmutated copy of the same tree, never against "0 failures".
+- **Gate.** None. PENDING: a rule for the next audit brief; AUDIT-BRIEF.md has none.
+
+### E5. Process: what the second auditor added (one data point)
+
+- **What happened.** Two auditors ran on one brief; RECONCILE's process-trial "Reading" line records:
+  "the second auditor found 9 rows the first did not (6 new, 1 partly KNOWN), the first found 4 the
+  second did not (3 new); neither produced a false positive. On this package a single auditor would
+  have missed a quarter (B alone: 3 of the 12 new rows) to a half (A alone: 6 of 12) of the new rows".
+- **Root cause.** Not applicable; this is a yield record.
+- **Evidence.** `audit/2026-11-10/RECONCILE.md` sha256/8 b0a73dda (gitignored), audited commit 9cb0213,
+  "Process-trial record" (including its independence
+  caveats: package memory was loaded in every session, and CONFIRM is not independent).
+- **Law.** One audit on one package is one data point for "is a second auditor worth it", not a rule.
+- **Gate.** None: a record, not a test.
 
 ---
 
