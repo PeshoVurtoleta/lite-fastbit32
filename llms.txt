@@ -4,11 +4,11 @@
 
 ## Overview
 
-FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators and, from 1.4.0, `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle, 1.5.0 build (measured 2026-10-11; an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2254 B whole module, 1059 B FastBit32 alone, 1006 B FastBit1024 alone. Not re-measured for 1.6.0, which adds FastBit1024 members.
+FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators, from 1.4.0 `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks) and from 1.7.0 `FastBit64` (64 flags in two int32 words, fail-closed). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle, 1.5.0 build (measured 2026-10-11; an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9): 2254 B whole module, 1059 B FastBit32 alone, 1006 B FastBit1024 alone. Not re-measured for 1.6.0, which adds FastBit1024 members.
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
-**When NOT to use FastBit32:** You need more than 32 flags (up to 1024: `FastBit1024` below, fail-closed; more: `@zakkster/lite-o1` `BitSet`, fixed capacity [1, 2^25] bits, no clear-bit search), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
+**When NOT to use FastBit32:** You need more than 32 flags (33 to 64: `FastBit64` below, fail-closed; up to 1024: `FastBit1024` below, fail-closed; more: `@zakkster/lite-o1` `BitSet`, fixed capacity [1, 2^25] bits, no clear-bit search), you need BigInt support, or you need strict input validation. FastBit32 is a raw engine primitive -- it trusts the caller.
 
 ## Import
 
@@ -17,6 +17,9 @@ import { FastBit32, BitMapper, VERSION } from '@zakkster/lite-fastbit32';
 
 // 1.4.0: the 32 x 32 two-level bitmap (pools and id sets up to 1024; fails closed)
 import { FastBit1024 } from '@zakkster/lite-fastbit32';
+
+// 1.7.0: 64 flags in two int32 words (fails closed)
+import { FastBit64 } from '@zakkster/lite-fastbit32';
 
 // Standalone iteration helpers
 import {
@@ -271,6 +274,134 @@ Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT, net of an empty
 
 Measured, 1.5.0 (two fast witness runs, node v26.8.2, Apple M4 Pro, load ~4-5, net ns/op, HOT, flat across density and position): `select` ~3.25-3.35 ns (flatness ratio <= 1.02), `nextSubset` ~0.10-0.21 ns (<= 1.17), `nextCombination` ~0.35-0.43 ns (<= 1.16). `select` is an order of magnitude more than the other constant ops (~3.3 ns vs ~0.1-0.4 ns; a 5-step dependent descent) and still flat. 0 B/op on all three on Node (torture T6 S5 lane, gated < 0.1 B/op). On a pointer-compressed engine (31-bit Smi) the two statics box (12 B) a result outside [-2^30, 2^30) when returned through a non-inlined call (d8 probe; browser measurement in S7, FB-12); `select` returns only -1..31 and stays 0 B/op.
 
+## FastBit64 -- 64 flags, two int32 words (1.7.0)
+
+`FastBit64` holds 64 flags in two signed int32 words: `lo` = bits 0..31, `hi` = bits 32..63, in one object. It is a separate export (no coupling to FastBit32 / FastBit1024). Every op is O(1) and loop-free except `forEach` / `toArray` / `fromArray` (O(k)) and `loadFrom` / `deserialize` (O(image words), at most 33).
+
+```javascript
+import { FastBit64 } from '@zakkster/lite-fastbit32';
+const entity = new FastBit64().add(3).add(40).add(63);
+const sig = new FastBit64().add(3).add(40);
+entity.hasAll(sig);        // true
+entity.lo; entity.hi;      // 8, -2147483392 (bit 63 set -> hi is negative)
+entity.has(64);            // RangeError: fails closed, nothing written
+```
+
+Input law (fail closed): every index is an integer 0..63, else `RangeError` (`TypeError` for a Symbol, a BigInt or a null-prototype object); a rejected call writes nothing (the argument's own conversion still runs once). Constructor / `setWords` / `equalsWords` words are integers in [-2^31, 2^32), signed or unsigned form, stored `| 0`, else `RangeError`. A method taking another set (`hasAll`, `union`, `equals`, ...) requires a real `FastBit64` (subclasses pass); `{ lo, hi }`, a Proxy, an `Object.create(FastBit64.prototype)` forgery, a FastBit32 or a FastBit1024 throws `TypeError` (V8's own private-brand message). `lo` / `hi` are read-only signed getters.
+
+Members (the shipped surface, FastBit32.d.ts):
+- `new FastBit64(lo = 0, hi = 0)`, `lo`, `hi`.
+- `add(bit)`, `remove(bit)`, `toggle(bit)` -> this; `has(bit)` -> boolean. `bit` 0..63, else RangeError.
+- `hasAll(other)`, `hasAny(other)`, `hasNone(other)`, `isSubsetOf(other)`, `equals(other)` -> boolean; `union(other)`, `difference(other)`, `intersect(other)`, `copy(other)` -> this; `countMasked(other)` -> popcount of `this & other`.
+- `setWords(lo, hi)` -> this, `equalsWords(lo, hi)` -> boolean (the two-word form of FastBit32's `set` / `equalsValue`).
+- `count()` (0..64), `isEmpty()`, `isFull()`, `clear()`, `lowest()`, `highest()` (-1 when empty), `nextClearBit()`, `highestClearBit()` (-1 when full).
+- `nextSetBit(from)` (from 0..64; 64 returns -1), `prevSetBit(from)` (from -1..63, inclusive; -1 returns -1), `rank(bit)` (set bits strictly below `bit`), `select(k)` (k 0..63, RangeError outside; -1 when k >= count()).
+- `addRange(lo, hi)`, `removeRange(lo, hi)`, `countRange(lo, hi)`: HALF-OPEN `[lo, hi)`, 0 <= lo <= hi <= 64. FastBit32.countRange(start, end) is INCLUSIVE; FastBit64 follows FastBit1024.
+- `forEach(callback)` (O(k), ascending; hoist the callback).
+- `imageLength` (3, instance and static), `saveInto(out, offset = 0)`, `loadFrom(src, offset = 0)` -> next offset, `serialize()`, static `deserialize(src, offset = 0)`: the image is `[0x46420840, lo, hi]`, the FastBit1024 image at capacity 64; each class loads the other's (FastBit64.loadFrom takes any FastBit1024-format image whose set bits are all < 64).
+- COLD, allocating: `clone()`, `toArray()`, `fromArray(bits)` (every index checked before the single write; overwrites), `toBinaryString(padded = true)` (64 chars, bit 63 first), `serialize()`, `deserialize()`.
+
+Not carried from FastBit32: static `rangeMask` (use `addRange`), static `nextSubset` / `nextCombination`, the number form of `serialize` / `deserialize`, the modulo-32 law and `>>> 0` storage. Not carried from FastBit1024: `acquire` / `release` / `size`. The kernels (popcount / ctz / select) are private module functions, not exports.
+
+64 x 64 = 4096 recipe (1.7.0, a doc recipe, not an export): an `Int32Array(128)` plus two FastBit64 summaries over the 64 slots (`active`: slot non-empty; `full`: slot all ones). Retained bytes: nominal (p8), not yet measured.
+
+```javascript
+import { FastBit64 } from '@zakkster/lite-fastbit32';
+
+// 4096 slots = 64 slots of 64 bits. The bits live in one Int32Array(128); two FastBit64
+// summaries sit over the 64 slots: `active` (slot has a set bit) and `full` (slot is all ones).
+class Bits4096 {
+    constructor() { this.words = new Int32Array(128); this.active = new FastBit64(); this.full = new FastBit64(); this.n = 0; }
+    static bad(i) { throw new RangeError('Bits4096: index must be an integer 0..4095, got ' + String(i)); }
+    has(i) { if ((i & 4095) !== i) Bits4096.bad(i); return (this.words[i >>> 5] & (1 << i)) !== 0; }
+    add(i) {
+        if ((i & 4095) !== i) Bits4096.bad(i);
+        const w = i >>> 5, ws = this.words, old = ws[w], d = old | (1 << i);
+        if (d === old) return this;
+        ws[w] = d; this.n++;
+        const s = i >>> 6;
+        this.active.add(s);
+        if (~(ws[s << 1] & ws[(s << 1) + 1]) === 0) this.full.add(s);
+        return this;
+    }
+    remove(i) {
+        if ((i & 4095) !== i) Bits4096.bad(i);
+        const w = i >>> 5, ws = this.words, old = ws[w], d = old & ~(1 << i);
+        if (d === old) return this;
+        ws[w] = d; this.n--;
+        const s = i >>> 6;
+        this.full.remove(s);
+        if ((ws[s << 1] | ws[(s << 1) + 1]) === 0) this.active.remove(s);
+        return this;
+    }
+    /** Lowest free index, now held; -1 when full. */
+    acquire() {
+        const s = this.full.nextClearBit();
+        if (s === -1) return -1;
+        const ws = this.words, lo = ws[s << 1], wi = (s << 1) + ((~lo === 0) ? 1 : 0), c = ~ws[wi];
+        const i = (wi << 5) + (31 - Math.clz32(c & -c));
+        this.add(i);
+        return i;
+    }
+    /** RangeError on a bad index or a free slot (double release). */
+    release(i) {
+        if ((i & 4095) !== i) Bits4096.bad(i);
+        if ((this.words[i >>> 5] & (1 << i)) === 0) throw new RangeError('Bits4096: release of a free slot ' + i);
+        return this.remove(i);
+    }
+    lowest() {
+        const s = this.active.lowest();
+        if (s === -1) return -1;
+        const ws = this.words, lo = ws[s << 1], wi = (s << 1) + (lo === 0 ? 1 : 0), d = ws[wi];
+        return (wi << 5) + (31 - Math.clz32(d & -d));
+    }
+    /** Lowest set index >= from, or -1; from 0..4096 (4096 ends a walk). */
+    nextSetBit(from) {
+        if ((from & 8191) !== from || from > 4096) Bits4096.bad(from);
+        if (from === 4096) return -1;
+        const ws = this.words, s = from >>> 6;
+        for (let wi = from >>> 5, m = -1 << from; wi < (s << 1) + 2; wi++, m = -1) {
+            const d = ws[wi] & m;
+            if (d !== 0) return (wi << 5) + (31 - Math.clz32(d & -d));
+        }
+        if (s === 63) return -1;
+        const t = this.active.nextSetBit(s + 1);
+        if (t === -1) return -1;
+        const lo = ws[t << 1], wi = (t << 1) + (lo === 0 ? 1 : 0), d = ws[wi];
+        return (wi << 5) + (31 - Math.clz32(d & -d));
+    }
+    get size() { return this.n; }
+}
+
+const pool = new Bits4096();
+const a = pool.acquire(), b = pool.acquire();   // 0, 1
+pool.release(a);                                // a is free again; pool.release(a) twice throws RangeError
+pool.acquire();                                 // 0 again: the lowest free slot
+```
+
+Names above 32 (1.7.0, a doc recipe): BitMapper is 32 bits. For up to 64 names build the name -> index Map once, resolve a signature when it is created, and keep `hasAll` as the hot check; the Map lookup never runs per frame.
+
+```javascript
+import { FastBit64 } from '@zakkster/lite-fastbit32';
+
+const NAMES = ['pos', 'vel', 'acc', 'rot', 'scale', 'sprite', 'anim', 'tint', 'health', 'armor',
+    'mana', 'ai', 'target', 'path', 'input', 'camera', 'light', 'shadow', 'audio', 'emitter',
+    'trigger', 'collider', 'body', 'joint', 'tag', 'team', 'owner', 'parent', 'child', 'timer',
+    'lifetime', 'loot', 'inventory', 'dialog', 'quest', 'score', 'netid', 'replicated', 'dirty', 'dead'];
+const BIT = new Map(NAMES.map((n, i) => [n, i]));   // name -> 0..63; built once
+function signature(names) {                          // runs when the signature is built, never per frame
+    const s = new FastBit64();
+    for (const n of names) { const i = BIT.get(n); if (i === undefined) throw new RangeError('unknown name: ' + n); s.add(i); }
+    return s;
+}
+const entity = signature(['pos', 'vel', 'sprite', 'health']), sig = signature(['pos', 'sprite']);
+entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no allocation
+```
+
+GC: 0 B/op on Node in torture T6 (DETERMINISTIC: an allocation count gated in `npm run torture`, verified TurboFan, below 0.1 B/op) on the 24 FastBit64 lanes, inlined and under `--no-turbo-inlining`: has, add+remove, toggle, hasAll, hasAny/hasNone, isSubsetOf/equals, union/diff/intersect, count/countMasked, lowest/highest, nextClearBit/hiClear, nextSetBit walk, prevSetBit walk, rank/select, rank(31)/rank(63), addRange/removeRange, countRange, setWords/equalsWords, lo/hi getters, isEmpty/isFull, clear, forEach (hoisted cb), saveInto, loadFrom, copy. serialize / deserialize / clone / toArray / fromArray / toBinaryString allocate (COLD). Every numeric field starts as a Smi (`#lo = 0; #hi = 0;`, a Hygiene source pin).
+
+Pointer-compressed engines (31-bit Smi: Chrome, Electron): (a) the d8 lane (d8 15.7.37) gates the read, store and mutator (toggle / add / union) windows at <= 2 scavenges per 1e6 ops inlined; the `--no-turbo-inlining` d8 run is REPORTED. The remaining cost: a word outside the 31-bit Smi range (bits 31 and 30 differ) boxes when it crosses a non-inlined call (`setWords` / `equalsWords` arguments, `lo` / `hi` returns, kernel calls when the inlining budget runs out), in Maglev-compiled `loadFrom` (one box per call), and in interpreter / Sparkplug code; an instance costs about 24 B more than a plain two-field object (two in-place number boxes). (b) REPORTED, not gated (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2 harness): once a d8 process holds an out-of-Smi instance, mutators on Smi words were measured slower, `toggle` about 1.0 -> about 3.7 ns/op, no allocation either way.
+
 ## Critical Caveats
 
 1. **Silent modulo-32 wraparound.** JavaScript bitwise shifts apply `% 32` implicitly. `add(32)` is identical to `add(0)`. `add(40)` is identical to `add(8)`. There is no bounds checking.
@@ -458,4 +589,5 @@ flags.has(10); // false -- clone is independent
 - FastBit1024 is not branchless: it fails closed (a range check and a throw site per index op) and `acquire()` takes the lowest free slot in O(1), about 3.0-3.2 ns per acquire+release pair (numbers above).
 - `forEach` and all standalone helpers: O(k) where k = active bits, not 32.
 - FastBit32: all methods except `clone()` and `deserialize()` allocate nothing. FastBit1024: `serialize()`, `deserialize()` and `clone()` allocate (COLD); every other member is zero-allocation (DETERMINISTIC T6 gate, on V8 >= 14 (node 26.x), for acquire / release, has, the cursors, hasAll / hasAny and all 1.6.0 hot members; add / remove / toggle / forEach / clear are not in a T6 lane).
+- FastBit64: allocates nothing except `serialize()`, `deserialize()`, `clone()`, `toArray()`, `fromArray()` and `toBinaryString()` (COLD); 0 B/op on Node on the 24 T6 lanes listed in the FastBit64 section (DETERMINISTIC), pointer-compressed engines as stated there.
 - V8 monomorphic: single hidden class for the lifetime of the object.

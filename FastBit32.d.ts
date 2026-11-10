@@ -912,8 +912,12 @@ export class FastBit1024 {
  * FastBit64 -- 64 flags in one flat object: two signed int32 words, bits 0..31 in
  * `lo` and 32..63 in `hi` (SC-4). Every index FAILS CLOSED (Q-3), like FastBit1024.
  * Every op is O(1) and loop-free except forEach / toArray / fromArray (O(k)). loadFrom / deserialize are O(image words) (<= 33).
- * 0 B/op on every hot op on Node, inlined and under --no-turbo-inlining (every value is an int32);
- * pointer-compressed engines (31-bit Smi: Chrome / Electron) are PENDING a d8 lane (R-4).
+ * 0 B/op on every hot op on Node, inlined and under --no-turbo-inlining (every value is an int32).
+ * Pointer-compressed engines (31-bit Smi: Chrome / Electron): a d8 lane gates the read, store and mutator
+ * windows at <= 2 scavenges per 1e6 ops inlined; a word outside the Smi range still boxes across a
+ * non-inlined call, in Maglev-compiled loadFrom and in interpreter / Sparkplug code, and an instance costs
+ * about 24 B more than a plain two-field object. REPORTED: on d8, once the process holds an out-of-Smi
+ * instance, mutators on Smi words were measured slower (toggle about 1.0 -> about 3.7 ns/op), no allocation.
  */
 export class FastBit64 {
     /** Q-4: lo, hi each an integer in [-2^31, 2^32) (signed or unsigned form), stored | 0. @throws {RangeError} */
