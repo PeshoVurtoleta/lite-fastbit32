@@ -536,7 +536,13 @@ export const CONTROLS = {
     // window), so the control never fails open -> INCONCLUSIVE at the cap, and no
     // shipped fail-open line may appear.
     'fb64-sab-reread': { tiers: ['T3'], cheap: false, expect: /T3: FB64 SAB: \d+ fail-open\(s\) by the shipped class/, apply(ctx) { ctx.control.fb64Variant = 'reread'; } },
-    'fb64-sab-blind': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB64 SAB: \d+ fail-open)[\s\S]*T3: FB64 SAB coverage: INCONCLUSIVE -- the faithful control failed open 0 times in 1024 chunk\(s\) of 20000 calls \(need >= 20; \d+ accepted\): the race was not shown hit -- fail closed/, apply(ctx) { ctx.control.fb64SabControl = 'faithful'; } }
+    'fb64-sab-blind': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB64 SAB: \d+ fail-open)[\s\S]*T3: FB64 SAB coverage: INCONCLUSIVE -- the faithful control failed open 0 times in 1024 chunk\(s\) of 20000 calls \(need >= 20; \d+ accepted\): the race was not shown hit -- fail closed/, apply(ctx) { ctx.control.fb64SabControl = 'faithful'; } },
+    // A17: fb64-sab-flip = the old (B.B1b) back-to-back writer (ctx.control.fb64SabHold = 0: `a[2] = -1;
+    // a[2] = 0xFF;` with no hold). The invalid high word is visible for about one store commit, so the dwell
+    // witness sees far below 10% of its sampled reads at -1 and the row must FAIL the dwell gate on EVERY
+    // host (whatever the control rate does; A18: on the 10% floor, any mixed count); no shipped fail-open
+    // line may appear.
+    'fb64-sab-flip': { tiers: ['T3'], cheap: false, expect: /^(?![\s\S]*FB64 SAB: \d+ fail-open)[\s\S]*T3: FB64 SAB coverage: writer dwell -- \d+ of 200000 sampled reads saw the invalid high word, \d+ of 20 bursts saw both values \(need >= 20000 and >= 10\) -- fail closed/, apply(ctx) { ctx.control.fb64SabHold = 0; } }
 };
 
 export const CONTROL_NAMES = Object.keys(CONTROLS);

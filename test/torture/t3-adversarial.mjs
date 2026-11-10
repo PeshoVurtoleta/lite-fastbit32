@@ -579,54 +579,118 @@ function fb1024SabRow(ctx, F) {
     if (!(rounds >= SAB_ROUNDS)) F('FB1024 SAB coverage: the writer finished ' + rounds + ' rounds during the row (need >= ' + SAB_ROUNDS + ') -- fail closed');
 }
 
-// ---- B-S1: FastBit64 loadFrom under a concurrent writer (T3 FB64 SAB row) ----
-// A worker (sab-writer64.mjs, the p7 shape) flips the high word of a cap-40
-// image [TAG|40, 0x1234, hi] between 0xFF (valid) and -1 (bits 40..63, invalid
-// for capacity 40). Each chunk runs FB64_SAB_N iterations; each iteration calls
-// loadFrom on the shipped class (ctx.FB64) and then on the in-run CONTROL, the
-// 'reread' variant (fb64-variants.mjs: the shipped file with loadFrom storing a
-// second read of src[base + 1]). A FAIL-OPEN is an accepted call that leaves a
-// bit >= 40 (hi & ~0xFF) or a low word != 0x1234. Count-based, no clock.
-// Rule (PLAN-fastbit64-B TASK 2, constants by SPEC A2's quiet p7 x5, evidence
-// fb64-B1b/README.txt): reread fail-opens per 2e6 loadFrom 269 / 260 / 320 /
-// 319 / 456, shipped 0 / 0 / 0 / 0 / 0 (Apple M4 Pro, 12 cores, QUIET). m = 260,
-// r_min = 260 / 2e6 = 1.3e-4 per control call.
+// ---- B-S1 / A17: FastBit64 loadFrom under a concurrent writer (T3 FB64 SAB row) ----
+// A worker (sab-writer64.mjs) flips the high word of a cap-40 image [TAG|40, 0x1234, hi] between 0xFF
+// (valid) and -1 (bits 40..63, invalid for capacity 40). Each chunk runs FB64_SAB_N iterations; each
+// iteration calls loadFrom on the shipped class (ctx.FB64) and then on the in-run CONTROL, the 'reread'
+// variant (fb64-variants.mjs: the shipped file with loadFrom storing a second read of src[base + 1]).
+// A FAIL-OPEN is an accepted call that leaves a bit >= 40 (hi & ~0xFF) or a low word != 0x1234.
+// Count-based, no clock.
+// THE HELD WRITER (SPEC-fastbit64 A17). The old (B.B1b) writer flipped `a[2] = -1; a[2] = 0xFF;` back
+// to back, so the invalid word was visible for about one store commit and the control's hit rate was a
+// property of the host's cache timing: on hosted ubuntu (x86) it spanned 5e-8..2e-3 per control call
+// over 34 rows (median 7e-6, vs the 1.3e-4 the B.B1b constants assumed) and 10 of the 34 rows ended
+// INCONCLUSIVE (CI 42415077394, CI 42439980368, nightly 42475988175, soak 42612283571, nightly
+// 42624558856). No cap or floor fixes that: by the 60-expected-hits rule below (P(INCONCLUSIVE on correct
+// code) <= 1e-9, nominal), r = 5e-8 needs 60 / 5e-8 ~ 1.2e9 control calls. The writer now HOLDS each value
+// for FB64_SAB_HOLD = 64 spin iterations of local arithmetic (no shared traffic); ctx.control.fb64SabHold
+// overrides it (0 = the old writer: the fb64-sab-flip control; a set value that is not an integer in
+// 0..4096 THROWS in sabWriter64, the writer's own range, and the row's catch makes it a FAIL). The writer
+// is a per-process singleton, so the hold is fixed when it is first created.
+// DWELL WITNESS (SPEC-fastbit64 A18, fail closed): after the writer warm-up and before the chunks, the row
+// reads the high word in FB64_SAB_DWELL_K = 20 bursts of FB64_SAB_DWELL_BURST = 10,000 plain reads
+// (FB64_SAB_DWELL_N = 200,000 in all), with a 1 ms Atomics.wait between bursts so they sample different
+// moments of the writer. A burst is MIXED when it saw both -1 and 0xFF. Gate (fb64SabDwellFail): total -1
+// reads >= FB64_SAB_DWELL_MIN = 20,000 (10%) AND mixed bursts >= FB64_SAB_DWELL_MIXED = 10 of 20, else
+// "FB64 SAB coverage: writer dwell -- ... -- fail closed". One contiguous window cannot tell a flipping
+// writer from a preempted one; the mixed count can: a writer frozen at either value fails it, and the old
+// back-to-back writer fails the 10% floor. Stated false-FAIL (nominal): with an independent per-burst
+// probability 0.1 that the writer is parked (preempted), P(more than 10 of 20 bursts parked) ~ 7e-7.
+// That is a FLOOR under INDEPENDENT bursts (A19): the 1 ms spacing is shorter than common scheduler
+// slices, so parks correlate, and a writer starved for more than ~11 of the ~20 ms of sampling FAILs.
+// The sampler is fb64SabDwellSample (A19): it COUNTS its reads and bursts, and the verdict and the MEASURE
+// record take those counts (never the constants), so a sampler that reads short fails the n / k checks.
+// The row still runs and reports every coverage line.
+// r_min (A17 probe, REPORTED: 2026-11-10, Apple M4 Pro, node 26.8.2, load1 4.2-12.5, PRELIMINARY,
+// 9 runs): the reread control with H = 64 failed open 3.8e-3..5.7e-3 per control call idle and
+// 9.0e-4..3.2e-3 with 12-24 busy threads; r_min = 9.0e-4 per control call (the worst). Dwell (3 runs
+// each): H = 64 44-49%, the old writer 0.2-0.5%. The hosted rate with the held writer is PENDING (the
+// next hosted push).
 // - one shipped fail-open = FAIL (FB64 SAB: <n> fail-open(s) by the shipped class);
-// - chunks repeat until the control has failed open FB64_SAB_FLOOR = 20 times
-//   (miss probability 2^-20 ~ 9.5e-7, nominal: hits come in bursts) and STOP there;
-// - the cap must satisfy r_min * N * CHUNKS >= 60 (P(INCONCLUSIVE on correct code)
-//   <= 1e-9, nominal): >= 461,539 control calls. That is a MINIMUM; the cap is
-//   FB64_SAB_N * FB64_SAB_CHUNKS = 20,000 * 1024 = 20,480,000 control calls
-//   (expected hits at r_min: 2662.4, 44.4x the rule's 60) for slower hosts (CI
-//   runners: 3-4 cores, macOS seen at load1 ~30; their rates are unmeasured).
-//   REPORTED (2026-11-07, M4 Pro, node 26.8.2, load1 6.84-7.14, 2 unmutated
-//   full-cap runs: coder blind, review faithful;
-//   evidence/fb64-B1b/{coder/t3-targeted.log,review/mutants-cap.log}): the full
-//   cap (paid only by a run that ends INCONCLUSIVE) took 4.4-4.6 s. Control
-//   below the floor at the cap = "INCONCLUSIVE ... fail closed" = FAIL;
+// - chunks repeat until the control has failed open FB64_SAB_FLOOR = 20 times (miss probability
+//   2^-20 ~ 9.5e-7, nominal: hits come in bursts) and STOP there;
+// - the cap must satisfy r_min * N * CHUNKS >= 60 (P(INCONCLUSIVE on correct code) <= 1e-9, nominal):
+//   >= 66,667 control calls at r_min = 9.0e-4. That is a MINIMUM; the cap is FB64_SAB_N *
+//   FB64_SAB_CHUNKS = 20,000 * 1024 = 20,480,000 control calls (expected hits at r_min:
+//   20.48e6 * 9.0e-4 ~ 18,400, nominal). REPORTED (2026-11-07, M4 Pro, node 26.8.2, load1 6.84-7.14,
+//   2 full-cap runs with the old writer; evidence/fb64-B1b/{coder/t3-targeted.log,review/mutants-cap.log}):
+//   the full cap (paid only by a run that ends INCONCLUSIVE) took 4.4-4.6 s. Control below the floor at
+//   the cap = "INCONCLUSIVE ... fail closed" = FAIL;
 // - the writer must finish >= FB64_SAB_ROUNDS = 10 rounds during the row, else FAIL.
-// X-10 (SPEC A1): the race needs truly parallel cores; with
-// os.availableParallelism() < 3 the row is a named SKIP (MEASURE ... SKIP:
-// availableParallelism <n> < 3), never a pass line. ctx.control.fb64SabControl
-// names another control variant (the fb64-sab-blind control: 'faithful').
+// X-10 (SPEC A1): the race needs truly parallel cores; with os.availableParallelism() < 3 the row is a
+// named SKIP (MEASURE ... SKIP: availableParallelism <n> < 3), never a pass line.
+// ctx.control.fb64SabControl names another control variant (the fb64-sab-blind control: 'faithful').
 const FB64_SAB_N = 20000;
 const FB64_SAB_FLOOR = 20;
 const FB64_SAB_CHUNKS = 1024;
 const FB64_SAB_ROUNDS = 10;
 const FB64_SAB_CORES = 3;
 const FB64_SAB_TAG = 0x46420800;
+export const FB64_SAB_HOLD = 64;
+export const FB64_SAB_DWELL_K = 20;
+export const FB64_SAB_DWELL_BURST = 10000;
+export const FB64_SAB_DWELL_N = 200000;
+export const FB64_SAB_DWELL_MIN = 20000;
+export const FB64_SAB_DWELL_MIXED = 10;
 let SAB64 = null;
 
-function sabWriter64() {
+// The singleton writer: the hold is read from ctx.control.fb64SabHold or FB64_SAB_HOLD on the FIRST
+// call of the process and fixed from then on. A set fb64SabHold outside the writer's range (an integer
+// 0..4096) throws on every call, before any state is created. ctl[4] receives the writer's spin sink.
+function sabWriter64(ctx) {
+    const h = ctx.control.fb64SabHold;
+    if (h !== undefined && !(Number.isInteger(h) && h >= 0 && h <= 4096)) throw new RangeError('FB64 SAB: ctx.control.fb64SabHold must be an integer 0..4096, got ' + String(h));
     if (SAB64 !== null) return SAB64;
+    const hold = h === undefined ? FB64_SAB_HOLD : h;
     const data = new SharedArrayBuffer(12);
-    const ctlBuf = new SharedArrayBuffer(16);
+    const ctlBuf = new SharedArrayBuffer(20);
     const src = new Int32Array(data);
     src[0] = FB64_SAB_TAG | 40; src[1] = 0x1234; src[2] = 0xFF;
-    const w = new Worker(new URL('./sab-writer64.mjs', import.meta.url), { workerData: { data, ctl: ctlBuf } });
+    const w = new Worker(new URL('./sab-writer64.mjs', import.meta.url), { workerData: { data, ctl: ctlBuf, hold } });
     w.unref();
     SAB64 = { src, ctl: new Int32Array(ctlBuf), w };
     return SAB64;
+}
+
+// The dwell sampler (A19): FB64_SAB_DWELL_K bursts of FB64_SAB_DWELL_BURST plain reads of src[2], a 1 ms
+// Atomics.wait(ctl, 3, 0, 1) before every burst but the first. reads / bursts are counted in the loop. A
+// burst is mixed iff it saw >= 1 read === -1 AND >= 1 read === 0xFF.
+export function fb64SabDwellSample(src, ctl) {
+    let dwell = 0, dwellMixed = 0, dwellReads = 0, dwellBursts = 0;
+    for (let b = 0; b < FB64_SAB_DWELL_K; b++) {
+        if (b > 0) Atomics.wait(ctl, 3, 0, 1);
+        let bNeg = 0, bVal = 0, bReads = 0;
+        for (let k = 0; k < FB64_SAB_DWELL_BURST; k++) {
+            const x = src[2]; bReads++;
+            if (x === -1) bNeg++; else if (x === 0xFF) bVal++;
+        }
+        dwell += bNeg; dwellReads += bReads; dwellBursts++;
+        if (bNeg > 0 && bVal > 0) dwellMixed++;
+    }
+    return { neg: dwell, reads: dwellReads, mixed: dwellMixed, bursts: dwellBursts };
+}
+
+// The dwell verdict: null = the sampled reads saw the invalid high word often enough AND enough bursts
+// saw both values; else the FAIL text.
+export function fb64SabDwellFail(neg, n, mixed, k) {
+    if (Number.isInteger(neg) && Number.isInteger(mixed) && n === FB64_SAB_DWELL_N && k === FB64_SAB_DWELL_K &&
+        neg >= FB64_SAB_DWELL_MIN && neg <= n && mixed >= FB64_SAB_DWELL_MIXED && mixed <= k) return null;
+    return 'FB64 SAB coverage: writer dwell -- ' + neg + ' of ' + n + ' sampled reads saw the invalid high word, ' + mixed + ' of ' + k + ' bursts saw both values (need >= ' + FB64_SAB_DWELL_MIN + ' and >= ' + FB64_SAB_DWELL_MIXED + ') -- fail closed';
+}
+
+// The torture.mjs MEASURE line for the dwell witness (the ran shape only).
+export function fb64SabDwellLine(m) {
+    return 'MEASURE FastBit64 T3 SAB writer dwell=' + m.dwell + '/' + m.dwellN + ' mixed=' + m.dwellMixed + '/' + m.dwellK + ' [gated: >= ' + FB64_SAB_DWELL_MIN + ', mixed >= ' + FB64_SAB_DWELL_MIXED + ']';
 }
 
 // null = run the row; a string = the SKIP reason. Only an integer below the
@@ -651,7 +715,7 @@ export async function fb64SabRow(ctx, F, cores = availableParallelism()) {
     const v = await fb64Variant(ctlName);
     if (v.C === null) { F('FB64 SAB: the in-run control (' + ctlName + ' variant) did not build -- fail closed: ' + v.fails.join('; ')); return; }
     const R = v.C;
-    const { src, ctl } = sabWriter64();
+    const { src, ctl } = sabWriter64(ctx);
     Atomics.store(ctl, 0, 1);
     Atomics.notify(ctl, 0);
     if (Atomics.load(ctl, 1) === 0) Atomics.wait(ctl, 1, 0, 10000);
@@ -659,6 +723,9 @@ export async function fb64SabRow(ctx, F, cores = availableParallelism()) {
     const r0 = Atomics.load(ctl, 2);
     for (let k = 0; k < 10000 && Atomics.load(ctl, 2) < r0 + 2; k++) Atomics.wait(ctl, 3, 0, 1);
     const rStart = Atomics.load(ctl, 2);
+    const d = fb64SabDwellSample(src, ctl);
+    const dwellFail = fb64SabDwellFail(d.neg, d.reads, d.mixed, d.bursts);
+    if (dwellFail !== null) F(dwellFail);
     const s = new C(), c = new R();
     let open = 0, cOpen = 0, acc = 0, cAcc = 0, br = 0, chunks = 0, rounds = 0;
     let first = '';
@@ -688,7 +755,7 @@ export async function fb64SabRow(ctx, F, cores = availableParallelism()) {
         Atomics.store(ctl, 0, 0);
     }
     const calls = chunks * FB64_SAB_N;
-    ctx.measures.fb64Sab = { shipped: open, control: ctlName, controlOpen: cOpen, chunks, cap: FB64_SAB_CHUNKS, rounds, calls, accepted: acc, controlAccepted: cAcc };
+    ctx.measures.fb64Sab = { shipped: open, control: ctlName, controlOpen: cOpen, chunks, cap: FB64_SAB_CHUNKS, rounds, calls, accepted: acc, controlAccepted: cAcc, dwell: d.neg, dwellN: d.reads, dwellMixed: d.mixed, dwellK: d.bursts };
     if (open !== 0) F('FB64 SAB: ' + open + ' fail-open(s) by the shipped class (an accepted loadFrom stored a bit >= 40 or a changed low word; ' + acc + ' accepted of ' + calls + ')');
     if (br !== 0) F('FB64 SAB: ' + br + ' loadFrom call(s) threw a non-RangeError under a concurrent writer, first: ' + first);
     if (!(cOpen >= FB64_SAB_FLOOR)) F('FB64 SAB coverage: INCONCLUSIVE -- the ' + ctlName + ' control failed open ' + cOpen + ' times in ' + chunks + ' chunk(s) of ' + FB64_SAB_N + ' calls (need >= ' + FB64_SAB_FLOOR + '; ' + cAcc + ' accepted): the race was not shown hit -- fail closed');

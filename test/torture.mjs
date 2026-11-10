@@ -169,7 +169,7 @@ const TIERS = {
     T9: (await import('./torture/t9-controls.mjs')).run
 };
 const ORDER = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T8', 'T6', 'T7', 'T9'];
-const { fb64SabMeasureLine } = await import('./torture/t3-adversarial.mjs');
+const { fb64SabMeasureLine, fb64SabDwellLine } = await import('./torture/t3-adversarial.mjs');
 
 async function runTier(name, ctx) {
     const r = TIERS[name](ctx);
@@ -310,8 +310,10 @@ if (m.fb1024ImgD8) {
 if (m.fb1024ImgT0) console.error('MEASURE FastBit1024 T0 image laws ' + JSON.stringify(m.fb1024ImgT0) + ' [gated: 0 failed, fullLoads>=20 crossLoads>=100]');
 if (m.fb1024ImgT3) console.error('MEASURE FastBit1024 T3 image rows ' + JSON.stringify(m.fb1024ImgT3) + ' [gated: 0 failed]');
 if (m.fb1024Sab) console.error('MEASURE FastBit1024 T3 SAB row ' + JSON.stringify(m.fb1024Sab) + ' [gated: br 0, torn>=20 per scenario, deserialize hits>=64, cap500 tail hits>=8, <=64 chunks, rounds>=10]');
-if (m.fb64Sab) console.error(fb64SabMeasureLine(m.fb64Sab));
-else allFails.push('T3 FB64 SAB row: no MEASURE record (the row did not run or did not finish) -- fail closed');
+if (m.fb64Sab) {
+    console.error(fb64SabMeasureLine(m.fb64Sab));
+    if (m.fb64Sab.dwell !== undefined) console.error(fb64SabDwellLine(m.fb64Sab));
+} else allFails.push('T3 FB64 SAB row: no MEASURE record (the row did not run or did not finish) -- fail closed');
 if (m.fb1024ImgLive) console.error('MEASURE FastBit1024 T7 image retention live per cycle=[' + m.fb1024ImgLive.join(',') + '] [gated: 0 each]');
 if (m.fb64RetainLive) console.error('MEASURE FastBit64 T7 retention live per cycle=[' + m.fb64RetainLive.join(',') + '] [gated: 0 each]');
 if (m.fb64Variants) console.error('MEASURE FastBit64 variants needles ' + m.fb64Variants.needles.map((n) => n.variant + ' ' + JSON.stringify(n.needle) + ' ' + n.actual + '/' + n.expected).join('; ') + ' kernels=[' + m.fb64Variants.kernels.join(',') + '] [gated: actual == expected]');
