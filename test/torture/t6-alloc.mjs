@@ -548,7 +548,7 @@ export async function run(ctx) {
 // window (K = 512, so a window stays far below the 4 MB semi-space) must read
 // >= 100 B/op, else the lane is blind. d8 lane: test/torture/d8-loadfrom.mjs
 // on a pointer-compressed d8 (`FASTBIT_D8` or ~/.jsvu/engines/v8/d8),
-// scavenges counted between MARK lines: loadFrom <= 2 per 1e5 loads, the
+// scavenges counted between MARK lines: loadFrom <= 2 per 1e6 loads, the
 // box control >= 2; no d8 (or not pointer-compressed) prints SKIP, never PASS.
 const IMG_WORDS = new Int32Array([-1, 0x40000000, -0x80000000, 0x7FFFFFFF, 0x55555555, -0x55555556, 0x40000001, 0]);
 const IMG_HOLD = [null, null, null, null];   // small-K results escape here
@@ -703,7 +703,7 @@ async function fb1024ImageLanes(ctx, fails, baseline, bopBox, bop) {
     const d = fb1024D8Lane();
     ctx.measures.fb1024ImgD8 = d;
     if (d.skip === undefined) {
-        if (d.result !== true || !(d.loads <= 2) || !(d.box >= 2)) fails.push('T6 FB1024 img: d8 lane loadFrom scavenges=' + d.loads + ' (expected <= 2 per 1e5), box control=' + d.box + ' (expected >= 2), result=' + d.result + ' -- ' + d.tail);
+        if (d.result !== true || !(d.loads <= 2) || !(d.box >= 2)) fails.push('T6 FB1024 img: d8 lane loadFrom scavenges=' + d.loads + ' (expected <= 2 per 1e6), box control=' + d.box + ' (expected >= 2), result=' + d.result + ' -- ' + d.tail);
     }
 }
 
@@ -1011,15 +1011,13 @@ function fb64NoinlineLane(ctx, fails) {
     if (res.moved !== null) F('a read-only fixture word moved: ' + res.moved);
 }
 
-// ---- B-S6 (1.7.0, amended by SPEC-fastbit64 A7 + A8) FastBit64 d8 lane ---
+// ---- B-S6 (1.7.0, amended by SPEC-fastbit64 A7 + A8 + A10) FastBit64 d8 lane ---
 // d8-fb64.mjs on words 0x40000000 / -0x40000001 (not 31-bit Smis), twice:
-// flags [] = inlined: the READ window GATED (read scavenges <= 2 per 1e6 ops, A8; box
-// >= 2, result ok); ['--no-turbo-inlining']: gated only on a clean harness
-// (result ok, box >= 2), its read count REPORTED. The STORE window (setWords from
-// memory + loadFrom) is REPORTED in both runs, PENDING FB64-PC: on a
-// pointer-compressed engine each out-of-Smi word stored into a FastBit64 field
-// is a fresh HeapNumber even inlined (the B.B3 finding). A missing or
-// non-numeric read / store count fails closed in either run, REPORTED or not.
+// flags [] = inlined: the READ, STORE (setWords from memory + loadFrom) and MUTATOR
+// (toggle / add / union) windows GATED (each <= 2 scavenges per 1e6 ops, A8 + A10;
+// box >= 2, result ok); ['--no-turbo-inlining']: gated only on a clean harness
+// (result ok, box >= 2), its three counts REPORTED. A missing or non-numeric
+// read / store / mutator count fails closed in either run, REPORTED or not.
 // No d8 / not pointer-compressed = one named SKIP (measures.fb64D8.skip), never ok.
 function fb64D8Run(flags) {
     const d = d8Lane('./d8-fb64.mjs', flags);
@@ -1029,7 +1027,7 @@ function fb64D8Run(flags) {
         const rm = /^RESULT ok=(true|false)\b/.exec(line);
         if (rm) result = rm[1] === 'true';
     }
-    return { read: d.counts.read, store: d.counts.store, box: d.counts.box, result, tail: d.tail };
+    return { read: d.counts.read, store: d.counts.store, mutator: d.counts.mutator, box: d.counts.box, result, tail: d.tail };
 }
 
 const isCount = (n) => Number.isInteger(n) && n >= 0;
@@ -1040,9 +1038,9 @@ function fb64D8Lane(ctx, fails) {
     const noinl = fb64D8Run(['--no-turbo-inlining']);
     if (noinl.skip !== undefined) { ctx.measures.fb64D8 = { skip: noinl.skip }; fails.push('T6 FB64 d8: the --no-turbo-inlining run skipped after the inlined run ran (' + noinl.skip + ') -- fail closed'); return; }
     ctx.measures.fb64D8 = { inl, noinl };
-    if (inl.result !== true || !(inl.read <= 2) || !(inl.box >= 2)) fails.push('T6 FB64 d8: inlined lane read scavenges=' + inl.read + ' (expected <= 2 per 1e6 ops), box control=' + inl.box + ' (expected >= 2), result=' + inl.result + ' (store scavenges=' + inl.store + ' REPORTED, PENDING FB64-PC) -- ' + inl.tail);
-    if (noinl.result !== true || !(noinl.box >= 2)) fails.push('T6 FB64 d8: --no-turbo-inlining lane harness not clean: box control=' + noinl.box + ' (expected >= 2), result=' + noinl.result + ' (read scavenges=' + noinl.read + ', store scavenges=' + noinl.store + ' REPORTED, not gated) -- ' + noinl.tail);
+    if (inl.result !== true || !(inl.read <= 2) || !(inl.store <= 2) || !(inl.mutator <= 2) || !(inl.box >= 2)) fails.push('T6 FB64 d8: inlined lane read scavenges=' + inl.read + ', store scavenges=' + inl.store + ', mutator scavenges=' + inl.mutator + ' (each expected <= 2 per 1e6 ops), box control=' + inl.box + ' (expected >= 2), result=' + inl.result + ' -- ' + inl.tail);
+    if (noinl.result !== true || !(noinl.box >= 2)) fails.push('T6 FB64 d8: --no-turbo-inlining lane harness not clean: box control=' + noinl.box + ' (expected >= 2), result=' + noinl.result + ' (read scavenges=' + noinl.read + ', store scavenges=' + noinl.store + ', mutator scavenges=' + noinl.mutator + ' REPORTED, not gated) -- ' + noinl.tail);
     for (const [run, x] of [['inlined', inl], ['--no-turbo-inlining', noinl]]) {
-        if (!isCount(x.read) || !isCount(x.store)) fails.push('T6 FB64 d8: ' + run + ' lane read / store window count missing or not a count (read=' + x.read + ', store=' + x.store + ') -- fail closed -- ' + x.tail);
+        if (!isCount(x.read) || !isCount(x.store) || !isCount(x.mutator)) fails.push('T6 FB64 d8: ' + run + ' lane read / store / mutator window count missing or not a count (read=' + x.read + ', store=' + x.store + ', mutator=' + x.mutator + ') -- fail closed -- ' + x.tail);
     }
 }

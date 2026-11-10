@@ -4,7 +4,7 @@
 // pointer-compressed engine a Smi is 31 bits, so an int32 word >= 2^30 or
 // < -2^30 passed to a NON-inlined fb1024Pop would box (12 B) per call. The
 // image holds such words (bit 30, bit 31, 0x7FFFFFFF, 0x55555555 patterns)
-// and -1. Window "loadFrom": 1e5 loads after a 2e5-load warm-up (TurboFan).
+// and -1. Window "loadFrom": 1e6 loads after a 2e5-load warm-up (TurboFan).
 // Window "box": the positive control, one HeapNumber per op into a tagged
 // slot -- it MUST scavenge, or the counter is blind.
 import { FastBit1024 } from '../../FastBit32.js';
@@ -19,10 +19,13 @@ function loads(n) { for (let i = 0; i < n; i++) SINK[0] = (SINK[0] + r.loadFrom(
 const BOX = [{}];
 function boxes(n) { for (let i = 0; i < n; i++) { BOX[0] = i + 0.5; SINK[0] = (SINK[0] + (BOX[0] | 0)) | 0; } }
 
+// gc() stays here and before the box window: A11 changes only the window's size and
+// unit; R5 read 0 per 1e5 (first window after gc()) and 0 per 1e6, 3 runs; R7f's
+// post-gc() transient was observed on readMix only.
 loads(200000);
 gc();
 print('MARK begin loadFrom');
-loads(100000);
+loads(1000000);
 print('MARK end');
 boxes(2000);
 gc();

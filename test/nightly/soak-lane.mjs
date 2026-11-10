@@ -69,7 +69,7 @@ function countExact(lines, want) {
     return n;
 }
 
-const D8_RAN = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=(\S+) per 1e5 loads \[gated <=2\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
+const D8_RAN = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=(\S+) per 1e6 loads \[gated <=2\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
 const D8_SKIP = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: \S/;
 // B-S1 T3 FastBit64 SAB race row (t3-adversarial.mjs fb64SabMeasureLine). Lane S legs
 // have >= 3 cores (SPEC-fastbit64 A1 / X-10), so its SKIP line is a problem there,
@@ -77,13 +77,13 @@ const D8_SKIP = /^MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: 
 const FB64_SAB_RAN = /^MEASURE FastBit64 T3 SAB row shipped fail-open=(\S+) control\((\S+)\) fail-open=(\S+) chunks=(\S+)\/(\S+) rounds=(\S+) calls=(\S+) \[gated: [^\]]*\]$/;
 const FB64_SAB_SKIP = 'MEASURE FastBit64 T3 SAB row SKIP';
 // B-S6 T6 FastBit64 d8 lane (t6-alloc.mjs fb64D8Lane, torture.mjs MEASURE lines),
-// SPEC-fastbit64 A6 + A7 + A8: the inlined READ window is gated (read scavenges <= 2 per 1e6 ops,
-// box >= 2, result true); the noinline run gates only its harness (box >= 2, result
-// true). The STORE counts (both runs, PENDING FB64-PC) are never gated: they must
-// only be present and numeric. d8=ran needs exactly one of each ran line and no FB64
-// SKIP line; d8=skip exactly one FB64 SKIP line and no ran line.
-const FB64_D8_INL = /^MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=(\S+) per 1e6 ops \[gated <=2\], store scavenges=(\S+) per 1e6 ops \[REPORTED: PENDING FB64-PC\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
-const FB64_D8_NOINL = /^MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=(\S+) per 1e6 ops \[REPORTED\], store scavenges=(\S+) per 1e6 ops \[REPORTED: PENDING FB64-PC\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
+// SPEC-fastbit64 A6 + A8 + A10: the inlined READ, STORE and MUTATOR windows are gated
+// (each a count <= 2 per 1e6 ops; box >= 2, result true); the noinline run gates only
+// its harness (box >= 2, result true), its three counts must only be present and
+// numeric. d8=ran needs exactly one of each ran line and no FB64 SKIP line; d8=skip
+// exactly one FB64 SKIP line and no ran line.
+const FB64_D8_INL = /^MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=(\S+) per 1e6 ops \[gated <=2\], store scavenges=(\S+) per 1e6 ops \[gated <=2\], mutator scavenges=(\S+) per 1e6 ops \[gated <=2\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
+const FB64_D8_NOINL = /^MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=(\S+) per 1e6 ops \[REPORTED\], store scavenges=(\S+) per 1e6 ops \[REPORTED\], mutator scavenges=(\S+) per 1e6 ops \[REPORTED\], box control=(\S+) \[gated >=2\], result=(\S+)$/;
 const COUNT = /^(0|[1-9]\d*)$/;
 const FB64_D8_SKIP = /^MEASURE FastBit64 d8 pointer-compressed lane SKIP: \S/;
 const SOAK = /^MEASURE soak live=(\S+) findings=(\S+) postDrainKB=\[([^\]]*)\] growthKB=(\S+)$/;
@@ -188,19 +188,18 @@ export function checkTortureLog(text, opts) {
         if (fbSkips > 0) problems.push('FastBit64 d8 lane SKIPPED on a d8=ran leg');
         if (inl.length !== 1) problems.push('FastBit64 d8 inlined line seen ' + inl.length + ' times (want 1 on a d8=ran leg)');
         else {
-            const [, rd, st, box, result] = inl[0];
-            if (!(Number(rd) <= 2) || !COUNT.test(rd) || !(Number(box) >= 2) || result !== 'true') {
-                problems.push('FastBit64 d8 inlined lane read scavenges=' + rd + ' box=' + box + ' result=' + result + ' (want <= 2, >= 2, true)');
+            const [, rd, st, mu, box, result] = inl[0];
+            if (!(Number(rd) <= 2) || !COUNT.test(rd) || !(Number(st) <= 2) || !COUNT.test(st) || !(Number(mu) <= 2) || !COUNT.test(mu) || !(Number(box) >= 2) || result !== 'true') {
+                problems.push('FastBit64 d8 inlined lane read scavenges=' + rd + ' store scavenges=' + st + ' mutator scavenges=' + mu + ' box=' + box + ' result=' + result + ' (want each a count <= 2, >= 2, true)');
             }
-            if (!COUNT.test(st)) problems.push('FastBit64 d8 inlined lane store scavenges=' + st + ' (want a count; REPORTED, never gated)');
         }
         if (noinl.length !== 1) problems.push('FastBit64 d8 noinline line seen ' + noinl.length + ' times (want 1 on a d8=ran leg)');
         else {
-            const [, rd, st, box, result] = noinl[0];
+            const [, rd, st, mu, box, result] = noinl[0];
             if (!(Number(box) >= 2) || result !== 'true') {
-                problems.push('FastBit64 d8 noinline lane harness box=' + box + ' result=' + result + ' (want >= 2, true; its read / store counts are REPORTED, not gated)');
+                problems.push('FastBit64 d8 noinline lane harness box=' + box + ' result=' + result + ' (want >= 2, true; its read / store / mutator counts are REPORTED, not gated)');
             }
-            if (!COUNT.test(rd) || !COUNT.test(st)) problems.push('FastBit64 d8 noinline lane read=' + rd + ' store=' + st + ' (want counts; REPORTED, never gated)');
+            if (!COUNT.test(rd) || !COUNT.test(st) || !COUNT.test(mu)) problems.push('FastBit64 d8 noinline lane read=' + rd + ' store=' + st + ' mutator=' + mu + ' (want counts; REPORTED, never gated)');
         }
     } else if (d8 === 'skip') {
         if (inl.length + noinl.length > 0) problems.push('FastBit64 d8 lane RAN on a d8=skip leg (' + inl.length + ' inlined, ' + noinl.length + ' noinline line(s))');

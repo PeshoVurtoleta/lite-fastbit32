@@ -305,7 +305,7 @@ if (m.fb1024ImgAlloc) {
 if (m.fb1024ImgD8) {
     const d = m.fb1024ImgD8;
     if (d.skip !== undefined) console.error('MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: ' + d.skip);
-    else console.error('MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=' + d.loads + ' per 1e5 loads [gated <=2], box control=' + d.box + ' [gated >=2], result=' + d.result);
+    else console.error('MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=' + d.loads + ' per 1e6 loads [gated <=2], box control=' + d.box + ' [gated >=2], result=' + d.result);
 }
 if (m.fb1024ImgT0) console.error('MEASURE FastBit1024 T0 image laws ' + JSON.stringify(m.fb1024ImgT0) + ' [gated: 0 failed, fullLoads>=20 crossLoads>=100]');
 if (m.fb1024ImgT3) console.error('MEASURE FastBit1024 T3 image rows ' + JSON.stringify(m.fb1024ImgT3) + ' [gated: 0 failed]');
@@ -332,8 +332,8 @@ if (m.fb64D8) {
     const d = m.fb64D8;
     if (d.skip !== undefined) console.error('MEASURE FastBit64 d8 pointer-compressed lane SKIP: ' + d.skip);
     else {
-        console.error('MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + d.inl.read + ' per 1e6 ops [gated <=2], store scavenges=' + d.inl.store + ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + d.inl.box + ' [gated >=2], result=' + d.inl.result);
-        console.error('MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + d.noinl.read + ' per 1e6 ops [REPORTED], store scavenges=' + d.noinl.store + ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + d.noinl.box + ' [gated >=2], result=' + d.noinl.result);
+        console.error('MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + d.inl.read + ' per 1e6 ops [gated <=2], store scavenges=' + d.inl.store + ' per 1e6 ops [gated <=2], mutator scavenges=' + d.inl.mutator + ' per 1e6 ops [gated <=2], box control=' + d.inl.box + ' [gated >=2], result=' + d.inl.result);
+        console.error('MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + d.noinl.read + ' per 1e6 ops [REPORTED], store scavenges=' + d.noinl.store + ' per 1e6 ops [REPORTED], mutator scavenges=' + d.noinl.mutator + ' per 1e6 ops [REPORTED], box control=' + d.noinl.box + ' [gated >=2], result=' + d.noinl.result);
     }
 }
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);

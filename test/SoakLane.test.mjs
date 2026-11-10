@@ -153,19 +153,23 @@ test('B1 CLI check: --cycles "" exits 1 (empty is never push volume)', () => {
 
 // ---- A4 checker teeth -------------------------------------------------------
 const TIERS = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T8', 'T6', 'T7', 'T9']; // torture.mjs ORDER
-const D8_RAN = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=0 per 1e5 loads [gated <=2], box control=5 [gated >=2], result=true';
+const D8_RAN = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=0 per 1e6 loads [gated <=2], box control=5 [gated >=2], result=true';
 const D8_SKIP = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane SKIP: no d8 on PATH (set FASTBIT_D8)';
 // B.B3 (B-S6): the FastBit64 d8 lane lines (torture.mjs MEASURE formats).
 const FB64_D8_SKIP = 'MEASURE FastBit64 d8 pointer-compressed lane SKIP: no d8 on this host (/x/d8; set FASTBIT_D8 or install jsvu v8)';
-// SPEC-fastbit64 A7 + A8: read window gated (inlined, per 1e6 ops), store window REPORTED (PENDING FB64-PC).
+// SPEC-fastbit64 A6 + A8 + A10: inlined read / store / mutator windows gated (per 1e6 ops), noinline counts REPORTED.
 function fb64D8Inl(o) {
-    return 'MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + (o.read === undefined ? 0 : o.read) + ' per 1e6 ops [gated <=2], store scavenges=' + (o.store === undefined ? 47 : o.store) +
-        ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
+    return 'MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + (o.read === undefined ? 0 : o.read) + ' per 1e6 ops [gated <=2], store scavenges=' + (o.store === undefined ? 0 : o.store) +
+        ' per 1e6 ops [gated <=2], mutator scavenges=' + (o.mutator === undefined ? 0 : o.mutator) + ' per 1e6 ops [gated <=2], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
 }
 function fb64D8Noinl(o) {
     return 'MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + (o.read === undefined ? 0 : o.read) + ' per 1e6 ops [REPORTED], store scavenges=' + (o.store === undefined ? 68 : o.store) +
-        ' per 1e6 ops [REPORTED: PENDING FB64-PC], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
+        ' per 1e6 ops [REPORTED], mutator scavenges=' + (o.mutator === undefined ? 0 : o.mutator) + ' per 1e6 ops [REPORTED], box control=' + (o.box === undefined ? 5 : o.box) + ' [gated >=2], result=' + (o.result === undefined ? 'true' : o.result);
 }
+// The pre-A10 / pre-A11 line formats: a log still printing one of these is a stale emitter.
+const FB64_D8_INL_OLD = 'MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=0 per 1e6 ops [gated <=2], store scavenges=0 per 1e6 ops [REPORTED: PENDING FB64-PC], box control=5 [gated >=2], result=true';
+const FB64_D8_NOINL_OLD = 'MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=0 per 1e6 ops [REPORTED], store scavenges=68 per 1e6 ops [REPORTED: PENDING FB64-PC], box control=5 [gated >=2], result=true';
+const D8_RAN_OLD = 'MEASURE FastBit1024 d8 pointer-compressed loadFrom lane scavenges=0 per 1e5 loads [gated <=2], box control=5 [gated >=2], result=true';
 // B.B1b (SPEC-fastbit64 X-10 / A1): the T3 FastBit64 SAB race row; lane S legs have >= 3 cores.
 const SAB_SKIP = 'MEASURE FastBit64 T3 SAB row SKIP: availableParallelism 2 < 3';
 function sabRan(o) {
@@ -271,19 +275,32 @@ test('B.B1b checkTortureLog: T3 FastBit64 SAB ran line required exactly once, ga
     assert.ok(nonEmpty(T({ ctl: 'faithful' })));        // mutant: any control variant accepted
 });
 
-test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=ran: both ran lines, inlined read gate met, noinline harness clean (A6 + A7)', () => {
+test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=ran: both ran lines, inlined read / store / mutator gates met, noinline harness clean (A6 + A10)', () => {
     const c = { d8: 'ran', cycles: 16384 };
     const T = (fb64d8) => checkTortureLog(tortureLog({ d8: 'ran', fb64d8 }), c);
     assert.deepEqual(T({}), []);                                                          // ran ok (positive control)
     assert.deepEqual(T({ inl: { read: 2, box: 2 } }), []);                                // boundary positive (gates are <= 2, >= 2)
     assert.deepEqual(T({ noinl: { read: 400 } }), []);                                    // noinline read high, harness clean = still ok (REPORTED)
-    assert.deepEqual(T({ inl: { store: 900 }, noinl: { store: 900 } }), []);              // A7: store counts high = still ok (REPORTED, PENDING FB64-PC)
+    assert.deepEqual(T({ noinl: { store: 900 } }), []);                                   // A10: noinline store high = still ok (REPORTED)
+    assert.ok(nonEmpty(T({ inl: { store: 900 } })), 'inlined store high');                // A10: the inlined store window is gated now
+    assert.deepEqual(T({ inl: { store: 2 } }), []);                                       // A10: inlined store boundary positive
+    assert.ok(nonEmpty(T({ inl: { store: 3 } })), 'inlined store 3');                     // mutant: inlined store gate dropped / off by one
+    assert.ok(nonEmpty(T({ inl: { store: '1.5' } })), 'inlined store non-integer');
+    assert.ok(nonEmpty(T({ inl: { store: '-1' } })), 'inlined store negative');
+    assert.deepEqual(T({ inl: { mutator: 2 } }), []);                                     // A10: inlined mutator boundary positive
+    assert.ok(nonEmpty(T({ inl: { mutator: 3 } })), 'inlined mutator 3');                 // mutant: inlined mutator gate dropped / off by one
+    assert.ok(nonEmpty(T({ inl: { mutator: 40 } })), 'inlined mutator high');             // mutant: mutator read as REPORTED
+    assert.ok(nonEmpty(T({ inl: { mutator: '1.5' } })), 'inlined mutator non-integer');   // mutant: !COUNT.test(mu) dropped (1.5 <= 2)
+    assert.ok(nonEmpty(T({ inl: { mutator: '-1' } })), 'inlined mutator negative');       // mutant: !COUNT.test(mu) dropped (-1 <= 2)
+    assert.ok(nonEmpty(T({ inl: { mutator: 'undefined' } })), 'inlined mutator undefined'); // mutant: Number(undefined) NaN read as pass
+    assert.deepEqual(T({ noinl: { mutator: 900 } }), []);                                 // A10: noinline mutator high = still ok (REPORTED)
+    assert.ok(nonEmpty(T({ noinl: { mutator: 'NaN' } })), 'noinline mutator NaN');        // a REPORTED count must still be present and numeric
     assert.ok(nonEmpty(T({ inl: { read: 3 } })), 'inlined read 3');                       // mutant: inlined read gate dropped / off by one
     assert.ok(nonEmpty(T({ inl: { read: 40 } })), 'inlined read high');                   // mutant: store and read gates swapped
     assert.ok(nonEmpty(T({ inl: { read: '1.5' } })), 'inlined read non-integer');          // mutant: !COUNT.test(rd) dropped (1.5 <= 2)
     assert.ok(nonEmpty(T({ inl: { read: '-1' } })), 'inlined read negative');              // mutant: !COUNT.test(rd) dropped (-1 <= 2)
     assert.ok(nonEmpty(T({ inl: { read: 'undefined' } })), 'inlined read undefined');     // mutant: Number(undefined) NaN read as pass
-    assert.ok(nonEmpty(T({ inl: { store: 'undefined' } })), 'inlined store undefined');   // A7: a REPORTED count must still be present and numeric
+    assert.ok(nonEmpty(T({ inl: { store: 'undefined' } })), 'inlined store undefined');   // A10: a gated count must be present and numeric
     assert.ok(nonEmpty(T({ noinl: { store: 'NaN' } })), 'noinline store NaN');
     assert.ok(nonEmpty(T({ noinl: { read: 'undefined' } })), 'noinline read undefined');
     assert.ok(nonEmpty(T({ inl: { box: 1 } })), 'inlined box 1');                         // mutant: inlined box gate dropped
@@ -296,6 +313,20 @@ test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=ran: both ran lines, inlined r
     assert.ok(nonEmpty(T({ inlN: 2 })), 'two inlined lines');                             // mutant: >= 1 instead of exactly 1
     assert.ok(nonEmpty(T({ noinlN: 2 })), 'two noinline lines');
     assert.ok(nonEmpty(T({ extraSkip: true })), 'FB64 SKIP beside the ran lines');        // one lane ran + the other skipped = a problem
+});
+
+test('A10 / A11 checkTortureLog: a stale pre-A10 FB64 line or a per-1e5 FB1024 line -> problem', () => {
+    const c = { d8: 'ran', cycles: 16384 };
+    // each fixture swaps exactly one current line for its old format, so only the old format can fail it
+    assert.deepEqual(checkTortureLog(tortureLog({ d8: 'ran' }), c), []);                  // positive control
+    const swap = (from, to) => {
+        const log = tortureLog({ d8: 'ran' });
+        assert.ok(log.includes(from + '\n'), 'fixture holds the line it swaps');
+        return log.replace(from, to);
+    };
+    assert.ok(nonEmpty(checkTortureLog(swap(fb64D8Inl({}), FB64_D8_INL_OLD), c)), 'old inlined FB64 line');   // mutant: mutator column optional, store still REPORTED
+    assert.ok(nonEmpty(checkTortureLog(swap(fb64D8Noinl({}), FB64_D8_NOINL_OLD), c)), 'old noinline FB64 line'); // mutant: noinline regex left at the old format
+    assert.ok(nonEmpty(checkTortureLog(swap(D8_RAN, D8_RAN_OLD), c)), 'per 1e5 loads line');                   // mutant: D8_RAN unit left at 1e5
 });
 
 test('B.B3 checkTortureLog: FastBit64 d8 lane, d8=skip: exactly the one SKIP line, no ran line', () => {
