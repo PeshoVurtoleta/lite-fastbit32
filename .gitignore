@@ -4,3 +4,4 @@
 /.bundle-check/
 /.handoff/
 /.gate-release.json*
+/audit/
