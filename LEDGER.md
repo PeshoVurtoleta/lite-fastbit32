@@ -48,7 +48,7 @@ them; a number with no date / host / run count there carries none here either, a
    place. No bare numeric field declarations; a source pin enforces it. *(B10, C7)*
 3. **A gate that cannot fail is not a gate.** Every gate needs a must-fail control that
    fails for its own reason (an `expect` pattern), and a coverage floor counted in events, not
-   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, C7, C9)*
+   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, C7, C9)*
 4. **Status bits and "it passed" do not prove the thing was measured.** T6 verifies TurboFan
    through `%GetOptimizationStatus`, in both V8 bit layouts, and fails closed on an unknown
    layout; an unverified lane fails closed with its reason; where T6 cannot be verified at all (V8 < 14) the tier prints a named SKIP, never a silent pass. *(B2, B8, B9)*
@@ -355,10 +355,10 @@ cross-platform half.
   reread 58-1,106 in chunk 1, shipped 0); `.handoff/research/fb64-sab-ci/` (45 local runs, 0-24
   busy threads, min rate 3.8e-4; held writer H = 64 rate 3.8e-3..5.7e-3 idle);
   `.handoff/evidence/qa-fb64/ci-42760677836-sab.log`. CI 42738445669 (old writer) later went
-  green 12 / 12: variance, not a fix. Lane-S night half: PENDING.
+  green 12 / 12: variance, not a fix. Lane-S night half: SEEN (soak-nightly 43010282719, 9 / 9 legs shipped 0; see B18).
 - **Law.** 3, 6, 14. Review r1 REJECTED DESIGN (one sub-ms window confounds preemption: parked
   0xFF = spurious red; parked -1 = vacuous pass); ruled A18: 20 bursts x 10,000 reads, 1 ms
-  apart, >= 20,000 -1 AND >= 10 of 20 bursts mixed.
+  apart, >= 20,000 -1 AND >= 10 of 20 bursts mixed (A22: >= 4; B18).
 - **Gate.** `test/torture/sab-writer64.mjs` (held writer); T3 FB64 SAB row dwell witness;
   `test/FastBit64SabSkip.test.mjs` (A18 H1 constants, H7 / H7b / H8 sampler); controls
   `fb64-sab-reread`, `fb64-sab-flip`. Reverts: old writer 1736 / 200000 FAIL; parked -1 mixed
@@ -438,6 +438,31 @@ cross-platform half.
 - **Law.** 13.
 - **Gate.** `test/FastBit64DocsQA.test.mjs`; reviewer doc-mutants (21 / 24 killed, 3
   equivalent, per HISTORY (ab)).
+
+### B18. A18 mixed bar false-FAILed on correct code (FB64-SAB-MIX, A22)
+
+- **What happened.** CI 42861181198 (de9a5d9) went red on macOS node 22 only: dwell 106028 /
+  200000, mixed 9 / 20 (seed 4037211545); shipped fail-open 0, the code was correct. The bar
+  was 10 of 20 bursts mixed. Of 41 hosted legs with the held writer (CI 42760677836,
+  42766543771, 42852157810, 42861181198, soak-nightly 43010282719) the 19 macOS legs read mixed
+  9, 15, 15, 16, 17, 17, 18, 18, 18, 19 x5, 20 x5; ubuntu 19-20. Lane-S night half SEEN
+  (nightly schedule 2026-11-11): soak-nightly 43010282719, 9 / 9 legs shipped 0, reread control
+  106-740 in chunk 1, mixed 18-20.
+- **Root cause.** Bursts are correlated, not independent: beta-binomial fit over the 19 macOS
+  legs p 0.888, rho 0.104 (nominal). A18's false-FAIL ~7e-7 assumed independent bursts; the
+  fitted model gives (nominal) P(mixed < 10) ~ 8.7e-3 per macOS leg (~4% per CI push of 5 macOS
+  legs, nominal). A bad leg looks like whole-leg starvation, so more bursts help little
+  (K = 40 bar >= 12 would miss ~2.6e-4 per macOS leg, nominal).
+- **Evidence.** de9a5d9; CI 42861181198; soak-nightly 43010282719; `.handoff/evidence/sab-mix/`
+  (model, per-leg lines). Fix: A22 (SPEC-fastbit64), maintainer ruling "K=20, bar >= 4
+  (Recommended)", 2026-11-12; at commit: (maintainer fills). NOMINAL: P(mixed < 4) ~ 6.8e-5 per
+  macOS leg (~3.4e-4 per push); 0 of 41 legs below 4.
+- **Law.** 3, 13: a floor that fails correct code is as wrong as one that passes broken code;
+  its stated miss probability must come from measured legs (run logs of this cycle), not an
+  independence assumption. The parked -1 revert (dwell 200,000, mixed 0) still FAILS at >= 4.
+- **Gate.** `test/torture/t3-adversarial.mjs` (`FB64_SAB_DWELL_MIXED` = 4);
+  `test/FastBit64SabSkip.test.mjs` (H1 constants); control `fb64-sab-flip`;
+  `test/FastBit64DocsQA.test.mjs` (CHANGELOG T3 bars == the constants).
 
 ---
 
@@ -541,7 +566,7 @@ cross-platform half.
 ### C9. Dwell witness (A18): count the writer's dwell, not a clock
 
 - **What happened.** See B11: the gate is 20 bursts x 10,000 reads, 1 ms apart, >= 20,000 -1
-  AND >= 10 of 20 bursts mixed (false-FAIL ~7e-7 nominal). r2 rejected the verdict because it
+  AND >= 4 of 20 bursts mixed (A22; was >= 10, assumed independent bursts; see B18). r2 rejected the verdict because it
   passed constants (n / k); a half-burst sampler passed; r3 added an exported counted sampler
   (A19).
 - **Evidence.** 54a9f2d; `.handoff/frozen-sabci-754292c/`; overlays `overlay-sabci*`.

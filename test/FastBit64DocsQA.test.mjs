@@ -14,6 +14,7 @@ const PKG = fileURLToPath(new URL('..', import.meta.url));
 const { FastBit64, FastBit1024, FastBit32 } = await import(new URL('../FastBit32.js', import.meta.url).href);
 const { FB64_LANES } = await import(new URL('./torture/fb64-lanes.mjs', import.meta.url).href);
 const { CONTROL_NAMES } = await import(new URL('./torture/controls.mjs', import.meta.url).href);
+const T3C = await import(new URL('./torture/t3-adversarial.mjs', import.meta.url).href);
 
 const DOCS = process.env.FB64_DOCS_ROOT ? process.env.FB64_DOCS_ROOT.replace(/\/?$/, '/') : PKG;
 const read = (f) => readFileSync(DOCS + f, 'utf8');
@@ -355,6 +356,20 @@ describe('D FastBit64 GC claims', () => {
         assert.deepEqual([...listed].sort(), fb64.filter((n) => n.startsWith('fb64-sab-')).sort());
         // the T3 line names all 3 SAB controls (spec C.D3), not only "whatever the registry holds"
         assert.deepEqual([...listed].sort(), ['fb64-sab-blind', 'fb64-sab-flip', 'fb64-sab-reread']);
+    });
+    test('CHANGELOG [Unreleased]: the T3 SAB dwell bars ">= A of B sampled reads ... >= C of D bursts" == the A18 / A22 constants', () => {
+        const c = read('CHANGELOG.md');
+        const un = c.slice(c.indexOf('## [Unreleased]'), c.indexOf('\n## [', c.indexOf('## [Unreleased]') + 5));
+        const t3m = un.match(/T3 FastBit64 SAB[^\n]*(?:\n {2}[^\n]*)*/);
+        assert.ok(t3m, 'CHANGELOG: T3 FastBit64 SAB line missing');
+        const t3 = t3m[0].replace(/\s+/g, ' ');
+        const m = t3.match(/>= ([\d,]+) of ([\d,]+) sampled reads see the invalid high word and >= (\d+) of (\d+) bursts/);
+        assert.ok(m, 'CHANGELOG: T3 dwell bars line');
+        const num = (x) => Number(x.replace(/,/g, ''));
+        assert.equal(num(m[1]), T3C.FB64_SAB_DWELL_MIN, 'dwell floor');
+        assert.equal(num(m[2]), T3C.FB64_SAB_DWELL_N, 'reads');
+        assert.equal(num(m[3]), T3C.FB64_SAB_DWELL_MIXED, 'mixed bar');
+        assert.equal(num(m[4]), T3C.FB64_SAB_DWELL_K, 'bursts');
     });
     test('torture log (FB64_TORTURE_LOG): every documented lane reads < 0.1 B/op inlined AND noinline; a missing lane FAILS',
         { skip: process.env.FB64_TORTURE_LOG ? false : 'FB64_TORTURE_LOG unset (a release-time row; point it at the final torture log)' }, () => {

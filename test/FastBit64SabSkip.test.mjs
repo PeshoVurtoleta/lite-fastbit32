@@ -68,7 +68,7 @@ test('X-10 the real MEASURE lines against the soak-lane checker (formats cannot 
 
 // ---- FB64-SAB-CI: writer-dwell coverage gate (SPEC-fastbit64 A17 / A18) ----
 // Expected text is written out from the contract, not produced by the implementation.
-const dwellMsg = (neg, n, mixed, k) => 'FB64 SAB coverage: writer dwell -- ' + neg + ' of ' + n + ' sampled reads saw the invalid high word, ' + mixed + ' of ' + k + ' bursts saw both values (need >= 20000 and >= 10) -- fail closed';
+const dwellMsg = (neg, n, mixed, k) => 'FB64 SAB coverage: writer dwell -- ' + neg + ' of ' + n + ' sampled reads saw the invalid high word, ' + mixed + ' of ' + k + ' bursts saw both values (need >= 20000 and >= 4) -- fail closed';
 
 test('A18 H1 dwell constants are pinned', () => {
     assert.equal(FB64_SAB_HOLD, 64); // mutant: hold changed
@@ -76,7 +76,7 @@ test('A18 H1 dwell constants are pinned', () => {
     assert.equal(FB64_SAB_DWELL_BURST, 10000); // mutant: burst size changed
     assert.equal(FB64_SAB_DWELL_N, 200000); // mutant: sample count changed
     assert.equal(FB64_SAB_DWELL_MIN, 20000); // mutant: floor weakened or raised
-    assert.equal(FB64_SAB_DWELL_MIXED, 10); // mutant: mixed floor weakened
+    assert.equal(FB64_SAB_DWELL_MIXED, 4); // A22 (K=20, bar >= 4); mutant: mixed floor weakened or raised
     assert.equal(FB64_SAB_DWELL_BURST * FB64_SAB_DWELL_K, FB64_SAB_DWELL_N); // mutant: burst*k drifts from n
 });
 
@@ -89,8 +89,10 @@ test('A18 H2 fb64SabDwellFail boundaries: neg axis, floor and n inclusive', () =
 });
 
 test('A18 H2b fb64SabDwellFail boundaries: mixed axis', () => {
-    assert.equal(fb64SabDwellFail(50000, 200000, 10, 20), null); // mutant: `>` instead of `>=` on mixed
-    assert.equal(fb64SabDwellFail(50000, 200000, 9, 20), dwellMsg(50000, 200000, 9, 20)); // mutant: mixed floor off by one
+    assert.equal(fb64SabDwellFail(50000, 200000, 4, 20), null); // mutant: `>` instead of `>=` on mixed / bar raised
+    assert.equal(fb64SabDwellFail(50000, 200000, 3, 20), dwellMsg(50000, 200000, 3, 20)); // mutant: mixed floor off by one
+    // A22 incident row: CI 42861181198 macOS node 22, correct code, dwell 106028, mixed 9 of 20 -> must pass
+    assert.equal(fb64SabDwellFail(106028, 200000, 9, 20), null); // mutant: the old bar 10 (false-FAILed this leg)
     assert.equal(fb64SabDwellFail(50000, 200000, 20, 20), null); // mutant: `< k`
     assert.equal(fb64SabDwellFail(50000, 200000, 21, 20), dwellMsg(50000, 200000, 21, 20)); // mutant: no mixed upper bound
     // vacuous case: a writer parked at the invalid value (every sample negative, no burst mixed)
@@ -113,7 +115,7 @@ test('A18 H3 fb64SabDwellFail fails closed on unreadable inputs, and embeds them
 
 test('A18 H4 fb64SabDwellLine exact text', () => {
     assert.equal(fb64SabDwellLine({ dwell: 93000, dwellN: 200000, dwellMixed: 20, dwellK: 20 }),
-        'MEASURE FastBit64 T3 SAB writer dwell=93000/200000 mixed=20/20 [gated: >= 20000, mixed >= 10]'); // mutant: field order / bracket text drift
+        'MEASURE FastBit64 T3 SAB writer dwell=93000/200000 mixed=20/20 [gated: >= 20000, mixed >= 4]'); // mutant: field order / bracket text drift
 });
 
 test('A18 H5 the soak-lane checker accepts the dwell line after the SAB row line and still counts one SAB row', () => {
