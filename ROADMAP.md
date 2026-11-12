@@ -448,6 +448,32 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
       3. It calls the validated, throwing `rangeMask` from a hot method.
       If packed fields get a consumer, the shape is `getField(start, len) -> int` / `setField(start, len, v)`
       (BEXTR / UBFX style). The `len = 0` and `len = 32` masks are the edge rows.
+  - Second external list (maintainer-supplied "bit-hack families" review, triaged 2026-11-12 by the
+    orchestrator; checked in a 32-bit model only, never in V8, so no B/op or timing claim carries over):
+    - The symmetric-difference count: YES, add it to the research intake. FastBit32
+      `popcount(a ^ b)`; FastBit1024 next to `intersectionSize` / `unionSize` / `differenceSize` (RESEARCH 16
+      names). T0 law: it equals `unionSize - intersectionSize`. The NAME is a cross-package Q-id, Q-XSZ:
+      `symmetricDifferenceSize` (matches RoaringSet's long names) vs `xorSize` (matches `xor()`). Rule it once
+      for lite-fastbit32, lite-loglogn RoaringSet R2 and lite-o1 BitSet (both ROADMAPs carry the same Q-XSZ
+      note, 2026-11-12).
+    - `findClearRun(k)` / `maxRun`: unchanged, still the RESEARCH 14.2 CANDIDATE (kernel verified; the
+      maintainer's RESEARCH 21 re-check agrees). It needs a named consumer; none in the suite uses
+      FastBit1024 as a slot pool today (2026-11-12 grep).
+    - PEXT / PDEP (`compress` / `deposit`) and the k-of-m submask walk built on them: CONSUMER-GATED.
+      55-100 ops each, and the list's own textbook `expand` port failed parity until rebuilt as the inverse of
+      the compress stages. LiteEcs (the only suite ECS consumer) uses only the constructor and `has`.
+    - `prevCombination` (`~nextCombination(~v)`), `commonPrefixLength` / `firstDifference`
+      (`Math.clz32(a ^ b)` / ctz): NO, each is one line in user code.
+    - Round-robin `nextSetBitWrap` / fair `acquire`: NO as a primitive. Lowest-slot `acquire` is deliberate
+      (locality); fairness is a caller policy.
+    - Out of scope for FastBit (stateless word functions, not bitset-object members; SC-4 / SC-5):
+      Morton / Z-order, `reverse32` / `bswap` / `deltaSwap`, Gray code, prefix-OR smear,
+      `nextPowerOfTwo` / `isPowerOfTwo` / `parity`, SWAR byte search, bit-sliced counters, combinadic
+      rank / unrank. Home, if ever wanted: a separate stateless package with its own research burst (the
+      `lite-bits` that FB-14 found llms.txt pointing at does not exist). `rol` / `ror` / `reverse` stay
+      LEDGER A1 (consumer-gated). `Atomics` flag mutation stays the "raw-word views ... only with
+      `Atomics`" candidate above.
+    - Prior art for the 1.8.0 intake: upstream Bitcoin Core `src/util/bitset.h` (see NEXT.md FILLERS).
   - Representation law (non-negotiable): every result is stored `| 0`, never `>>> 0`.
     - The proposal's prose used `>>> 0`. With bit 31 set that stores a uint32 double, which boxes 16 B: the
       exact 1.6.1 `highest()` defect.
