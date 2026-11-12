@@ -601,17 +601,18 @@ function fb1024SabRow(ctx, F) {
 // reads the high word in FB64_SAB_DWELL_K = 20 bursts of FB64_SAB_DWELL_BURST = 10,000 plain reads
 // (FB64_SAB_DWELL_N = 200,000 in all), with a 1 ms Atomics.wait between bursts so they sample different
 // moments of the writer. A burst is MIXED when it saw both -1 and 0xFF. Gate (fb64SabDwellFail): total -1
-// reads >= FB64_SAB_DWELL_MIN = 20,000 (10%) AND mixed bursts >= FB64_SAB_DWELL_MIXED = 4 of 20 (A22), else
-// "FB64 SAB coverage: writer dwell -- ... -- fail closed". One contiguous window cannot tell a flipping
-// writer from a preempted one; the mixed count can: a writer frozen at either value fails it, and the old
-// back-to-back writer fails the 10% floor. REPORTED hosted record (41 legs; CI 42760677836, 42766543771,
-// 42852157810 (2 legs ran), 42861181198, soak-nightly 43010282719; 2026-11-10..11): mixed ubuntu 19-20
-// (22 legs), macOS 9-20 (19 legs), dwell 74,630-117,451; CI 42861181198 macOS node 22 read 9/20 on
-// correct code (seed 4037211545) -> the old bar 10 false-FAILed. Nominal model
-// (.handoff/evidence/sab-mix/model/bb.py): beta-binomial MLE over the 19 macOS legs, p 0.888, rho 0.104
-// (bursts correlate; A18's independent-burst 7e-7 did not hold): P(mixed < 4) ~ 6.8e-5 per macOS leg
-// (~3.4e-4 per CI push of 5 macOS legs); the old bar 10 ~ 8.7e-3. A writer frozen at either value still
-// FAILs (mixed 0).
+// reads >= FB64_SAB_DWELL_MIN = 20,000 (10%) AND mixed bursts >= FB64_SAB_DWELL_MIXED = 1 of 20 (A24, superseding
+// A22's 4), else "FB64 SAB coverage: writer dwell -- ... -- fail closed". One contiguous window cannot tell a
+// flipping writer from a preempted one; the mixed count can: a writer frozen at either value reads mixed 0 and
+// still FAILs at >= 1, and the old back-to-back writer fails the 10% floor. REPORTED hosted record (51 legs:
+// 24 macOS, 27 ubuntu; CI 42760677836, 42766543771, 42852157810 (2 legs ran), 42861181198, soak-nightly
+// 43010282719, CI 43154836495; 2026-11-10..12): mixed ubuntu 19-20, macOS 4-20, dwell 60,639-121,486. Two
+// macOS legs on correct code hit the earlier bars: CI 42861181198 macOS node 22 read 9/20 (seed
+// 4037211545; the first bar, 10, false-FAILed) and CI 43154836495 (2026-11-12) macOS node 26 read 4/20 (dwell
+// 121486), exactly AT A22's bar 4. Nominal refit (.handoff/evidence/sab-mix2/bb*.py, beta-binomial MLE over
+// the 24 macOS legs): p 0.836, rho 0.197 (bursts correlate; A18's independent-burst 7e-7 did not hold).
+// Nominal miss per macOS leg: bar >= 4 3.56e-3 (~1.8% per CI push of 5 macOS legs), so A22's 6.8e-5 is
+// refuted; bar >= 2 6.02e-4; bar >= 1 1.35e-4 (~6.8e-4 per push).
 // The sampler is fb64SabDwellSample (A19): it COUNTS its reads and bursts, and the verdict and the MEASURE
 // record take those counts (never the constants), so a sampler that reads short fails the n / k checks.
 // The row still runs and reports every coverage line.
@@ -645,7 +646,7 @@ export const FB64_SAB_DWELL_K = 20;
 export const FB64_SAB_DWELL_BURST = 10000;
 export const FB64_SAB_DWELL_N = 200000;
 export const FB64_SAB_DWELL_MIN = 20000;
-export const FB64_SAB_DWELL_MIXED = 4;
+export const FB64_SAB_DWELL_MIXED = 1;
 let SAB64 = null;
 
 // The singleton writer: the hold is read from ctx.control.fb64SabHold or FB64_SAB_HOLD on the FIRST

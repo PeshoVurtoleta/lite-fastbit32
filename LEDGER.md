@@ -358,7 +358,7 @@ cross-platform half.
   green 12 / 12: variance, not a fix. Lane-S night half: SEEN (soak-nightly 43010282719, 9 / 9 legs shipped 0; see B18).
 - **Law.** 3, 6, 14. Review r1 REJECTED DESIGN (one sub-ms window confounds preemption: parked
   0xFF = spurious red; parked -1 = vacuous pass); ruled A18: 20 bursts x 10,000 reads, 1 ms
-  apart, >= 20,000 -1 AND >= 10 of 20 bursts mixed (A22: >= 4; B18).
+  apart, >= 20,000 -1 AND >= 10 of 20 bursts mixed (A22: >= 4, A24: >= 1; B18).
 - **Gate.** `test/torture/sab-writer64.mjs` (held writer); T3 FB64 SAB row dwell witness;
   `test/FastBit64SabSkip.test.mjs` (A18 H1 constants, H7 / H7b / H8 sampler); controls
   `fb64-sab-reread`, `fb64-sab-flip`. Reverts: old writer 1736 / 200000 FAIL; parked -1 mixed
@@ -460,7 +460,14 @@ cross-platform half.
 - **Law.** 3, 13: a floor that fails correct code is as wrong as one that passes broken code;
   its stated miss probability must come from measured legs (run logs of this cycle), not an
   independence assumption. The parked -1 revert (dwell 200,000, mixed 0) still FAILS at >= 4.
-- **Gate.** `test/torture/t3-adversarial.mjs` (`FB64_SAB_DWELL_MIXED` = 4);
+- **Amended 2026-11-12 (A24).** The >= 4 bar's model was refuted: CI 43154836495 (72744e5)
+  macOS node 26 read mixed 4 / 20 (dwell 121486) on correct code, exactly AT the bar. Refit
+  over the 24 distinct macOS legs of 51 hosted legs (24 macOS, 27 ubuntu; nominal,
+  `.handoff/evidence/sab-mix2/`): p 0.836, rho 0.197; miss per macOS leg bar >= 4 3.56e-3
+  (~1.8% per push), bar >= 2 6.02e-4, bar >= 1 1.35e-4 (~6.8e-4 per push). The bar is now
+  >= 1 (maintainer ruling "Bar >= 1 (Recommended)"); the stuck writer (stores only -1: dwell
+  200,000, mixed 0) still FAILS, and fb64-sab-flip still fails on the 10% dwell floor.
+- **Gate.** `test/torture/t3-adversarial.mjs` (`FB64_SAB_DWELL_MIXED` = 1, A24);
   `test/FastBit64SabSkip.test.mjs` (H1 constants); control `fb64-sab-flip`;
   `test/FastBit64DocsQA.test.mjs` (CHANGELOG T3 bars == the constants).
 
@@ -566,7 +573,7 @@ cross-platform half.
 ### C9. Dwell witness (A18): count the writer's dwell, not a clock
 
 - **What happened.** See B11: the gate is 20 bursts x 10,000 reads, 1 ms apart, >= 20,000 -1
-  AND >= 4 of 20 bursts mixed (A22; was >= 10, assumed independent bursts; see B18). r2 rejected the verdict because it
+  AND >= 1 of 20 bursts mixed (A24; A22 was >= 4, A18 >= 10; see B18). r2 rejected the verdict because it
   passed constants (n / k); a half-burst sampler passed; r3 added an exported counted sampler
   (A19).
 - **Evidence.** 54a9f2d; `.handoff/frozen-sabci-754292c/`; overlays `overlay-sabci*`.

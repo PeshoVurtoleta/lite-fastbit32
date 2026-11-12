@@ -32,10 +32,11 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   fb64-u32-storage, fb64-bop-box, fb64-poison-opts-drop, fb64-noinline-flag-drop). The same lanes run in a
   child under `--no-turbo-inlining`.
 - T3 FastBit64 SAB race row: 0 fail-open; the writer holds each value, a dwell witness, fail closed: >= 20,000 of
-  200,000 sampled reads see the invalid high word and >= 4 of 20 bursts see both values (41 hosted legs, CI
-  42760677836, 42766543771, 42852157810, 42861181198, soak-nightly 43010282719, 2026-11-10..11: the first bar,
-  10 of 20 bursts, false-FAILed once (CI 42861181198, macOS node 22, 9 / 20); nominal miss (beta-binomial fit,
-  correlated bursts) at >= 4 is ~6.8e-5 per macOS leg);
+  200,000 sampled reads see the invalid high word and >= 1 of 20 bursts see both values (51 hosted legs, 24 macOS
+  and 27 ubuntu, CI 42760677836, 42766543771, 42852157810, 42861181198, soak-nightly 43010282719, CI 43154836495,
+  2026-11-10..12: the first bar, 10 of 20 bursts, false-FAILed CI 42861181198 (macOS node 22, 9 / 20); the next,
+  4, was met exactly by CI 43154836495 (macOS node 26, 4 / 20); nominal miss at >= 1 (beta-binomial fit over the
+  24 macOS legs, correlated bursts) is ~1.35e-4 per macOS leg; a writer frozen at either value reads mixed 0 / 20);
   the re-read control reads >= 20 within 1024 x 20,000 calls; SKIP under 3 cores (named); lane S requires the
   ran line; 3 controls (fb64-sab-reread, fb64-sab-blind, fb64-sab-flip). REPORTED, hosted (CI run 42760677836, 2026-11-10,
   GitHub-hosted ubuntu and macos, node 20-26.8.2, 10 legs, one run per leg): dwell 80,763-114,510 of 200,000,
