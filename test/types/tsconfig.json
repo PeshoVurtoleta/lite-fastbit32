@@ -7,8 +7,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": [],
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["fastbit32.test-d.ts"]
+  "include": ["fastbit32.test-d.ts", "af2.test-d.ts"]
 }

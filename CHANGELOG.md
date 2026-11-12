@@ -63,6 +63,19 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   check order). T6 FastBit32 noinline lane: `countRange(i & 15, 31)` and `countRange(0, 15)` in a child under
   `--no-turbo-inlining`, verified TurboFan, gated < 0.1 B/op, next to a byte-copy witness of the old `countRange`
   gated >= 15.9 B/op in the same run.
+- Audit 1.7 (AF-2): `test/AF2Pins.test.mjs` pins today's outcomes when a set object or `undefined` is passed where
+  FastBit32 expects a mask or a FastBit32 (characterization rows, not a contract; S6 / SC-3 may change them): the
+  mask reads as 0; for a set object, `equals` on an empty receiver returns true, `copy` stores `value = undefined`
+  and forEachArray / Object / Mapped / MappedObject call back once with bit -1; `undefined` there throws TypeError.
+  `test/AF2Rows.test.mjs`: `FastBit64.forEach` under a mutating callback follows FastBit1024's per-word rule (seeds
+  {1, 5, 40}; the callback at 1 adds 3, removes 40, adds 50: both visit [1, 5, 50]); `clone()` / `deserialize()`
+  return a base FastBit64; `fromArray` / `loadFrom` read the intrinsic TypedArray length; with two bad words the
+  RangeError names `lo`. Hygiene: every class field initializer must be a decimal integer literal in
+  [-2^30, 2^30) (`= undefined` / `= null` now fail), plus `sideEffects: false` and `engines` rows. Types:
+  `test/types/af2.test-d.ts` (surface, mask and shadowing rows) under `skipLibCheck: false`; `test/AF2QA.test.mjs`
+  pins the d.ts parameter types of the mask ops and iterators that have no tsc row. Each of the 16 runtime and 12
+  d.ts mutants, applied to a copy, turns its own row red while the unmutated copy passes; each AF2QA checker goes
+  red on its own in-process text mutants.
 
 ### Changed
 
@@ -75,6 +88,10 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - Source header: the TRUNCATION caveat said every value becomes unsigned, which was false. It now gives the exact
   list: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
   `deserialize`; `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`.
+- Types: FastBit1024 declares `private readonly _cap / _active / _full / _n / _data` and BitMapper `_map / _reverse`
+  (the runtime field names), so a TypeScript subclass that redeclares one fails to compile (TS2415). Side effect:
+  both classes are now nominal in TypeScript; a structural mock, an `implements` of the public shape, or an instance
+  from a second installed copy of the package no longer type-checks (TS2739 / TS2720 / TS2322). No runtime change.
 
 ### Fixed
 

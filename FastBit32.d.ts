@@ -487,6 +487,12 @@ export class BitMapper {
      */
     constructor(names?: string[]);
 
+    /** Reserves the runtime field name (not API). */
+    private readonly _map: Map<string, number>;
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _reverse: (string | undefined)[];
+
     /**
      * Gets the raw bit index (0-31) for a specific flag name.
      *
@@ -680,6 +686,21 @@ export class FastBit1024 {
      * @throws {RangeError} On a capacity that is not an integer 1..1024.
      */
     constructor(capacity?: number);
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _cap: number;
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _active: number;
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _full: number;
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _n: number;
+
+    /** Reserves the runtime field name (not API). */
+    private readonly _data: Int32Array;
 
     /** Sets `bit`. O(1). @throws {RangeError} unless `0 <= bit < capacity` (integer). */
     add(bit: number): this;

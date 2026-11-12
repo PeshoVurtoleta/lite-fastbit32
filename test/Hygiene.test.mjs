@@ -48,15 +48,16 @@ describe('Hygiene (FB-10)', () => {
 
 // ---- A12 source pin: no bare class fields (PLAN-fb64pc-A T1-T2) ----------------
 // With 31-bit Smis a bare `#x;` field is Tagged and boxes each out-of-Smi store; a
-// Smi-first field (`#x = 0`) is Double and stored in place. bareFields() lists every
-// class field declared with no initializer. A char scanner (no AST is available);
+// Smi-first field (`#x = 0`) is Double and stored in place. bareFields() returns
+// { bare, inits }: bare lists every class field declared with no initializer, inits
+// every [name, initializer text] (U-15). A char scanner (no AST is available);
 // it throws on anything it cannot classify (template with a backtick inside ${},
 // regex-position '/' (a '/' after a keyword such as return counts as regex; a '/'
 // after ')' is read as division, a char scanner cannot tell that case), ASI-ambiguous
 // initializer, unknown member shape).
 // BEGIN bareFields
 function bareFields(text) {
-    const out = [], st = [], n = text.length;
+    const out = [], inits = [], st = [], n = text.length;
     let i = 0, prev = ';', sawNl = false;
     const RX_KW = ['return', 'typeof', 'instanceof', 'in', 'of', 'void', 'delete', 'new', 'throw', 'case', 'do', 'else', 'yield', 'await'];
     const fail = (m, at) => { throw new Error('bareFields: ' + m + ' at ' + at); };
@@ -197,7 +198,9 @@ function bareFields(text) {
                 st.push({ cls: false }); // MUT-BODY
                 i = k + 1; prev = '{';
             } else if (c === '=') {
-                i = skipExpr(j + 1, 'init') + 1;
+                const e = skipExpr(j + 1, 'init');
+                inits.push([top.name + '.' + (isStatic ? 'static ' : '') + key, text.slice(j + 1, e).trim()]);
+                i = e + 1;
             } else if (c === ';' || c === '}' || (nl && j < n)) { // MUT-ASI
                 out.push(top.name + '.' + (isStatic ? 'static ' : '') + key);
                 i = c === ';' ? j + 1 : j;
@@ -239,13 +242,27 @@ function bareFields(text) {
         i++; prev = c;
     }
     if (st.length) fail('unbalanced brackets at end', n);
-    return out;
+    return { bare: out, inits };
 }
 // END bareFields
 
+// U-15 (audit 1.7, ruling Q5): every field initializer is a Smi integer literal -- decimal, no sign on 0,
+// in [-2^30, 2^30) (a 31-bit Smi, so also a Smi on pointer-compressed V8). A field that needs any other
+// initializer is named in INIT_EXEMPT with its reason. Returns the offending [name, text] pairs.
+const INIT_EXEMPT = [];
+function nonSmiInits(inits) {
+    return inits.filter(([name, t]) => !INIT_EXEMPT.includes(name) &&
+        !(/^(0|-?[1-9]\d*)$/.test(t) && Number(t) >= -1073741824 && Number(t) < 1073741824));
+}
+
 describe('A12: no bare class fields (a bare field is Tagged and boxes on pointer-compressed V8)', () => {
-    it('live FastBit32.js has exactly one bare field: the FastBit1024 brand', () => {
-        assert.deepStrictEqual(bareFields(read('FastBit32.js')), ['FastBit1024.#brand']);
+    it('live FastBit32.js: one bare field (the FastBit1024 brand); every other initializer is a Smi literal (U-15)', () => {
+        const got = bareFields(read('FastBit32.js'));
+        assert.deepStrictEqual(nonSmiInits(got.inits), [], 'every field initializer must be a Smi integer literal');
+        assert.deepStrictEqual(got, {
+            bare: ['FastBit1024.#brand'],
+            inits: [['FastBit64.#lo', '0'], ['FastBit64.#hi', '0']]
+        });
     });
 
     // Corpus, expected values per PLAN-fb64pc-A T2 (hand-derived from the JS grammar).
@@ -262,7 +279,7 @@ describe('A12: no bare class fields (a bare field is Tagged and boxes on pointer
         ['fields named get and static', wrap('get; static;'), ['C.get', 'C.static']]
     ];
     for (const [name, src, want] of CORPUS) {
-        it('corpus: ' + name, () => { assert.deepStrictEqual(bareFields(src), want); });
+        it('corpus: ' + name, () => { assert.deepStrictEqual(bareFields(src).bare, want); });
     }
     it('corpus: #a = 1 <newline> #b; throws (initializer ends by ASI, unsupported)', () => {
         assert.throws(() => bareFields(wrap('#a = 1\n#b;')), /bareFields/);
@@ -273,9 +290,41 @@ describe('A12: no bare class fields (a bare field is Tagged and boxes on pointer
     });
     it('throws on a regex after a keyword (return /x/); an identifier named returned still divides', () => {
         assert.throws(() => bareFields('function f(s) { return /x/.test(s); }'), /bareFields/);
-        assert.deepStrictEqual(bareFields('function g(returned) { return returned / 2; }'), []);
+        assert.deepStrictEqual(bareFields('function g(returned) { return returned / 2; }').bare, []);
     });
     it('throws on a class expression in a class heritage', () => {
         assert.throws(() => bareFields('class A extends class {} { #y; }'), /bareFields/);
+    });
+    it('throws on a regex after typeof in an initializer, and on a class body left open at the end', () => {
+        assert.throws(() => bareFields(wrap('#a = typeof /x/;')), /bareFields/);
+        assert.throws(() => bareFields('class C { #a;'), /bareFields/);
+    });
+    it('corpus: a field closed by } with no ; is bare', () => {
+        assert.deepStrictEqual(bareFields('class C { #a }').bare, ['C.#a']);
+    });
+    it('corpus: inits lists [name, initializer text] in source order (static keeps its prefix)', () => {
+        assert.deepStrictEqual(bareFields(wrap('#a = (0, 1); static #b = -7; #c;')).inits,
+            [['C.#a', '(0, 1)'], ['C.static #b', '-7']]);
+    });
+    // U-15: the Smi-literal rule rejects what a bare "has an initializer" check let through
+    for (const bad of ['undefined', 'null', '-0', '0.5', '1073741824', '-1073741825', '0x10', '1e3', '(0)', '07']) {
+        it('corpus: the Smi-literal rule rejects #a = ' + bad, () => {
+            assert.deepStrictEqual(nonSmiInits(bareFields(wrap('#a = ' + bad + ';')).inits), [['C.#a', bad]]);
+        });
+    }
+    for (const good of ['0', '-7', '1073741823', '-1073741824']) {
+        it('corpus: the Smi-literal rule accepts #a = ' + good, () => {
+            assert.deepStrictEqual(nonSmiInits(bareFields(wrap('#a = ' + good + ';')).inits), []);
+        });
+    }
+});
+
+// ---- U-17: the package.json fields no other gate reads ---------------------------------------------------
+describe('U-17: package.json sideEffects and engines', () => {
+    it('U-17 sideEffects is false (tree-shaking contract)', () => {
+        assert.strictEqual(JSON.parse(read('package.json')).sideEffects, false);
+    });
+    it('U-17 engines is exactly { node: ">=18" }', () => {
+        assert.deepStrictEqual(JSON.parse(read('package.json')).engines, { node: '>=18' });
     });
 });
