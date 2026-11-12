@@ -5,7 +5,10 @@
  * - SILENT WRAPAROUND: JS bitwise shifts implicitly apply modulo 32.
  * Calling `add(32)` evaluates as `add(0)`. `add(40)` evaluates as `add(8)`.
  * - TRUNCATION: Floats and negative numbers are silently truncated and
- * converted to unsigned 32-bit integers (e.g., `-1 >>> 0` becomes `4294967295`).
+ * converted to 32-bit integers: `value` is int32 after any bit mutator or
+ * `set`; uint32 straight from the constructor / `clone` / `fromArray` /
+ * `deserialize` (FB-03); `copy` stores `other.value` as-is. Compare with
+ * `equalsValue` or `>>> 0`.
  * Sanitize your inputs upstream if your domain logic requires strict bounds!
  * - BIT INDEX IDIOM: always `31 - Math.clz32(x)`, never the XOR-31 form: `31 -` maps
  * x === 0 to the -1 "none" sentinel for free, so every scan is branchless.
@@ -202,7 +205,7 @@ export class FastBit32 {
      * Caller must guarantee 0 <= start <= end <= 31.
      */
     countRange(start, end) {
-        const mask = ((0xFFFFFFFF >>> (31 - (end - start))) << start) >>> 0;
+        const mask = (0xFFFFFFFF >>> (31 - (end - start))) << start;
         return this.countMasked(mask);
     }
 
@@ -636,9 +639,8 @@ export class FastBit1024 {
 
     /**
      * O(1) pool take: the LOWEST free slot, now held; -1 when full. The scan is
-     * inlined (one word read reused for the write): ~3.0-3.2 ns per
-     * acquire+release pair vs ~4.9 ns when it called nextClearBit() with the
-     * same zero test (5.4 ns for the original draft; RESEARCH 13).
+     * written out in this body (one word read reused for the write) instead of
+     * a call to nextClearBit() with the same zero test.
      */
     acquire() {
         const f = ~this._full;
@@ -915,6 +917,7 @@ export class FastBit1024 {
      * once, through the intrinsic getter). Throws before writing anything.
      */
     saveInto(out, offset = 0) {
+        if (!(#brand in this)) fb1024BadOther(this);
         if (!ArrayBuffer.isView(out) || !(out instanceof Int32Array) || fb1024TaTag.call(out) !== 'Int32Array') fb1024BadBuf('out');
         if ((offset & 0x3FFFFFFF) !== offset) fb1024BadOffset(offset);
         const L = (this._cap + 31) >>> 5;

@@ -55,11 +55,32 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - REPORTED (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2
   harness): once a d8 process holds an out-of-Smi FastBit64, mutators on Smi words were measured slower (`toggle`
   about 1.0 -> about 3.7 ns/op, no allocation either way); not gated.
+- Audit 1.7 (AF-1): `test/AF1Parity.test.mjs` compares the live build with the base (`git show de9a5d9`):
+  87,647 `countRange` calls and 16 `saveInto` images, byte-identical, with an in-test mutated-base control.
+  `test/AF1Receiver.test.mjs`: the forged-receiver rows plus a lite-leak retention row (606 tracked objects, 0 live
+  after gc). `test/AF1QA.test.mjs`: 19 boundary rows (the header wording, the signed `countMasked` mask, `saveInto`
+  check order). T6 FastBit32 noinline lane: `countRange(i & 15, 31)` and `countRange(0, 15)` in a child under
+  `--no-turbo-inlining`, verified TurboFan, gated < 0.1 B/op, next to a byte-copy witness of the old `countRange`
+  gated >= 15.9 B/op in the same run.
 
 ### Changed
 
 - Docs: `npm run test:perf` is relabelled the DETERMINISTIC scavenge-count gate (it counts scavenges, it does not
   time anything). The statistical gates are `witness` and `gate:release`.
+- `FastBit32#countRange` keeps its mask a signed int32 (it dropped `>>> 0`), so the mask no longer boxes when
+  `countMasked` is not inlined. Results are unchanged. A subclass overriding `countMasked` now receives the signed
+  mask: `countRange(0, 31)` passes -1, not 4294967295. "No longer boxes" holds on Node (32-bit Smis); on a 31-bit-Smi
+  engine (Chrome / Electron) masks outside [-2^30, 2^30) still box (FB-12, not gated).
+- Source header: the TRUNCATION caveat said every value becomes unsigned, which was false. It now gives the exact
+  list: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
+  `deserialize`; `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`.
+
+### Fixed
+
+- `FastBit1024#saveInto` checks its receiver first: a non-FastBit1024 receiver (a plain object, a Proxy of a real set,
+  a FastBit64, a FastBit32, a FastBit1024 from another copy of the module) throws `TypeError` before `out` or
+  `offset` is read, and `out` is left untouched. Subclass instances save as before. (FastBit64#saveInto already
+  threw before any write.)
 
 ## [1.6.1] - 2026-11-05
 

@@ -12,12 +12,16 @@
 // (exactly the VERSION line + highest differ; the marker must be present once),
 // and the VERSION values are pinned to the base ('1.6.0') and to package.json, so
 // both rows survive the next release commit.
+// AF-1 re-pin (U-2 / U-3 / U-10+U-8 / U-5): row 7 compares the tree prefix with the base
+// patched by the four test/fixtures/af1-patches.mjs entries (count-checked: each `from`
+// exactly once, row 7a0); after patching, still exactly VERSION + highest differ.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as NEW from '../FastBit32.js';
+import { AF1_PATCHES, applyExact, countOf } from './fixtures/af1-patches.mjs';
 
 const BASE = '9f57c7c';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -112,10 +116,22 @@ test('B3 row 6: source pin -- highest() text, new and old', () => {
 });
 
 const MARK64 = '// -- FastBit64 --';
+test('B3 row 7a0: AF-1: every af1-patches from occurs once in the base; every to once (from zero times) in the tree prefix', () => {
+    const at = headSrc.indexOf(MARK64), hp = headSrc.slice(0, at);
+    assert.ok(at > 0, 'FastBit64 marker missing');
+    assert.strictEqual(AF1_PATCHES.length, 4);
+    for (const [from, to, why] of AF1_PATCHES) {
+        assert.strictEqual(countOf(baseSrc, from), 1, 'base: from x1 -- ' + why);
+        assert.strictEqual(countOf(baseSrc, to), 0, 'base: to x0 -- ' + why);
+        assert.strictEqual(countOf(hp, to), 1, 'tree prefix: to x1 -- ' + why);
+        assert.strictEqual(countOf(headSrc, from), 0, 'tree: from x0 -- ' + why);
+    }
+});
+
 test('B3 row 7: the base and the text before the FastBit64 marker differ in exactly two lines (VERSION, highest)', () => {
     const at = headSrc.indexOf(MARK64);
     assert.ok(at > 0 && headSrc.indexOf(MARK64, at + 1) === -1, 'FastBit64 marker must occur exactly once');
-    const a = baseSrc.split('\n'), b = headSrc.slice(0, at).split('\n');
+    const a = applyExact(baseSrc, AF1_PATCHES).split('\n'), b = headSrc.slice(0, at).split('\n'); // AF-1 re-pin
     assert.equal(a.length, b.length, 'line count');
     const d = [];
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d.push(i);

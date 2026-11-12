@@ -15,13 +15,17 @@
 //       the tree throws TypeError 'FastBit1024: expected a FastBit1024, got object'.
 // Expected values come from the SPEC, or are derived by hand (see each comment);
 // the differential's oracle is the BASE build itself.
-// PATCHES (below) is the ONE maintainer-ruled 1.6.1 change (T6-FIX2: highest() `| 0`, never boxes) applied to the BASE side of (a) / (b); nothing else is accepted.
+// PATCHES (below) are the maintainer-ruled changes applied to the BASE side of (a) / (b); nothing else is accepted:
+// the 1.6.1 T6-FIX2 (highest() `| 0`, never boxes) and the two AF-1 edits that fall in this suite's scope
+// (test/fixtures/af1-patches.mjs: U-2 header :8, U-3 countRange :205; the AF-1 acquire JSDoc / saveInto edits are
+// past the FastBit1024 marker and outside 1.5.0's member set). (a) applies them count-checked (each `from` exactly once).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as NEW from '../FastBit32.js';
+import { AF1_HEADER, AF1_COUNTRANGE, applyExact, applyAtMostOnce } from './fixtures/af1-patches.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const BASE = 'cd49e4d';
@@ -35,8 +39,9 @@ try {
 const headSrc = readFileSync(new URL('../FastBit32.js', import.meta.url), 'utf8');
 
 const norm = (s) => s.replace(/export const VERSION = '[^']*';/, 'export const VERSION = X;');
-const PATCHES = [['return 31 - Math.clz32(this.value);', 'return 31 - Math.clz32(this.value | 0);', '1.6.1 T6-FIX2: highest() never boxes (HighestParity161.test.mjs proves identical results)']];
-const patched = (text) => { for (const [from, to] of PATCHES) text = text.split(from).join(to); return text; };
+const PATCHES = [['return 31 - Math.clz32(this.value);', 'return 31 - Math.clz32(this.value | 0);', '1.6.1 T6-FIX2: highest() never boxes (HighestParity161.test.mjs proves identical results)'],
+    AF1_HEADER, AF1_COUNTRANGE];   // AF-1 re-pin (U-2, U-3): AF1Parity.test.mjs proves countRange results identical
+const patched = (text) => applyAtMostOnce(text, PATCHES);
 const SKIP = new Set(['FastBit1024.hasAll', 'FastBit1024.hasAny']);
 
 function kind(d) {
@@ -80,7 +85,7 @@ describe('FastBit1024 1.5.0 -> tree parity (base ' + BASE + ')', () => {
         const bi = baseSrc.indexOf(MARK), hi = headSrc.indexOf(MARK);
         assert.ok(bi > 0 && hi > 0);
         assert.strictEqual(headSrc.indexOf(MARK, hi + 1), -1);
-        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(patched(baseSrc.slice(0, bi))));
+        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(applyExact(baseSrc.slice(0, bi), PATCHES)));
     });
 
     it('(b) Function#toString equal for every 1.5.0 export and member except hasAll / hasAny', () => {

@@ -37,6 +37,10 @@
 //   FastBit64 lanes (B-S3 / B-S5, 1.7.0): see fb64Lanes below; the
 //     --no-turbo-inlining child (B-S4) and the d8 lane (B-S6): see
 //     fb64NoinlineLane / fb64D8Lane at the end.
+//
+//   FastBit32 noinline lane (AF-1): countRange(i & 15, 31) and (0, 15) in a
+//     --no-turbo-inlining child, gated < 0.1 B/op, plus a de9a5d9-body witness
+//     gated >= 15.9 every run; see fb32NoinlineLane.
 
 import { measureOps, GcProfiler, checkNoGc } from '@zakkster/lite-gc-profiler';
 import { spawnSync } from 'node:child_process';
@@ -271,6 +275,8 @@ export async function run(ctx) {
     try { await fb64Lanes(ctx, fails, baseline, bop, bopOpts); } catch (e) { fails.push('T6 FB64: lanes threw ' + e.constructor.name + ': ' + e.message); }
     // B-S4: the same table in a --no-turbo-inlining child; B-S6: the d8 lane
     try { fb64NoinlineLane(ctx, fails); } catch (e) { fails.push('T6 FB64 noinline: lane threw ' + e.constructor.name + ': ' + e.message); }
+    // AF-1: FastBit32 countRange in a --no-turbo-inlining child (live + witness)
+    try { fb32NoinlineLane(ctx, fails); } catch (e) { fails.push('T6 FB32 noinline: lane threw ' + e.constructor.name + ': ' + e.message); }
     try { fb64D8Lane(ctx, fails); } catch (e) { fails.push('T6 FB64 d8: lane threw ' + e.constructor.name + ': ' + e.message); }
 
     // ---- per-lane composite B/op (signed gated, unsigned read-only/printed) -
@@ -1009,6 +1015,78 @@ function fb64NoinlineLane(ctx, fails) {
         } else if (note !== '') F('lane ' + l.name + ' not verified-optimized' + note);
     }
     if (res.moved !== null) F('a read-only fixture word moved: ' + res.moved);
+}
+
+// ---- AF-1 (PLAN-af1 task 10) FastBit32 countRange under --no-turbo-inlining (child) ----
+// t6-fb32-noinline.mjs, spawned with FB64_NOINLINE_FLAGS + --no-turbo-inlining
+// and argv[2] = target (default LIB_PATH; a scratch driver passes a frozen copy
+// for the must-fail run), measures FB32_NOINLINE_LANES and prints one
+// `RESULT <json>` line. Gated here: the child ran (no spawn error, exit 0,
+// within FB64_NOINLINE_TIMEOUT_MS), exactly one parsable RESULT, the flag in
+// the child's own execArgv, res.target === target, both semi-space pins 4,
+// lane names == FB32_NOINLINE_LANES in order, every lane verified-optimized
+// (status 'optimized') with both callees (countRange, countMasked) carrying
+// the TurboFan bit, no lane word moved; the live lanes < 0.1 B/op and the
+// witness lane (de9a5d9 body) >= 15.9 B/op, each with >= 3 valid windows.
+// Which lane is the witness is the parent's table, never the child's. JSON
+// carries NaN as null: every number goes through num() (null reads NaN, fails
+// closed). Expected: on de9a5d9 the countRange(i & 15, 31) lane reads ~16 B/op
+// and is the only fail row.
+const FB32_NOINLINE_LANES = [
+    { name: 'countRange(i & 15, 31)', witness: false },
+    { name: 'countRange(0, 15)', witness: false },
+    { name: 'witness de9a5d9 countRange(i & 15, 31)', witness: true }
+];
+
+export function fb32NoinlineLane(ctx, fails, target = LIB_PATH) {
+    const F = (m) => fails.push('T6 FB32 noinline: ' + m);
+    const script = fileURLToPath(new URL('./t6-fb32-noinline.mjs', import.meta.url));
+    const flags = [...FB64_NOINLINE_FLAGS, '--no-turbo-inlining'];
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [...flags, script, target], {
+        env: process.env,
+        encoding: 'utf8',
+        timeout: FB64_NOINLINE_TIMEOUT_MS,
+        maxBuffer: 1 << 24
+    });
+    const wallMs = Date.now() - t0;
+    const tail = () => ((r.stderr || '') + (r.stdout || '')).split('\n').filter((l) => l && !l.startsWith('RESULT ')).slice(-3).join(' | ');
+    if (r.error) { F('child spawn error ' + (r.error.code || '') + ' ' + r.error.message + ' (timeout ' + FB64_NOINLINE_TIMEOUT_MS + ' ms, signal ' + r.signal + ') -- fail closed'); return; }
+    if (r.status !== 0) { F('child exited ' + r.status + (r.signal ? ' (signal ' + r.signal + ')' : '') + ' -- fail closed: ' + tail()); return; }
+    const lines = (r.stdout || '').split('\n').filter((l) => l.startsWith('RESULT '));
+    if (lines.length !== 1) { F('child printed ' + lines.length + ' RESULT line(s) (want exactly 1) -- fail closed: ' + tail()); return; }
+    let res;
+    try { res = JSON.parse(lines[0].slice(7)); } catch (e) { F('child RESULT is not JSON (' + e.message + ') -- fail closed'); return; }
+    if (res === null || typeof res !== 'object' || !Array.isArray(res.execArgv) || !Array.isArray(res.lanes) || !Array.isArray(res.fails)) { F('child RESULT lacks execArgv / lanes / fails -- fail closed'); return; }
+    const flagOk = res.execArgv.includes('--no-turbo-inlining');
+    const lanes = res.lanes.map((l, i) => ({
+        name: String(l.name),
+        witness: i < FB32_NOINLINE_LANES.length && FB32_NOINLINE_LANES[i].witness === true,
+        perOp: num(l.perOp), window0: num(l.window0), valid: num(l.valid), status: String(l.status), calleesTurbofan: num(l.calleesTurbofan)
+    }));
+    ctx.measures.fb32Noinline = { target: res.target, execArgv: res.execArgv.join(' '), flagOk, lanes, moved: res.moved, wallMs };
+    for (const l of lanes) {
+        console.error('MEASURE T6 FastBit32 noinline lane ' + l.name + ' = ' + fmt3(l.perOp) + ' B/op (window0 ' + fmt3(l.window0) + ', ' + l.valid + ' valid, ' + l.status +
+            ', callees TurboFan ' + l.calleesTurbofan + '/2)' + (l.witness ? ' [gated >=15.9]' : ' [gated <0.1]'));
+    }
+    console.error('MEASURE T6 FastBit32 noinline child --no-turbo-inlining in execArgv=' + flagOk + ' pins=' + (res.pins === true) + ' lanes=' + lanes.length + ' wallMs=' + wallMs + ' [gated: flag in execArgv, target, pins, every lane verified + 2/2 callees TurboFan]');
+    if (!flagOk) F('child execArgv [' + res.execArgv.join(' ') + '] lacks --no-turbo-inlining: countRange inlines countMasked and the run cannot see a mask box -- fail closed');
+    if (res.target !== target) F('child measured target ' + JSON.stringify(res.target) + ' (want ' + JSON.stringify(target) + ') -- fail closed');
+    if (res.pins !== true) F('child semi-space pins not both 4 (execArgv [' + res.execArgv.join(' ') + ']) -- fail closed');
+    for (const f of res.fails) F('child: ' + f);
+    const want = FB32_NOINLINE_LANES.map((L) => L.name).join(',');
+    if (lanes.length !== FB32_NOINLINE_LANES.length || lanes.some((l, i) => l.name !== FB32_NOINLINE_LANES[i].name)) F('child lanes [' + lanes.map((l) => l.name).join(',') + '] != FB32_NOINLINE_LANES [' + want + '] -- fail closed');
+    for (const l of lanes) {
+        const note = l.status === 'optimized' ? '' : ' -- ' + l.status;
+        if (l.witness) {
+            if (!(l.valid >= 3) || !(l.perOp >= 15.9)) F('witness lane ' + l.name + ' = ' + fmt3(l.perOp) + ' B/op, valid=' + l.valid + ' (expected >= 15.9, >= 3 valid: the de9a5d9 countRange passes a uint32 mask >= 2^31 to a countMasked call that is not inlined, one HeapNumber per op) -- the run cannot see the countRange mask box' + note);
+            else if (note !== '') F('witness lane ' + l.name + ' not verified-optimized' + note);
+        } else if (!(l.valid >= 3) || !(l.perOp < 0.1)) {
+            F('lane ' + l.name + ' = ' + fmt3(l.perOp) + ' B/op, valid=' + l.valid + ' (expected < 0.1, >= 3 valid: an int32 mask crosses the countMasked call as a Smi)' + note);
+        } else if (note !== '') F('lane ' + l.name + ' not verified-optimized' + note);
+        if (!(l.calleesTurbofan === 2)) F('lane ' + l.name + ': ' + l.calleesTurbofan + '/2 callees (countRange, countMasked) carry the TurboFan bit -- fail closed');
+    }
+    if (res.moved !== null) F('a lane word moved: ' + res.moved);
 }
 
 // ---- B-S6 (1.7.0, amended by SPEC-fastbit64 A7 + A8 + A10) FastBit64 d8 lane ---

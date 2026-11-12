@@ -15,6 +15,11 @@
 //   (e) the section's top level holds declarations only (function / class / const
 //       with a pure initializer): no expression statement such as
 //       `FastBit32.prototype.x = 1;`, no class heritage or static initializer code.
+// AF-1 re-pin (U-2 / U-3 / U-10+U-8 / U-5): (a) and (b) compare the tree with the BASE
+// text patched by the four test/fixtures/af1-patches.mjs entries (header :8, countRange,
+// acquire JSDoc, FastBit1024#saveInto brand line); (a0) checks each `from` occurs exactly
+// once in the base and each `to` exactly once (its `from` never) in the tree prefix. Any
+// other byte change still fails (a) / (b).
 // Node 18 APIs only.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,6 +27,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as NEW from '../FastBit32.js';
+import { AF1_PATCHES, applyExact, applyAtMostOnce, countOf } from './fixtures/af1-patches.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const BASE = 'fddf34e173eba7219e0013d58a143919a7477b2e'; // v1.6.1
@@ -125,13 +131,24 @@ function scanTopLevel(text) {
 describe('FastBit64 rung 1: 1.6.1 -> tree parity (base ' + BASE.slice(0, 7) + ')', () => {
     it('the base is available (a missing base FAILS)', () => { assert.strictEqual(baseErr, null, String(baseErr)); });
 
+    it('(a0) AF-1: every af1-patches from occurs once in the base; every to once (from zero times) in the tree prefix', () => {
+        const hp = headSrc.slice(0, headSrc.indexOf(MARK));
+        assert.strictEqual(AF1_PATCHES.length, 4);
+        for (const [from, to, why] of AF1_PATCHES) {
+            assert.strictEqual(countOf(baseSrc, from), 1, 'base: from x1 -- ' + why);
+            assert.strictEqual(countOf(baseSrc, to), 0, 'base: to x0 -- ' + why);
+            assert.strictEqual(countOf(hp, to), 1, 'tree prefix: to x1 -- ' + why);
+            assert.strictEqual(countOf(headSrc, from), 0, 'tree: from x0 -- ' + why);
+        }
+    });
+
     it('(a) bytes before the FastBit64 marker equal the base file (VERSION line normalized); marker once, at a line start', () => {
         const hi = headSrc.indexOf(MARK);
         assert.ok(hi > 0, 'marker missing');
         assert.strictEqual(headSrc.indexOf(MARK, hi + 1), -1, 'marker twice');
         assert.strictEqual(headSrc[hi - 1], '\n', 'marker not at a line start');
         assert.strictEqual(baseSrc.indexOf(MARK), -1, 'base already has the marker');
-        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(baseSrc));
+        assert.strictEqual(norm(headSrc.slice(0, hi)), norm(applyExact(baseSrc, AF1_PATCHES))); // AF-1 re-pin
     });
 
     it('(b) Function#toString equal for every base export and every FastBit32 / BitMapper / FastBit1024 member', () => {
@@ -139,13 +156,13 @@ describe('FastBit64 rung 1: 1.6.1 -> tree parity (base ' + BASE.slice(0, 7) + ')
         for (const [name, v] of Object.entries(OLD)) {
             if (typeof v !== 'function') continue;
             assert.strictEqual(typeof NEW[name], 'function', name);
-            assert.strictEqual(NEW[name].toString(), v.toString(), name);
+            assert.strictEqual(NEW[name].toString(), applyAtMostOnce(v.toString(), AF1_PATCHES), name); // AF-1 re-pin
             checked++;
         }
         for (const cname of CLASSES) {
             const nm = members(NEW, cname);
             for (const [key, d] of members(OLD, cname)) {
-                assert.deepStrictEqual(fnTexts(nm.get(key)), fnTexts(d), cname + ' ' + key);
+                assert.deepStrictEqual(fnTexts(nm.get(key)), fnTexts(d).map((t) => (typeof t === 'string' ? applyAtMostOnce(t, AF1_PATCHES) : t)), cname + ' ' + key); // AF-1 re-pin
                 checked++;
             }
         }
