@@ -1842,3 +1842,52 @@ Node, both modes: z/a 0.848-1.004, A/A 0.987-1.037, no flag on any op.
   ns/op on d8 (1.002 -> 3.685); setWords is unchanged. Mixed add and union point the same way but carry no verdict.
 - **What this rung does not show.** It times; it does not trace field representations, so the class-wide Double field
   stays a mechanism inferred from R1b's generalization trace, not observed here.
+
+---
+
+## 21. Hacker's Delight / cp-algorithms intake (2026-11-12) -- nothing to change
+
+Source: Hacker's Delight (Warren, 2nd ed. 2012) via cp-algorithms "Bit manipulation" and the Go port
+https://github.com/nikolaydubina/go-hackers-delight (MIT, one file per book section, active 2026-11; checked 2026-11-12). Teaching write-up:
+`../../Learning/Bitwise.md` PART 15. Every formula named below was checked against a naive per-bit
+oracle (2,000,000 random int32 + edge words, Node 26.8.2, 0 mismatches). Nothing here is timed, nothing
+shipped changes, and none of it is a PROPOSAL.
+
+- **The three cp-algorithms tricks are already here, in equivalent forms.**
+  - `nextClearBit` is `31 - Math.clz32(~v & (v + 1))` (FastBit32.js:179).
+  - FastBit1024 `acquire` computes `m = c & -c` with `c = ~old`, which is `~old & (old + 1)`. It then writes
+    `old | m`, which is `old | (old + 1)` (FastBit32.js:643-654). The one-op `old | (old + 1)` would save
+    nothing, because `acquire` still needs `m` for the slot number.
+  - `x & -x` is used throughout.
+- **`x & (x + 1)` (clear the trailing 1s) has no use site here.** Its natural home is the 0-indexed Fenwick
+  tree (lite-logn RESEARCH 16).
+- **`acquireRun(k)` stays as 14.2 has it.** An independent linear shift-AND check in Learning (k = 1..12, 2e5
+  cases vs a naive scan, 0 mismatches) agrees with `clear-run.mjs`. The 14.2 doubling cascade needs fewer
+  steps, so it remains the kernel to keep.
+- **A second oracle is available.** The Go port's test files for book sections 2-1 (rightmost bits, next
+  number with the same popcount) and 5-1 (popcount) can seed a cross-check for `nextCombination` / `rank` /
+  `select` that does not come from this repo. Not done.
+- **The Go port's own benchmarks agree with Bitwise.md 12.10.** On its arm64 run, the plain or built-in
+  version beat the book's trick for leading zeros and for division by small constants. A book trick is a
+  candidate for a measurement, not a speedup.
+
+---
+
+## 22. Bitcoin Core bitset.h intake (2026-11-12) -- nothing to port; one test method to adopt
+
+Source: Bitcoin Core `src/util/bitset.h` (528 lines) and `src/test/fuzz/bitset.cpp` (318 lines), MIT, read from
+bitcoin/bitcoin master on 2026-11-12. (The link offered was kerrigan-network/kerrigan, a Dash-derived coin: it has
+NO bitset.h -- 404, and no match in its 4,875-file tree. The description fits Bitcoin Core's cluster-mempool
+bitset.) Nothing here is timed; nothing shipped changes; none of it is a PROPOSAL.
+
+- **The API already has a counterpart for each of Bitcoin's operations:** First / Last = `lowest` / `highest`;
+  Count = `count`; Fill = `rangeMask` / `addRange`; IsSubsetOf / IsSupersetOf / Overlaps = `isSubsetOf` /
+  `hasAll` / `hasAny`; the ctz iterator = `forEach`.
+- **Popcount:** same SWAR; Bitcoin's shift-add tail and this package's `Math.imul` tail agree on 5e6 words.
+  Speed not measured.
+- **The `Fill(0)` trap does not apply here:** `rangeMask` is inclusive `[start, end]` and never empty. A future
+  `fillLow(n)` would need `n === 0` guarded (in JS, `~0 >>> 32` is all ones).
+- **To adopt: lead CIDF** (lite-loglogn RESEARCH 20). Run one seeded op stream through FastBit32, FastBit64 and
+  FastBit1024 (at caps 1, 31, 32, 33, 63, 64, 65, 1023, 1024) against one plain reference, comparing every
+  inspector after every op. The existing parity tests (FastBit1024Parity160, FastBit64Recipe) compare fixed
+  cases; this would compare op SEQUENCES.
