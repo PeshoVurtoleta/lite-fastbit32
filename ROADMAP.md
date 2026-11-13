@@ -484,6 +484,19 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
     - a T6 0 B/op lane on the bit-31 / bit-63 words, verified TurboFan;
     - a must-fail control (a `>>> 0` store must turn the T6 lane red);
     - exact-surface pins (S5QA / BundleShake / Surface) updated in the same unit.
+- **After 1.7.0: lite-utils engine gates (maintainer ruling 2026-11-12, "After 1.7.0 ships (Recommended)").**
+  @zakkster/lite-utils 1.0.0 (published 2026-11-12) ships five bash V8-diagnostic tools with fail-closed verdict
+  lines: `bytecode-budget`, `deopt-diff`, `ic-diff`, `inlining-budget-diff`, `allocation-diff`. Use it as a
+  devDependency only (`npm i -D`; `dependencies` stays empty). Not in the 1.7.0 queue (AF-3, NIGHTLY-2,
+  gate:release).
+  - Candidate gate: `bytecode-budget --max fn=N --node-version vX.Y.Z` on the hot bodies. It turns the REPORTED
+    "under the 460 B inlining limit" claims (RESEARCH 18.1; LEDGER A6; FastBit64 `loadFrom` 453 B, cold, "must
+    not grow") into a DETERMINISTIC row on one pinned node.
+  - Candidate revert checks: `deopt-diff` / `inlining-budget-diff` (before vs after) for a hot-body change.
+  - Constraints: lite-utils needs node >= 22, so the CI node 18 / 20 legs print a named SKIP. A caller requires the
+    `VERDICT` line, not only the exit code; exit 2 = NO-VERDICT, never success. Do not touch SHA_FILES while a
+    NIGHTLY calibration window is open.
+  - Before any planner pass: rule the scope (which functions, which caps, which node pin, gate tier).
 
 ---
 
