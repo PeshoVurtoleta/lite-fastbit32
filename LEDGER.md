@@ -672,30 +672,31 @@ evidence is in `audit/2026-11-10/RECONCILE.md`, `audit/2026-11-10/opus-5.5_FINDI
 ### E1. Verdict table (U-1..U-21)
 
 Verdicts are RECONCILE's Step 3 rulings. FIX BEFORE 1.7.0 = must close before `/release 1.7.0`.
+A "fixed in <sha>" / "in <sha>" suffix names the commit that closed the item (or its named part).
 
 | U | ids | severity | verdict | what |
 |---|---|---|---|---|
-| U-1 | B-1 A-1 A-2 | High | FIX LATER (S6); doc, pin, type rows before 1.7.0 | set object / `undefined` masks fail open |
-| U-2 | B-2 A-3 | Medium | FIX BEFORE 1.7.0 (docs only) | `value` / `serialize()` documented unsigned, signed after bit 31 |
-| U-3 | B-3 | Low | FIX BEFORE 1.7.0 (FIX-1) | `countRange(start, 31)` boxes its `>>> 0` mask |
+| U-1 | B-1 A-1 A-2 | High | FIX LATER (S6); doc, pin, type rows before 1.7.0; pin + type rows in bae32d4, docs AF-3 | set object / `undefined` masks fail open |
+| U-2 | B-2 A-3 | Medium | FIX BEFORE 1.7.0 (docs only); header in 70ed15a, docs AF-3 | `value` / `serialize()` documented unsigned, signed after bit 31 |
+| U-3 | B-3 | Low | FIX BEFORE 1.7.0 (FIX-1); fixed in 70ed15a | `countRange(start, 31)` boxes its `>>> 0` mask |
 | U-4 | B-4 A-4 | Low | FIX LATER (S6, FB-03); docs before 1.7.0 | `>>> 0` widens the `value` field; README:81 inverted |
-| U-5 | B-5 | Low | FIX BEFORE 1.7.0 (FIX-5) | FastBit1024 methods do not brand-check the receiver |
-| U-6 | B-6 | Low | FIX BEFORE 1.7.0 (FIX-6) | d.ts does not reserve FastBit1024 / BitMapper private names |
+| U-5 | B-5 | Low | FIX BEFORE 1.7.0 (FIX-5); `saveInto` fixed in 70ed15a, docs AF-3 | FastBit1024 methods do not brand-check the receiver |
+| U-6 | B-6 | Low | FIX BEFORE 1.7.0 (FIX-6); fixed in bae32d4 | d.ts does not reserve FastBit1024 / BitMapper private names |
 | U-7 | B-7 | Low | CARRIED (KNOWN FB-06, no ruling) | `forEachMapped(Object)` passes `undefined` as a `string` |
 | U-8 | B-8 A-6 | Low | FIX BEFORE 1.7.0 (docs) | shipped README / llms.txt name files that do not ship |
 | U-9 | B-9 | Low | FIX BEFORE 1.7.0 (docs) | `test:perf` called DETERMINISTIC, no workflow runs it |
 | U-10 | B-10 A-7 | Low | FIX BEFORE 1.7.0 (docs) | perf claims with no tier or provenance |
 | U-11 | B-11 | Info | FIX BEFORE 1.7.0 (docs) | `JSON.stringify` / `structuredClone` of FastBit64 give `{}` |
 | U-12 | B-12 | Info | CARRIED (KNOWN, the `/release` step) | tree versioned 1.6.1 with the 1.7.0 surface |
-| U-13 | B-13 A-9 | Test-gap | FIX BEFORE 1.7.0 (doc + pin; NOT FIX-13, see E2) | `FastBit64.forEach` mutation rule undocumented |
-| U-14 | B-14 A-13 | Test-gap | FIX BEFORE 1.7.0 (test rows) | FastBit64 mutants survive `npm test` |
-| U-15 | B-15 | Low | FIX BEFORE 1.7.0 (test-only pin) | Hygiene pin checks an initializer exists, not a Smi |
-| U-16 | B-16 A-5 | Test-gap | FIX BEFORE 1.7.0 (rows + `skipLibCheck: false`) | d.ts mutants pass `test:types` |
-| U-17 | B-17 | Test-gap | FIX BEFORE 1.7.0 (test rows) | no gate reads `sideEffects` / `engines` |
+| U-13 | B-13 A-9 | Test-gap | FIX BEFORE 1.7.0 (doc + pin; NOT FIX-13, see E2); pin in bae32d4, doc AF-3 | `FastBit64.forEach` mutation rule undocumented |
+| U-14 | B-14 A-13 | Test-gap | FIX BEFORE 1.7.0 (test rows); fixed in bae32d4 | FastBit64 mutants survive `npm test` |
+| U-15 | B-15 | Low | FIX BEFORE 1.7.0 (test-only pin); fixed in bae32d4 | Hygiene pin checks an initializer exists, not a Smi |
+| U-16 | B-16 A-5 | Test-gap | FIX BEFORE 1.7.0 (rows + `skipLibCheck: false`); fixed in bae32d4 | d.ts mutants pass `test:types` |
+| U-17 | B-17 | Test-gap | FIX BEFORE 1.7.0 (test rows); fixed in bae32d4 | no gate reads `sideEffects` / `engines` |
 | U-18 | A-8 | Info | CARRIED (KNOWN FB-06, no ruling) | BitMapper duplicate name keeps the stale reverse entry |
 | U-19 | A-10 | Low | FIX BEFORE 1.7.0 (docs) | README ships 21 non-ASCII code points |
 | U-20 | A-11 | Info | FIX BEFORE 1.7.0 (docs) | ci.yml says "6 T6 controls"; the tree has 11 |
-| U-21 | A-12 | Test-gap | FIX BEFORE 1.7.0 (test rows) | `FastBit64#loadFrom` reading `src.length` survives |
+| U-21 | A-12 | Test-gap | FIX BEFORE 1.7.0 (test rows); fixed in bae32d4 | `FastBit64#loadFrom` reading `src.length` survives |
 
 U-15 severity is CONFIRM's re-grade (B said Test-gap); torture kills the mutant, `npm test` does not,
 and the README:624 / CHANGELOG:15-17 wording is false. Ruled separately (Q5, "Tighten the pin"):
