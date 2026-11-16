@@ -509,3 +509,63 @@ describe('F Bits4096 recipe: branch coverage with floors, boundary matrix', () =
         });
     }
 });
+
+// ---- U-13: the forEach snapshot rule is documented at all three sites (AF-3) -----------------------
+// Rule (per the docs batch): the forEach entry says "each word is read once" AND names nextSetBit.
+// Entry slice: from the start of the line holding the first `forEach(` of the block (or of the JSDoc
+// comment directly above it, for the d.ts) to the end of the line holding that `forEach(`. Matching is
+// case-insensitive on whitespace-collapsed text, so a re-wrapped line still counts.
+function forEachEntry(block) {
+    const at = block.indexOf('forEach(');
+    if (at < 0) return '';
+    let start = block.lastIndexOf('\n', at) + 1;
+    const prev = block.slice(0, start).replace(/\s+$/, '');
+    if (prev.endsWith('*/')) { const c = prev.lastIndexOf('/**'); if (c >= 0) start = c; }
+    const end = block.indexOf('\n', at);
+    return block.slice(start, end < 0 ? block.length : end).replace(/\s+/g, ' ').toLowerCase();
+}
+function checkForEachRule(readmeSection, llmsSection, dtsFastBit64Block) {
+    for (const [file, block] of [['README.md', readmeSection], ['llms.txt', llmsSection], ['FastBit32.d.ts', dtsFastBit64Block]]) {
+        const e = forEachEntry(block);
+        if (!e) throw new Error(file + ': FastBit64 forEach entry missing');
+        if (!e.includes('each word is read once')) throw new Error(file + ': forEach entry lacks "each word is read once"');
+        if (!e.includes('nextsetbit')) throw new Error(file + ': forEach entry does not name nextSetBit');
+    }
+}
+const dtsFb64 = () => { const s = readFileSync(PKG + 'FastBit32.d.ts', 'utf8'); return s.slice(s.indexOf('export class FastBit64')); };
+const RULE_RE = /each\s+word\s+is\s+read\s+once/gi;
+
+describe('U-13 FastBit64.forEach doc rule (AF-3)', () => {
+    test('row 1: README, llms.txt and the d.ts carry the forEach snapshot rule', () => {
+        assert.ok(dtsFb64().startsWith('export class FastBit64'), 'd.ts FastBit64 block located');
+        checkForEachRule(readmeSec(), llmsSec(), dtsFb64());
+    });
+    test('row 2 (must-fail): dropping the rule phrase from any one site throws naming that file', () => {
+        const live = [readmeSec(), llmsSec(), dtsFb64()];
+        const files = ['README.md', 'llms.txt', 'FastBit32.d.ts'];
+        for (const [re, tail] of [[RULE_RE, 'lacks "each word is read once"'], [/nextSetBit/gi, 'does not name nextSetBit']]) {
+            for (let i = 0; i < 3; i++) {
+                const mut = live.slice();
+                mut[i] = mut[i].replace(re, '');
+                assert.notEqual(mut[i], live[i], files[i] + ': live text carries the phrase (else the control is vacuous)');
+                const want = new RegExp('^' + files[i].replace(/\./g, '\\.') + ': forEach entry ' + tail.replace(/"/g, '"') + '$');
+                assert.throws(() => checkForEachRule(mut[0], mut[1], mut[2]), (e) => e instanceof Error && want.test(e.message), files[i] + ' ' + tail);
+            }
+        }
+    });
+    test('row 3: the documented example (add 3, remove 40, add 50 at bit 1) visits [1, 5, 50] on FastBit64 and FastBit1024(64)', () => {
+        // oracle: the documented rule -- words are snapshotted, so bit 3 (same word as 1) is NOT visited
+        // (it was added to a word already snapshotted); 40 is removed in the other word, not yet read
+        // -> not visited; 50 is added to that same unread word -> visited. Expected [1, 5, 50].
+        for (const mk of [() => new FastBit64(), () => new FastBit1024(64)]) {
+            const s = mk(); s.add(1).add(5).add(40);
+            const seen = [];
+            s.forEach((b) => {
+                seen.push(b);
+                if (b === 1) { s.add(3); s.remove(40); s.add(50); }
+            });
+            assert.deepEqual(seen, [1, 5, 50], s.constructor.name);
+            const t = mk(); t.add(1).add(5); const seen2 = []; t.forEach((b) => { seen2.push(b); if (b === 1) t.remove(5); }); assert.deepEqual(seen2, [1, 5], t.constructor.name + ' same-word removal');
+        }
+    });
+});

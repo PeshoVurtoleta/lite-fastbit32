@@ -1,12 +1,15 @@
 # ci.yml -- lite-fastbit32 per-push / per-PR gate (CI burst 2026-11-05; modeled on LiteUtils ci.yml).
-# DETERMINISTIC tier only: npm test, test:types, torture, torture:controls. No quiet lock, no timed gate:
-# test:perf and the gate:release witness are STATISTICAL and stay on the local quiet host (hosted CI is not
-# calibrated for them).
+# DETERMINISTIC tier only: npm test, test:types, torture, torture:controls, test:perf. test:perf is a
+# scavenge-COUNT gate under pinned 4 MB semi-spaces: it gates counts, not timings. No quiet lock, no timed
+# gate: only the gate:release witness is STATISTICAL and stays on the local quiet host (hosted CI is not
+# calibrated for it).
 # Matrix: node 18 / 20 / 22 / 24 / 26 x ubuntu-latest + macos-latest, plus one node 26.8.2 leg per OS (the
 # maintainer's local node, so a T6 B/op reading here compares like for like): 12 legs.
 # Node 18 is the shipped engines floor (package.json engines >=18). It runs npm test + test:types only:
-# torture and torture:controls need Node 20+ because the devDependency @zakkster/lite-leak declares
-# engines.node >=20 (CHANGELOG [1.2.1] "Node floor"). The skip is a named step that prints the reason.
+# torture and torture:controls, and test:perf, run on the node 20+ legs. torture and torture:controls need
+# Node 20+ because the devDependency @zakkster/lite-leak declares engines.node >=20 (CHANGELOG [1.2.1]
+# "Node floor"); test:perf runs on the same legs as torture (maintainer ruling Q-U9). The skip is a named
+# step that prints the reason.
 # fetch-depth 0: S3Parity (27291e4), S5QA (fb3b803), FastBit1024Parity160 (cd49e4d) and WitnessStabilityQA
 # (efbb377) read `git show <commit>:<file>`. The parity rows FAIL (throw / assert) when the commit is missing,
 # on any host; WitnessStabilityQA's frozen driver comes from .handoff/ (gitignored) or else git history, and
@@ -15,7 +18,7 @@
 # none, so torture prints "MEASURE FastBit1024 d8 ... lane SKIP: <reason>" on stderr.
 # Known named SKIP (CI-5, maintainer ruling 2026-11-05 "T6 needs V8 >= 14; named SKIP"): on node 20 / 22 / 24
 # (V8 11-13) torture prints "T6 SKIP: ..." and "[T6] SKIP", and torture:controls prints
-# "[control <name>] SKIP tiers=T6: ..." for each of the 6 T6 controls; T6 and the B/op claims are gated on the
+# "[control <name>] SKIP tiers=T6: ..." for each T6 control; T6 and the B/op claims are gated on the
 # node 26 legs only.
 # No lockfile is committed (package-lock.json is gitignored): `npm install`, no npm cache; the resolved
 # devDependency versions are printed after install.
@@ -92,6 +95,9 @@ jobs:
       - name: torture:controls
         if: matrix.node != '18'
         run: npm run torture:controls
-      - name: torture + torture:controls SKIPPED (node 18)
+      - name: test:perf
+        if: matrix.node != '18'
+        run: npm run test:perf
+      - name: torture + torture:controls + test:perf SKIPPED (node 18)
         if: matrix.node == '18'
-        run: echo "SKIP torture, torture:controls on node 18 -- @zakkster/lite-leak (devDependency) declares engines.node >=20 (CHANGELOG [1.2.1] Node floor); the shipped library keeps engines >=18 and its npm test + test:types ran above."
+        run: echo "SKIP torture, torture:controls, test:perf on node 18 -- torture and torture:controls -- @zakkster/lite-leak (devDependency) declares engines.node >=20 (CHANGELOG [1.2.1] Node floor); test:perf runs on the same legs as torture (maintainer ruling Q-U9); the shipped library keeps engines >=18 and its npm test + test:types ran above."

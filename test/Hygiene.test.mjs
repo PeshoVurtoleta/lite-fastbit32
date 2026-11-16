@@ -17,7 +17,7 @@ function nonAscii(s) {
 
 describe('Hygiene (FB-10)', () => {
     it('ships zero non-ASCII bytes in the shipped text files', () => {
-        for (const f of ['FastBit32.js', 'FastBit32.d.ts', 'llms.txt', 'CHANGELOG.md']) {
+        for (const f of ['FastBit32.js', 'FastBit32.d.ts', 'llms.txt', 'CHANGELOG.md', 'README.md']) {
             assert.strictEqual(nonAscii(read(f)), 0, `${f} has non-ASCII bytes`);
         }
     });

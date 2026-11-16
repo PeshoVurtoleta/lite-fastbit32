@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -515,8 +516,9 @@ test('S-8 workflow: artifact upload always, 90 days, error if empty, named per r
     assert.match(t, /name:\s*soak-\$\{\{[^}]*\}\}-node-\$\{\{[^}]*\}\}-\$\{\{\s*github\.run_id\s*\}\}-\$\{\{\s*github\.run_attempt\s*\}\}/);
 });
 
-// ---- ci.yml / nightly.yml byte-identical to the frozen commit ---------------
-for (const f of ['ci.yml', 'nightly.yml']) {
+// ---- nightly.yml byte-identical to the frozen commit ------------------------
+// AF-3 moved the ci.yml pin (maintainer ruling Q-U9): ci.yml now has its own sha256 row below.
+for (const f of ['nightly.yml']) {
     test('S-1 workflow: ' + f + ' is byte-equal to git show ' + FROZEN, () => {
         const rel = '.github/workflows/' + f;
         const g = spawnSync('git', ['show', FROZEN + ':' + rel], { cwd: ROOT, maxBuffer: 1 << 24 });
@@ -525,3 +527,16 @@ for (const f of ['ci.yml', 'nightly.yml']) {
         assert.ok(Buffer.compare(g.stdout, readFileSync(join(ROOT, rel))) === 0, rel + ' drifted from ' + FROZEN); // mutant: lane edits a shared workflow
     });
 }
+
+// ---- ci.yml pinned by sha256 (AF-3 moved the pin, ruling Q-U9: test:perf step added) -------------
+// Re-pin ONLY with a reviewed ci.yml change.
+const CI_SHA256 = '0ddbf713353001e83a62bd5001ffe0d1dd4b958437c75cfd5a3ebe8b7bdd914a';
+function checkCiPin(path, want) {
+    let b;
+    try { b = readFileSync(path); } catch (e) { throw new Error('ci.yml unreadable (fail closed): ' + path); }
+    const got = createHash('sha256').update(b).digest('hex');
+    assert.equal(got, want, 'ci.yml drifted: expected sha256 ' + want + ', got ' + got + '; re-pin only with a reviewed ci.yml change');
+}
+test('S-1 workflow: ci.yml sha256 pin (AF-3, ruling Q-U9)', () => {
+    checkCiPin(join(ROOT, '.github/workflows/ci.yml'), CI_SHA256);
+});

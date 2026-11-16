@@ -11,13 +11,13 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless. Zero dependencies. Three bit classes plus the `BitMapper` name mapper: `FastBit32` (one word), from 1.4.0 `FastBit1024` (32 x 32 words, fail-closed) and from 1.7.0 `FastBit64` (64 flags in two int32 words, fail-closed). The fastest 32-bit flag engine in JavaScript.
+Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless. Zero dependencies. Three bit classes plus the `BitMapper` name mapper: `FastBit32` (one word), from 1.4.0 `FastBit1024` (32 x 32 words, fail-closed) and from 1.7.0 `FastBit64` (64 flags in two int32 words, fail-closed).
 
-## 🚀 Built with Lite-FastBit32: Lite-Tween Pro
+## Built with Lite-FastBit32: Lite-Tween Pro
 
 If you are building high-performance WebGL applications or JavaScript games, check out **Lite-Tween Pro**. It is a commercial, zero-allocation ECS tweening engine built directly on top of this bitwise architecture. It completely bypasses the JavaScript Garbage Collector to guarantee a flat memory profile and a stable 120fps on mobile devices.
 
-👉 **[Get the Lite-Tween Pro Source Code here](https://zakkster.lemonsqueezy.com/checkout/buy/05ad56be-4b91-4bef-8218-9e85c65690b4)**
+**[Get the Lite-Tween Pro Source Code here](https://zakkster.lemonsqueezy.com/checkout/buy/05ad56be-4b91-4bef-8218-9e85c65690b4)**
 
 *(Are you a solo indie dev or student? Reach out to me directly at shinikchiev@yahoo.com and I will hook you up with an indie discount!)*
 
@@ -58,10 +58,10 @@ const flags = new FastBit32();
 
 flags.add(1).add(4);         // Set bits 1 and 4
 flags.has(4);                 // true
-flags.count();                // 2 — O(1) popcount
-flags.lowest();               // 1 — O(1) bit-scan forward
+flags.count();                // 2 -- O(1) popcount
+flags.lowest();               // 1 -- O(1) bit-scan forward
 flags.remove(1);              // Clear bit 1
-flags.serialize();            // Raw uint32 for storage
+flags.serialize();            // the raw 32-bit word (int32 or uint32, FB-03)
 
 // Human-readable flag management
 const mapper = new BitMapper(['Physics', 'Render', 'AI', 'Input']);
@@ -76,9 +76,7 @@ mapper.getActiveNames(entity); // ['Physics', 'Input']
 
 ### Monomorphic V8 Optimization
 
-FastBit32 stores all state in a single `value` property — a plain unsigned 32-bit integer. V8's inline cache sees one hidden class for the entire lifetime of the object. Every method is a single bitwise operation on that integer. No arrays. No objects. No allocations. No branches.
-
-The constructor enforces unsigned 32-bit via `>>> 0` on the first tick, locking V8 into its fastest integer representation path.
+FastBit32 stores all state in a single `value` property -- the 32-bit pattern: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` / `deserialize` (FB-03); `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`. V8's inline cache sees one hidden class, until a uint32 word >= 2^31 widens the `value` field (FB-03, see the Bit 31 note). Every method is a single bitwise operation on that integer. No arrays. No objects. No allocations. No branches.
 
 ### O(1) Popcount (Hamming Weight)
 
@@ -106,19 +104,20 @@ lowest = 31 - Math.clz32(value & -value)
 
 ### O(k) Iteration
 
-All iteration helpers visit only active bits using the `v &= v - 1` trick to clear the lowest bit each step. Complexity is O(k) where k is the number of set bits — not 32.
+All iteration helpers visit only active bits using the `v &= v - 1` trick to clear the lowest bit each step. Complexity is O(k) where k is the number of set bits -- not 32.
 
 ### Caveats
 
 - **Silent wraparound:** JS bitwise shifts apply modulo 32. `add(32)` evaluates as `add(0)`. `add(40)` evaluates as `add(8)`.
-- **Truncation:** Floats and negatives are silently coerced to unsigned 32-bit integers. `-1 >>> 0` becomes `4294967295`.
+- **Truncation:** Floats and negatives are silently coerced by the bitwise ops (a mutator stores int32; the constructor stores `>>> 0`, so `-1 >>> 0` becomes `4294967295`). `.value` is the 32-bit pattern: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` / `deserialize` (FB-03); `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`.
+- **Mask and `other` arguments are not checked (S6, SC-3):** a mask op (`hasAll`, `hasAny`, `hasNone`, `union`, `difference`, `intersect`, `countMasked`, `isSubsetOf`) reads an object (a FastBit32 / FastBit64 instance, `{}`) or `undefined` as `0`: `hasAll(set)` is `true`, `intersect(set)` clears the receiver. `equals` and `copy` do not check for a FastBit32 (`copy({})` stores `value = undefined`); `fromArray` does not check for an array (`fromArray(new Set([1, 2]))` clears the receiver); the seven free iterators do not check their mask either (a non-FastBit32 object calls back once with bit -1 or reads as an empty mask; `undefined` throws). Today's outcome, fail-closed in S6; pass `fb.value` as a mask.
 - Sanitize inputs upstream if your domain logic requires strict bounds.
 
 ---
 
 ## Benchmark Results
 
-Tested on Apple M2 Pro, Node 22, V8 12.x. All values in **ops/ms**.
+REPORTED, nominal (gates nothing): Apple M2 Pro, Node 22, V8 12.x as stated; date, load and run count not recorded. All values in **ops/ms**.
 
 ### Single-Bit Operations
 
@@ -148,8 +147,6 @@ Tested on Apple M2 Pro, Node 22, V8 12.x. All values in **ops/ms**.
 |-----------|----------------|------------|
 | lowest    | **~350k**      | N/A        |
 | highest   | **~350k**      | N/A        |
-
-> lite-fastbit32 is the only library with O(1) bit-scan forward/backward.
 
 ---
 
@@ -241,12 +238,12 @@ if (entity.hasAll(PHYSICS_QUERY)) runPhysics(entity);
 if (entity.hasAll(RENDER_QUERY))  drawSprite(entity);
 ```
 
-> **Bit 31 (Sign Bit):** In JavaScript, `1 << 31` evaluates to `-2147483648` -- a negative number -- so an instance holding bit 31 may log a negative `.value`, and `serialize()` may emit a negative integer in JSON, depending on how the instance was built (FB-03, planned fix in a later release). The predicates are signedness-agnostic: `hasAll` (and `has`/`hasAny`/`hasNone`/`isEmpty`/`isFull`) answer the same for a mask and its `>>> 0` form, so a 32-component ECS signature (including component 31, as produced by `BitMapper.getMask`) matches correctly. This was not true before 1.2.1: `hasAll` returned `false` for any mask carrying bit 31 (see [CHANGELOG](./CHANGELOG.md), FB-01). Only direct `.value` or `serialize()` equality needs `>>> 0` to compare unsigned.
+> **Bit 31 (Sign Bit):** In JavaScript, `1 << 31` evaluates to `-2147483648` -- a negative number -- so an instance holding bit 31 may log a negative `.value`, and `serialize()` may emit a negative integer in JSON, depending on how the instance was built (FB-03, to be fixed in S6). The predicates are signedness-agnostic: `hasAll` (and `has`/`hasAny`/`hasNone`/`isEmpty`/`isFull`) answer the same for a mask and its `>>> 0` form, so a 32-component ECS signature (including component 31, as produced by `BitMapper.getMask`) matches correctly. This was not true before 1.2.1: `hasAll` returned `false` for any mask carrying bit 31 (see [CHANGELOG](./CHANGELOG.md), FB-01). Only direct `.value` or `serialize()` equality needs `>>> 0` to compare unsigned. A uint32 word >= 2^31 (from the constructor / `clone` / `fromArray` / `deserialize`) is a heap number, not a Smi, so the `value` field of every FastBit32 widens to a double representation while one such instance lives (about 32 -> 48 B per instance, nominal); `clone()` of a mutator-built bit-31 set is one such trigger. To be fixed in S6 (SC-2 / FB-03).
 
 </details>
 
 <details>
-<summary><strong>Object Pool — First Free Slot (zero-allocation, v1.2.0)</strong></summary>
+<summary><strong>Object Pool -- First Free Slot (zero-allocation, v1.2.0)</strong></summary>
 
 ```javascript
 import { FastBit32 } from '@zakkster/lite-fastbit32';
@@ -268,10 +265,10 @@ function release(slot) {
 allocate(); // 0
 allocate(); // 1
 release(0);
-allocate(); // 0 — immediately reused
+allocate(); // 0 -- immediately reused
 ```
 
-> Before v1.2.0 this required constructing a scratch `FastBit32` from the inverted mask and calling `.lowest()` on it — one allocation per `allocate()` call. `nextClearBit` collapses that to a single `Math.clz32` on an inverted-and-isolated bit, with no allocations.
+> Before v1.2.0 this required constructing a scratch `FastBit32` from the inverted mask and calling `.lowest()` on it -- one allocation per `allocate()` call. `nextClearBit` collapses that to a single `Math.clz32` on an inverted-and-isolated bit, with no allocations.
 
 </details>
 
@@ -307,7 +304,7 @@ if (input.hasAny((1 << KEY_LEFT) | (1 << KEY_RIGHT))) move();
 </details>
 
 <details>
-<summary><strong>State Machine — Mutex Flags</strong></summary>
+<summary><strong>State Machine -- Mutex Flags</strong></summary>
 
 ```javascript
 import { FastBit32 } from '@zakkster/lite-fastbit32';
@@ -329,7 +326,7 @@ function endAttack() {
     state.clear().add(IDLE);
 }
 
-console.log(state.count()); // 1 — proof of mutex
+console.log(state.count()); // 1 -- proof of mutex
 ```
 
 </details>
@@ -385,7 +382,7 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 
 `FastBit1024` (1.4.0) is a fixed 32 x 32 two-level bitmap: an `Int32Array(32)` plus a "word non-empty" and a "word full" summary and an exact count. Every op is loop-free except forEach/hasAll/hasAny/clear/copy/equals/intersectionSize/unionSize/differenceSize (O(non-empty words)), saveInto/loadFrom (O(image words), and loadFrom rewrites all 32 words; the cold serialize/deserialize reuse them, clone reuses copy) and addRange/removeRange (O(words touched)). 1.6.0 adds save / restore, copy / equals, the three counts, `prevSetBit` and the range ops. It is a separate export with no coupling to `FastBit32`.
 
-**Two input laws in one package:** FastBit32's hot ops trust the caller (SC-3, open, decided in S6), while FastBit1024 fails closed on every index (a `RangeError`, or a `TypeError` for a Symbol, a BigInt or a null-prototype object; a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw; see [SC-3](./ROADMAP.md#sc-3----the-input-law-for-raw-bit-indices-open-decided-in-s6) and [SC-5](./ROADMAP.md#sc-5----fastbit1024-in-this-package-settled-2026-10-10-maintainer)).
+**Two input laws in one package:** FastBit32's hot ops trust the caller (SC-3, open, decided in S6), while FastBit1024 fails closed on every index (a `RangeError`, or a `TypeError` for a Symbol, a BigInt or a null-prototype object; a rejected call writes nothing, though the argument's own conversion (`valueOf` / `toString` / `Symbol.toPrimitive`) still runs once, before the throw; see [SC-3](https://github.com/PeshoVurtoleta/lite-fastbit32/blob/main/ROADMAP.md#sc-3----the-input-law-for-raw-bit-indices-open-decided-in-s6) and [SC-5](https://github.com/PeshoVurtoleta/lite-fastbit32/blob/main/ROADMAP.md#sc-5----fastbit1024-in-this-package-settled-2026-10-10-maintainer)).
 
 | Member | Returns | Notes |
 |---|---|---|
@@ -410,7 +407,7 @@ forEachMaskUnion(required, available, bit => console.log('all:', bit));
 | `serialize()`, `FastBit1024.deserialize(src, offset = 0)` | `Int32Array` / `FastBit1024` | (1.6.0) COLD, allocate: a fresh image / a new set whose capacity is the image's (throws as `loadFrom`) |
 | `forEach(cb)`, `clear()` | `this` | O(k + non-empty words) / O(non-empty words). forEach reads each word once (a snapshot): to mutate during the walk, use the `nextSetBit` cursor |
 
-Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`, `hasAny`, `copy`, `equals`, `intersectionSize`, `unionSize` and `differenceSize` check a private-name brand (a private field stamped by the constructor): subclass instances pass; `null`, a primitive, a FastBit32, an `Object.create(FastBit1024.prototype)` forgery, a Proxy and a FastBit1024 from a second installed copy of the package all throw `TypeError`.
+Underscore fields (`_cap`, `_n`, `_active`, `_full`, `_data`) are internal; writing them voids invariants I1-I4. `hasAll`, `hasAny`, `copy`, `equals`, `intersectionSize`, `unionSize` and `differenceSize` check a private-name brand on their argument, and `saveInto` checks its receiver (1.7.0; every other method reads `this` unchecked (`clone` throws the brand TypeError through its checked `copy`)): subclass instances pass; `null`, a primitive, a FastBit32, an `Object.create(FastBit1024.prototype)` forgery, a Proxy and a FastBit1024 from a second installed copy of the package all throw `TypeError`.
 
 **Ranges are half-open.** `addRange` / `removeRange` take `[lo, hi)`; `FastBit32.countRange` and `FastBit32.rangeMask` are INCLUSIVE `[start, end]`.
 
@@ -467,7 +464,7 @@ off = 0;
 for (let i = 0; i < k; i++) off = s.loadFrom(arena, off);   // each call returns the next offset
 ```
 
-Measured (one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op): `acquire()` + `release()` pair ~3.2, `nextClearBit()` ~0.5, `lowest()` ~0.34-0.37, `highest()` ~0.40-0.47, `has()` ~0.91-0.98 (of which ~0.78 is the fail-closed check), each flat whether the free (or set) slot is in word 0 or word 31. 0 B/op measured in torture T6 (verified-optimized code; a DETERMINISTIC allocation count, gated in `npm run torture`) for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny, and for the 1.6.0 members saveInto, loadFrom, copy, equals, prevSetBit, intersectionSize / unionSize / differenceSize, addRange and removeRange (add/remove/toggle/forEach/clear are not in the FastBit1024 T6 lane; serialize, deserialize and clone allocate and have must-fail lanes that prove the detector sees it); the perf gate adds 0 scavenges for acquire+release.
+Measured, nominal (date and load not recorded; one full run, node v26.8.2, Apple M4 Pro, witness HOT lane, net ns/op): `acquire()` + `release()` pair ~3.2, `nextClearBit()` ~0.5, `lowest()` ~0.34-0.37, `highest()` ~0.40-0.47, `has()` ~0.91-0.98 (of which ~0.78 is the fail-closed check), each flat whether the free (or set) slot is in word 0 or word 31. 0 B/op measured in torture T6 (verified-optimized code; a DETERMINISTIC allocation count, gated in `npm run torture`) for acquire/release, has, nextClearBit, lowest, highest, the nextSetBit cursor and hasAll/hasAny, and for the 1.6.0 members saveInto, loadFrom, copy, equals, prevSetBit, intersectionSize / unionSize / differenceSize, addRange and removeRange (add/remove/toggle/forEach/clear are not in the FastBit1024 T6 lane; serialize, deserialize and clone allocate and have must-fail lanes that prove the detector sees it); the perf gate adds 0 scavenges for acquire+release.
 
 ---
 
@@ -508,7 +505,7 @@ entity.has(64);            // RangeError: fails closed, nothing written
 | `select(k)` | index or `-1` | the k-th set bit, `k` 0..63 (`RangeError` outside); `-1` when `k >= count()`; `select(rank(b)) === b` |
 | `addRange(lo, hi)` / `removeRange(lo, hi)` | `this` | half-open `[lo, hi)`, `0 <= lo <= hi <= 64`, else `RangeError` |
 | `countRange(lo, hi)` | `number` | half-open `[lo, hi)`; **FastBit32's `countRange(start, end)` is INCLUSIVE** (FastBit64 follows FastBit1024) |
-| `forEach(callback)` | `this` | O(k), ascending; hoist the callback, a capturing closure allocates |
+| `forEach(callback)` | `this` | O(k) ascending. Hoist the callback: a capturing closure allocates. In the walk each word is read once, when its walk starts (`lo`, then `hi`), as a snapshot: a callback that removes a later bit of the same word is still called for it, and a bit it adds to `hi` while `lo` is walked is visited. To mutate during the walk, use the `nextSetBit` cursor. |
 | `imageLength` | `3` | instance and static, `readonly` |
 | `saveInto(out, offset = 0)` / `loadFrom(src, offset = 0)` | next offset | the FastBit1024 image at capacity 64, `[0x46420840, lo, hi]` |
 | `serialize()` / `FastBit64.deserialize(src, offset = 0)` | `Int32Array` / instance | COLD, allocate |
@@ -522,6 +519,8 @@ entity.has(64);            // RangeError: fails closed, nothing written
 **Kernels are private.** The popcount / count-trailing-zeros / select kernels behind `count`, `lowest` and `select` are module-private functions, not exports; exporting them waits for S6.
 
 **Save and restore.** The image is `[0x46420840, lo, hi]`, the same words a `FastBit1024` of capacity 64 writes. `FastBit64.loadFrom` accepts any FastBit1024-format image (capacity 1..1024) whose set bits are all below 64 (a `RangeError` otherwise, nothing written), and `FastBit1024.loadFrom` accepts a FastBit64 image: each class loads the other's.
+
+**Persisting.** The words are `#private`, so `JSON.stringify(s)` is `"{}"` and `structuredClone(s)` is a plain `{}` (verified); persist with `[s.lo, s.hi]`, `toArray()`, `serialize()` or `saveInto`, restore with `new FastBit64(lo, hi)`, `fromArray`, `FastBit64.deserialize` or `loadFrom`.
 
 **64 x 64 = 4096 recipe (1.7.0, a doc recipe, not an export).** `Bits4096` is the FastBit1024 shape one size up: an `Int32Array(128)` of words and two `FastBit64` summaries over its 64 slots of 64 bits (`active`: the slot has a set bit; `full`: the slot is all ones). `acquire()` and `lowest()` are O(1) through the summaries; every index fails closed (a `RangeError`; a `TypeError` for a Symbol, a BigInt or a null-prototype object; state unchanged). Retained bytes: nominal (p8), not yet measured.
 
@@ -644,9 +643,9 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 
 | Method | Returns | Description |
 |---|---|---|
-| `.add(bit)` | `this` | Set bit at position (0–31). |
-| `.remove(bit)` | `this` | Clear bit at position (0–31). |
-| `.toggle(bit)` | `this` | Flip bit at position (0–31). |
+| `.add(bit)` | `this` | Set bit at position (0-31). |
+| `.remove(bit)` | `this` | Clear bit at position (0-31). |
+| `.toggle(bit)` | `this` | Flip bit at position (0-31). |
 | `.has(bit)` | `boolean` | Test if bit is active. |
 
 ### Bulk Mask Operations
@@ -662,15 +661,15 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | Method | Returns | Description |
 |---|---|---|
 | `.clear()` | `this` | Reset all 32 bits to zero. |
-| `.union(mask)` | `this` | Bitwise OR — add all bits in mask. |
-| `.difference(mask)` | `this` | Bitwise AND NOT — remove all bits in mask. |
-| `.intersect(mask)` | `this` | Bitwise AND — keep only bits present in both. |
+| `.union(mask)` | `this` | Bitwise OR -- add all bits in mask. |
+| `.difference(mask)` | `this` | Bitwise AND NOT -- remove all bits in mask. |
+| `.intersect(mask)` | `this` | Bitwise AND -- keep only bits present in both. |
 
 ### Advanced Helpers
 
 | Method | Returns | Description |
 |---|---|---|
-| `.count()` | `number` | O(1) popcount — number of active bits (0–32). |
+| `.count()` | `number` | O(1) popcount -- number of active bits (0-32). |
 | `.countMasked(mask)` | `number` | O(1) popcount within a masked region. |
 | `.countRange(start, end)` | `number` | O(1) popcount within INCLUSIVE range `[start, end]` -- FastBit1024 `addRange` / `removeRange` are half-open `[lo, hi)`. |
 | `.lowest()` | `number` | O(1) index of least significant active bit. `-1` if empty. |
@@ -680,7 +679,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | `.isEmpty()` | `boolean` | True if value is `0`. |
 | `.isFull()` | `boolean` | True if all 32 bits are active. |
 | `.rank(bit)` | `number` | O(1) number of active bits strictly below `bit` (0-31). Packed-array slot index. |
-| `.equals(other)` | `boolean` | Same set as another FastBit32 (signedness-agnostic). |
+| `.equals(other)` | `boolean` | Same set as another FastBit32 (signedness-agnostic). `other` is not checked (S6). |
 | `.equalsValue(x)` | `boolean` | Same set as a raw word (signedness-agnostic). Not validated: `undefined` / `null` / `NaN` compare as `0`. |
 | `.isSubsetOf(mask)` | `boolean` | Every active bit is also in `mask` (the dual of `hasAll`). |
 | `FastBit32.rangeMask(start, end)` | `number` | INCLUSIVE `[start, end]` mask as a signed int32 -- FastBit1024 `addRange` / `removeRange` are half-open `[lo, hi)`. Cold, validated: throws `RangeError` unless both are integers with `0 <= start <= end <= 31`. |
@@ -701,10 +700,10 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | Method | Returns | Description |
 |---|---|---|
 | `.clone()` | `FastBit32` | Independent copy. Allocates -- in a pool, use `copy()`. |
-| `.copy(other)` | `this` | Overwrite with `other.value`. Zero-alloc alternative to `clone()`. |
+| `.copy(other)` | `this` | Overwrite with `other.value`, as-is. Zero-alloc alternative to `clone()`. `other` is not checked (S6). |
 | `.set(x)` | `this` | Overwrite with `x \| 0` (signed int32, like every mutator). |
-| `.serialize()` | `number` | Export raw uint32 for JSON/binary storage. |
-| `FastBit32.deserialize(n)` | `FastBit32` | Restore from a serialized uint32. |
+| `.serialize()` | `number` | Export the raw 32-bit word for JSON/binary storage: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` / `deserialize` (FB-03); `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`. |
+| `FastBit32.deserialize(n)` | `FastBit32` | Restore from a serialized 32-bit word, int32 or uint32; stored `>>> 0`. |
 
 ### Debug & Init Helpers
 
@@ -713,7 +712,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | Method | Returns | Description |
 |---|---|---|
 | `.toBinaryString(padded?)` | `string` | 32-char binary representation, LSB on the right. Sign-bit safe. |
-| `.toArray()` | `number[]` | Active bit indexes in ascending order. Inlined O(k) — no closure allocation. |
+| `.toArray()` | `number[]` | Active bit indexes in ascending order. Inlined O(k) -- no closure allocation. |
 | `.fromArray(bits)` | `this` | **Replaces** the mask from a bit-index array. Init/deserialization only. |
 
 ### `new BitMapper(names?)`
@@ -725,7 +724,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | `.getActiveNames(fb32)` | `string[]` | Active flag names from a FastBit32 instance. |
 | `.bit(name)` | `number` | One-bit mask `1 << get(name)` (signed int32; bit 31 is `-2147483648`). Throws if unknown. |
 | `.size` | `number` | Number of distinct registered names (a duplicate keeps its last index). |
-| `.getName(bit)` | `string \| undefined` | O(1) reverse lookup — bit index to name. |
+| `.getName(bit)` | `string \| undefined` | O(1) reverse lookup -- bit index to name. |
 
 ### Standalone Iteration Helpers
 
@@ -743,7 +742,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 
 ## Testing
 
-`npm test` runs 1148 tests (node:test, 155 suites; 1146 pass, 2 skip: the V8 11-13 row and the torture-log row that runs only with FB64_TORTURE_LOG set; DETERMINISTIC; run 2026-11-10, Node v26.8.2). The package scripts:
+`npm test` runs 1247 tests (node:test, 171 suites; 1245 pass, 2 skip: the V8 11-13 row and the torture-log row that runs only with FB64_TORTURE_LOG set; DETERMINISTIC; run 2026-11-17, Node v26.8.2). The package scripts:
 
 | Script | What it does |
 |---|---|
@@ -751,11 +750,11 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 | `npm run test:types` | `tsc` over `test/types`: the .d.ts against typed usage and `@ts-expect-error` rows |
 | `npm run torture` | the tiered torture run (laws, adversarial input, fuzz, B/op allocation counts, soak); the script owns its node flags (`--allow-natives-syntax --expose-gc`, 4 MB semi-space); the T6 lanes measure verified-optimized (TurboFan) code and an unverified lane fails closed; T6 runs on V8 >= 14 (node 26.x; below that torture prints a named SKIP) and first poisons call feedback, with a 1.6.0-body witness that must read >= 15.9 B/op on its unsigned lanes |
 | `npm run torture:controls` | mutants and broken harness pieces that each must turn their tier red (proves the gates have teeth) |
-| `npm run test:perf` | the scavenge-count gate (DETERMINISTIC, not timed): each hot op group is run at N and 8N under pinned 4 MB semi-spaces and must show a finite scavenge count <= 2, with a must-trip teeth scenario; part of `verify` |
+| `npm run test:perf` | the scavenge-count gate (DETERMINISTIC, not timed; also run on the hosted CI legs on node 20+, `ci.yml`): each hot op group is run at N and 8N under pinned 4 MB semi-spaces and must show a finite scavenge count <= 2, with a must-trip teeth scenario; part of `verify` |
 | `npm run witness`, `npm run witness:fast` | the flatness witness (STATISTICAL, timed) |
 | `npm run gate:release` | `test/witness-release.mjs`: witness:fast K = 5 rounds with a majority vote (STATISTICAL, timed); runs under the quiet lock at release. Exit 0 pass, 1 finding or harness failure, 2 inconclusive (`prepublishOnly` fails on 2) |
 | `soak-nightly` workflow (lane S) | `.github/workflows/soak-nightly.yml`, daily cron + manual dispatch (DETERMINISTIC, GATING): ubuntu (node latest and 26.8.2, pinned d8 15.7.37 lane) and macos, node latest (d8 lane named SKIP); per leg 3 seeds, each a full `npm run torture` with `TORTURE_SOAK_CYCLES` = 16384 (default; dispatch accepts a multiple of 1024 in [8192, 65536]), each seed printed as a replay command; then `torture:controls` at the push volume (`TORTURE_SOAK_CYCLES` unset) and the two T7 soak controls (`soak-stash`, `soak-retain`) at the nightly volume. A red leg is red until explained |
-| `perf-nightly` workflow (lane P) | `.github/workflows/perf-nightly.yml`, daily cron + manual dispatch on ubuntu-latest and macos-latest, node 26.8.2 (STATISTICAL, REPORT-ONLY): runs the `gate:release` statistic (3 of K = 5 `witness:fast` rounds) on the live tree and, interleaved ABBA, on a temp copy with a slowed `countMasked` that must trip. Results are REPORTED, not a gate, until the calibration in RESEARCH.md ("Lane P calibration") closes |
+| `perf-nightly` workflow (lane P) | `.github/workflows/perf-nightly.yml`, daily cron + manual dispatch on ubuntu-latest and macos-latest, node 26.8.2 (STATISTICAL, REPORT-ONLY): runs the `gate:release` statistic (3 of K = 5 `witness:fast` rounds) on the live tree and, interleaved ABBA, on a temp copy with a slowed `countMasked` that must trip. Results are REPORTED, not a gate, until the calibration in [RESEARCH.md](https://github.com/PeshoVurtoleta/lite-fastbit32/blob/main/RESEARCH.md) ("Lane P calibration") closes |
 | `npm run bundle-check` | esbuild bundle smoke |
 | `npm run verify` | `npm test && npm run test:types && npm run torture && npm run torture:controls && npm run test:perf` |
 | `npm run bench:sc1`, `npm run bench:sc2` | research benchmarks (REPORTED only, gate nothing) |

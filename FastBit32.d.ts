@@ -8,7 +8,12 @@
  *
  * **Caveats:**
  * - JS bitwise shifts apply modulo 32 silently: `add(32)` == `add(0)`.
- * - Floats and negatives are truncated to unsigned 32-bit: `-1 >>> 0` -> `4294967295`.
+ * - Floats and negatives are truncated by the bitwise ops: `-1 >>> 0` -> `4294967295`. `value` is
+ *   the 32-bit pattern: int32 after any bit mutator or `set`; uint32 straight from the constructor /
+ *   `clone` / `fromArray` / `deserialize` (FB-03); `copy` stores `other.value` as-is. Compare with
+ *   `equalsValue` or `>>> 0`.
+ * - Mask and `other` arguments are not checked (S6, SC-3): a mask op reads an object or `undefined`
+ *   as 0 (`hasAll(set)` is `true`, `intersect(set)` clears the receiver). Pass `fb.value` as a mask.
  *
  * @example
  * ```js
@@ -45,7 +50,9 @@ export class FastBit32 {
     constructor(initial?: number);
 
     /**
-     * The raw unsigned 32-bit integer bitmask.
+     * The raw 32-bit pattern: int32 after any bit mutator or `set`; uint32 straight from the
+     * constructor / `clone` / `fromArray` / `deserialize` (FB-03); `copy` stores `other.value`
+     * as-is. Compare with `equalsValue` or `>>> 0`.
      * Mutated in-place by all operations. Safe to read directly in hot paths.
      */
     value: number;
@@ -92,6 +99,11 @@ export class FastBit32 {
      * Equivalent to `(~value & mask) === 0` -- signedness-agnostic: `mask` and
      * `mask >>> 0` answer the same, so a mask carrying bit 31 (e.g. from
      * `BitMapper.getMask`) matches correctly (FB-01, fixed 1.2.1).
+     *
+     * Mask ops (`hasAll`, `hasAny`, `hasNone`, `union`, `difference`, `intersect`,
+     * `countMasked`, `isSubsetOf`) do not check `mask`: an object (a FastBit32 / FastBit64
+     * instance, `{}`) or `undefined` reads as 0 (`hasAll(set)` is `true`, `intersect(set)`
+     * clears the receiver); fail-closed in S6 (SC-3). Pass `fb.value`.
      *
      * @param mask - Bitmask to test against.
      */
@@ -319,6 +331,8 @@ export class FastBit32 {
     /**
      * Same set as `other`. Signedness-agnostic (`(a ^ b) === 0`): a ctor-built
      * (unsigned) and a mutator-built (signed) instance of the same bits are equal.
+     * `other` is not checked (S6): on an EMPTY receiver `equals(x)` is `true` for an object
+     * with no `value` (a FastBit64, a FastBit1024, `{}`); `equals(undefined)` throws TypeError.
      *
      * @param other - Another FastBit32.
      */
@@ -345,6 +359,7 @@ export class FastBit32 {
     /**
      * Overwrites the word with `other.value` (stored as-is). 0 B/op: the
      * zero-alloc alternative to `clone()` for pooled instances.
+     * `other` is not checked (S6): `copy({})` stores `value = undefined`.
      *
      * @param other - The FastBit32 to copy from.
      * @returns `this` for chaining.
@@ -456,7 +471,8 @@ export class FastBit32 {
     // -- Serialization --
 
     /**
-     * Exports the raw unsigned 32-bit integer for storage.
+     * Exports the raw 32-bit word for storage: int32 after any bit mutator or `set`, uint32 straight
+     * from the constructor / `clone` / `fromArray` / `deserialize` (FB-03). Compare with `>>> 0`.
      * Ideal for JSON, binary protocols, and ECS save states.
      *
      * @returns The raw `value`.
@@ -466,7 +482,7 @@ export class FastBit32 {
     /**
      * Creates a new `FastBit32` from a previously serialized integer.
      *
-     * @param value - A raw unsigned 32-bit integer.
+     * @param value - Any 32-bit word, int32 or uint32; stored `>>> 0`.
      * @returns A new `FastBit32` instance.
      */
     static deserialize(value: number): FastBit32;
@@ -548,6 +564,11 @@ export class BitMapper {
 
 /**
  * Iterates active bits in a mask, calling back with the corresponding array element.
+ *
+ * The seven free iterators do not check `mask`: in `forEachArray`, `forEachObject`,
+ * `forEachMapped` and `forEachMappedObject` a non-FastBit32 object calls back once with bit -1;
+ * `forEachMaskPair`, `forEachMaskDiff` and `forEachMaskUnion` read it as an empty mask;
+ * `undefined` throws TypeError in all seven (fail-closed in S6, SC-3). Pass a FastBit32.
  *
  * @param mask - FastBit32 instance whose active bits select array indices.
  * @param array - Data array indexed by bit position.
@@ -664,7 +685,10 @@ export function forEachMaskUnion(
  * writing them voids invariants I1-I4.
  *
  * `hasAll`/`hasAny`/`copy`/`equals`/`intersectionSize`/`unionSize`/`differenceSize` check a
- * private-name brand: subclass instances pass; a FastBit1024 from a second installed copy of the package, a Proxy or a
+ * private-name brand on their argument, and only `saveInto` checks its RECEIVER (1.7.0); every
+ * other method reads `this` unchecked (`FastBit1024.prototype.isFull.call({})` is `true`;
+ * `clone` throws the brand TypeError through its checked `copy`).
+ * Subclass instances pass; a FastBit1024 from a second installed copy of the package, a Proxy or a
  * forgery throws TypeError.
  *
  * @example
@@ -713,7 +737,7 @@ export class FastBit1024 {
 
     /**
      * True when `bit` is set. O(1). Fails closed like every index op (two
-     * compares; measured ~0.8 ns over the unchecked read):
+     * compares; ~0.8 ns over the unchecked read, nominal (run not recorded)):
      * `has(undefined)` throws instead of answering for slot 0.
      * @throws {RangeError} unless `0 <= bit < capacity` (integer).
      */
@@ -938,7 +962,7 @@ export class FastBit1024 {
  * windows at <= 2 scavenges per 1e6 ops inlined; a word outside the Smi range still boxes across a
  * non-inlined call, in Maglev-compiled loadFrom (one box per call, nominal) and in interpreter / Sparkplug code, and an instance costs
  * about 24 B more than a plain two-field object (nominal). REPORTED: on d8, once the process holds an out-of-Smi
- * instance, mutators on Smi words were measured slower (toggle about 1.0 -> about 3.7 ns/op), no allocation.
+ * instance, mutators on Smi words were measured slower (toggle about 1.0 -> about 3.7 ns/op), no allocation (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro).
  */
 export class FastBit64 {
     /** Q-4: lo, hi each an integer in [-2^31, 2^32) (signed or unsigned form), stored | 0. @throws {RangeError} */
@@ -996,7 +1020,12 @@ export class FastBit64 {
     removeRange(lo: number, hi: number): this;
     countRange(lo: number, hi: number): number;
 
-    /** O(k) ascending. Hoist the callback: a capturing closure allocates. */
+    /**
+     * O(k) ascending. Hoist the callback: a capturing closure allocates. In the walk
+     * each word is read once, when its walk starts (`lo`, then `hi`), as a snapshot: a callback
+     * that removes a later bit of the same word is still called for it, and a bit it adds to `hi`
+     * while `lo` is walked is visited. To mutate during the walk, use the `nextSetBit` cursor.
+     */
     forEach(callback: (bit: number) => void): this;
 
     // save / restore (Q-9): the FastBit1024 image at capacity 64, [0x46420840, lo, hi]
