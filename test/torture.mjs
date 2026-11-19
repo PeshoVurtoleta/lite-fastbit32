@@ -21,6 +21,7 @@ import * as h from './torture/harness.mjs';
 import { buildBaseCtx } from './torture/context.mjs';
 import { CONTROLS, CONTROL_NAMES, suggest, fb1024Faithful } from './torture/controls.mjs';
 import { applyFb64Variant, fb64VariantRow } from './torture/fb64-variants.mjs';
+import { framePinLane } from './torture/t7-soak.mjs';
 
 // CI-3: on POSIX, process.stdout / process.stderr on a pipe or socket are
 // asynchronous. Once the kernel buffer is full libuv queues the remaining writes,
@@ -213,6 +214,10 @@ let totalGreen = 0;
 for (const name of ORDER) {
     if (name === 'T6' && t6Skip !== null) { console.error('[T6] SKIP'); continue; }
     const r = await runTier(name, ctx);
+    // T7-FIX: the T7 soak again in a child under --jitless (t7-soak.mjs
+    // framePinLane); normal run only, never in control mode. Each lane
+    // problem is a T7 fail line.
+    if (name === 'T7') for (const f of framePinLane(ctx)) r.fails.push(f);
     for (const f of r.fails) allFails.push(f);
     totalGreen += r.green;
     console.error('[' + name + '] fails=' + r.fails.length + ' green=' + r.green);
@@ -337,6 +342,10 @@ if (m.fb64D8) {
         console.error('MEASURE FastBit64 d8 pointer-compressed lane inlined read scavenges=' + d.inl.read + ' per 1e6 ops [gated <=2], store scavenges=' + d.inl.store + ' per 1e6 ops [gated <=2], mutator scavenges=' + d.inl.mutator + ' per 1e6 ops [gated <=2], box control=' + d.inl.box + ' [gated >=2], result=' + d.inl.result);
         console.error('MEASURE FastBit64 d8 pointer-compressed lane noinline read scavenges=' + d.noinl.read + ' per 1e6 ops [REPORTED], store scavenges=' + d.noinl.store + ' per 1e6 ops [REPORTED], mutator scavenges=' + d.noinl.mutator + ' per 1e6 ops [REPORTED], box control=' + d.noinl.box + ' [gated >=2], result=' + d.noinl.result);
     }
+}
+if (m.t7FramePinLane) {
+    const p = m.t7FramePinLane;
+    console.error('MEASURE T7 frame-pin lane (child, --jitless, 4096 cycles) segment live=[' + (p.segLive === null ? 'none' : p.segLive.join(',')) + '] flags=' + p.flags + ' fails=' + p.fails + ' wallMs=' + p.wallMs + ' [gated: --jitless in execArgv, 4 segments, 0 each, 0 fails]');
 }
 if (m.soakLive !== undefined) console.error('MEASURE soak live=' + m.soakLive + ' findings=' + m.soakFindings + ' postDrainKB=[' + (m.soakPostDrainKB || []).join(',') + '] growthKB=' + m.soakHeapGrowthKB);
 

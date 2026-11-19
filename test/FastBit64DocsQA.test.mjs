@@ -345,12 +345,16 @@ describe('D FastBit64 GC claims', () => {
     test('CHANGELOG [Unreleased]: control counts and the T3 control names == the control registry', () => {
         const c = read('CHANGELOG.md');
         const un = c.slice(c.indexOf('## [Unreleased]'), c.indexOf('\n## [', c.indexOf('## [Unreleased]') + 5));
-        const m = un.match(/Torture controls: (\d+) at 1\.6\.1 -> (\d+) \((\d+) FastBit64 controls\)/);
+        const m = un.match(/Torture controls: (\d+) at 1\.6\.1 -> (\d+) \((\d+) FastBit64 controls(?: and `t7-frame-pin`)?\)/);
         assert.ok(m, 'CHANGELOG: controls line');
         const fb64 = CONTROL_NAMES.filter((n) => n.startsWith('fb64-'));
         assert.equal(Number(m[2]), CONTROL_NAMES.length, 'total controls');
         assert.equal(Number(m[3]), fb64.length, 'FastBit64 controls');
-        assert.equal(Number(m[2]) - Number(m[1]), fb64.length, 'delta');
+        // T7-FIX (2026-11-19): the one non-FastBit64 control added since 1.6.1, named on the same line.
+        const otherAdded = ['t7-frame-pin'];
+        for (const n of otherAdded) assert.ok(CONTROL_NAMES.includes(n), 'registry lacks ' + n);
+        assert.equal(Number(m[2]) - Number(m[1]), fb64.length + otherAdded.length, 'delta (FastBit64 controls + ' + otherAdded.join(', ') + ')');
+        assert.match(un, /Torture controls: \d+ at 1\.6\.1 -> \d+ \(\d+ FastBit64 controls and `t7-frame-pin`\)\./);
         const t3 = un.match(/T3 FastBit64 SAB[^\n]*(?:\n {2}[^\n]*)*/)[0];
         const listed = new Set([...t3.matchAll(/fb64-sab-[a-z]+/g)].map((x) => x[0]));
         assert.deepEqual([...listed].sort(), fb64.filter((n) => n.startsWith('fb64-sab-')).sort());

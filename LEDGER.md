@@ -48,11 +48,11 @@ them; a number with no date / host / run count there carries none here either, a
    place. No bare numeric field declarations; a source pin enforces it. *(B10, C7)*
 3. **A gate that cannot fail is not a gate.** Every gate needs a must-fail control that
    fails for its own reason (an `expect` pattern), and a coverage floor counted in events, not
-   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, C7, C9)*
+   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, B19, C7, C9)*
 4. **Status bits and "it passed" do not prove the thing was measured.** T6 verifies TurboFan
    through `%GetOptimizationStatus`, in both V8 bit layouts, and fails closed on an unknown
    layout; an unverified lane fails closed with its reason; where T6 cannot be verified at all (V8 < 14) the tier prints a named SKIP, never a silent pass. *(B2, B8, B9)*
-5. **Fail closed on every unverified state, including the harness.** An empty or one-cell row and a symlinked entry point (B14), a missing coverage floor (B4), a census blind to helpers (B15) and a write before the last validation (B16) each failed open; an unknown V8 bit layout now fails closed (B8). *(B2, B4, B8, B9, B14, B15, B16)*
+5. **Fail closed on every unverified state, including the harness.** An empty or one-cell row and a symlinked entry point (B14), a missing coverage floor (B4), a census blind to helpers (B15) and a write before the last validation (B16) each failed open; an unknown V8 bit layout now fails closed (B8). *(B2, B4, B8, B9, B14, B15, B16, B19)*
 6. **Read shared memory once into a local and validate the local.** A restore that validates
    one read and stores another fails open under a concurrent writer. *(B11, B16)*
 7. **Public fields cannot be a brand; a `#private` field is.** The public-field shape answers
@@ -471,6 +471,57 @@ cross-platform half.
   `test/FastBit64SabSkip.test.mjs` (H1 constants); control `fb64-sab-flip`;
   `test/FastBit64DocsQA.test.mjs` (CHANGELOG T3 bars == the constants).
 
+### B19. T7 false FAIL: a dead async-function local pinned the segment's last instance (T7-FIX)
+
+- **What happened.** soak-nightly 44299365353 (2026-11-18, b34775d), leg macos-latest / node
+  latest = v27.0.0-alpha.0.1.1 (V8 15.6.75.50-node.14), 3 cpus, load at job start 96.19 48.45
+  19.83. Seed 3069745017, cycles 16384: `TODO/FAIL T7: segment 2 did not drain to 0 (live=1)`.
+  Seeds 1452148634 / 1213775432 green on that leg; the ubuntu alpha and ubuntu 26.8.2 legs
+  green; the same alpha passed b34775d the night before (44080134911). First T7 drain red in
+  14 soak-nightly runs.
+- **Root cause.** TEST HARNESS defect, not a FastBit32 retention. `test/torture/t7-soak.mjs`
+  `run()` is async; its inline FastBit32 churn loop's dead loop-local `inst` (the segment's last
+  instance) is saved in the suspended generator across `await drain(50)`, depending on the tier
+  executing `run()` at the await; concurrent-compile timing (a 3-cpu runner at load 96) decides.
+  imgCycle / fb64Cycle / fb1024Churn already lived in plain functions for this reason; the
+  FastBit32 loop never moved. Ladder (2026-11-19, local M-series, 12 cores, quiet-lock QUIET,
+  load1 1.40-3.68): (1) node v26.8.2 replay of the seed: green. (2) "conservative stack
+  scanning on in the alpha": FALSE, `--v8-options` shows the default
+  `--no-conservative-stack-scanning`, as on 26.8.2. (3) probe: an async function with
+  `const inst` in an inner loop then `await drain()` keeps the segment's LAST object; small
+  segments (64 x 64) every segment, every tier, both nodes; T7 size (1024 x 64) segment-
+  dependent, moves with --no-turbofan / --no-maglev / --no-concurrent-recompilation
+  --no-concurrent-osr (the last pins segments 0-2 every run); a 7-arg call after the loop does
+  not clear it (the local's own register); the same loop in a plain function gives live=0 under
+  every flag set on both nodes; the MODE=stash control keeps everything. (4) real harness on the
+  alpha under --no-concurrent-recompilation --no-concurrent-osr: 16/16 segments `live=1;
+  fb32 seg=N cyc=1023 n=63`; default flags on the alpha 0 red of 7 (seed 3069745017 x 5, the
+  other two seeds x 1); node 26.8.2 under the flags: frozen old shape pins [1,1,1,1] 3/3.
+  (5) old-V8 check (maintainer-approved downloads, node 20.20.2 / 22.23.5 / 24.22.3): the
+  no-concurrent flags do NOT pin the old shape on node 20 (V8 11.3) or 22 (12.4) (control BAD,
+  `u5-v*-control.log`; probe-r4 / r5); `--jitless` pins it 4/4 segments on node 20 / 22 / 24 /
+  26.8.2 / the alpha and the fixed shape drains to 0 on all five. Ruling 2026-11-19 "Switch to
+  --jitless (Recommended)": the lane and the control run under `--jitless`.
+- **Evidence.** CI 44299365353, 44080134911; b34775d; fix commit: T7-FIX commit (maintainer
+  fills). `.handoff/evidence/t7-alpha/ci-44299365353-macos-alpha.log`,
+  `u1-node26-seed3069745017-20261119T050604.log`, `u3-flags-noconc-3069745017.log`,
+  `u3-default-*.log`, `u4-task0-frozen-entry.log`, `u5-v*-control.log`, `u6-*.log`;
+  `.handoff/research/t7-alpha/probe-frame-pin.mjs` (probe-r1..r5 logs).
+- **Measurement trap.** A replay on a quiet host is not a reproduction: the alpha went 0 red in
+  7 replays under default flags (the failing seed x 5). A tier-timing defect needs a flag that makes tiering
+  deterministic, not more replays -- and that flag must be checked on every engine the gate
+  runs on: --no-concurrent-recompilation --no-concurrent-osr pinned on V8 13.6+ only;
+  `--jitless` (interpreter only) pins on V8 11.3 through 15.6.
+- **Law.** 3, 5. Entry-level rule: a tracked object is never a local of an async function
+  across an await; churn that is tracked lives in a plain function. Law 3: the gate has a
+  must-fail control, `t7-frame-pin`. Law 5: the lane's child fails closed.
+- **Gate.** `fb32Cycle()` plain function in `test/torture/t7-soak.mjs`; permanent PASS lane
+  `test/torture/t7-frame-pin-lane.mjs` (child spawned by `test/torture.mjs` after T7 under
+  `--jitless`, push volume, `MEASURE T7 frame-pin lane ...`); must-fail control `t7-frame-pin`
+  in `test/torture/controls.mjs` (old inline shape under `--jitless`, expect names
+  `fb32 seg=0 cyc=1023 n=63`); fidelity and lane-presence rows
+  in `test/FastBit64TortureQA.test.mjs`; the survivor suffix on every T7 drain failure.
+
 ---
 
 ## C. Gate evolution
@@ -599,6 +650,18 @@ cross-platform half.
 - **Evidence.** HISTORY (y), (ad); `/Users/zakkster/.claude/projects/-Users-zakkster-Work-Portfolio-LiteLibrariesSuite-LiteFastBit32/memory/zsh-no-word-split-flags.md`.
 - **Law.** 9, 13.
 - **Gate.** Process.
+
+### C12. Alpha leg policy: early warning, never a release block (ruling 2026-11-19)
+
+- **What happened.** B19 was a red on the prerelease `latest` leg (node v27.0.0-alpha). The
+  maintainer ruled (a) "Early warning (Recommended)": the same as LiteUtils Q-B78-LATEST
+  (LiteUtils LEDGER #128, `.handoff/RULINGS-b78.md`). Keep the alpha leg in the nightly, but a
+  red there never blocks a release. The red is still investigated and recorded in the LEDGER,
+  and `gate:release` goes ahead once it is explained or bounded.
+- **Evidence.** B19; `.github/workflows/soak-nightly.yml` header; ROADMAP section 4.
+- **Unchanged.** The soak-nightly node matrix is unchanged: the `latest` legs stay.
+- **Law.** 5, 9. Q-N5 still holds for the pinned legs.
+- **Gate.** Process (policy); no code gate.
 
 ---
 

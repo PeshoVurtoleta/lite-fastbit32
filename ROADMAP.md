@@ -426,6 +426,11 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
   RoaringSet R2 can reuse. Separately, a test-only unit with no PROPOSAL: a
   `FastBit1024` COUNT gate (Proxy word-read ledger, as lite-loglogn
   `Count.test.js`) that moves its loop bounds from STATISTICAL to DETERMINISTIC.
+- **Alpha leg policy (maintainer ruling 2026-11-19).** Ruling (a), "Early warning
+  (Recommended)": keep the alpha leg in the nightly, but a red there never blocks a release;
+  the red is still investigated and recorded in the LEDGER, and `gate:release` goes ahead once
+  it is explained or bounded. Same as LiteUtils Q-B78-LATEST. LEDGER B19 (the T7 false FAIL on
+  node v27 alpha, T7-FIX) and C12 (the policy). The node `latest` soak legs stay in the matrix.
 - **1.8.0 candidate: word ops (external proposal reviewed 2026-11-07, top session).**
   Scope: FastBit32 + FastBit64 together, AFTER 1.7.0 ships. 1.7.0 is under HOLD-RELEASE; this does not widen
   it. New public surface, so it starts with a RESEARCH BURST and a ruled PROPOSAL before any planner pass.

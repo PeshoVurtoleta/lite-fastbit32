@@ -8,6 +8,9 @@
 // (or `dwellN: d.reads` to `dwellN: FB64_SAB_DWELL_N`) passed npm test. These rows read fb64SabRow's body.
 //
 // A17 (3): CONTROL_NAMES grew 52 -> 53 with fb64-sab-flip; no test pinned the count or the nine FastBit64 names.
+// T7-FIX (2026-11-19): 53 -> 54 with t7-frame-pin. Its inline churn in t7-soak.mjs run() must be the same
+// statements as fb32Cycle's body, so the control tests the shipped churn and cannot drift (source text only,
+// no git history: LEDGER E4).
 
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -62,10 +65,68 @@ test('R16 fb64SabRow names no dwell constant (every dwell count comes from the s
     }
 });
 
-test('A17 (3) CONTROL_NAMES is 53: the 44 of 1.6.1 plus nine FastBit64 controls, fb64-sab-flip among them', () => {
-    assert.equal(CONTROL_NAMES.length, 53);
-    assert.equal(new Set(CONTROL_NAMES).size, 53, 'duplicate control name');
+test('A17 (3) CONTROL_NAMES is 54: the 44 of 1.6.1, nine FastBit64 controls (fb64-sab-flip among them) and t7-frame-pin', () => {
+    assert.equal(CONTROL_NAMES.length, 54);
+    assert.equal(new Set(CONTROL_NAMES).size, 54, 'duplicate control name');
+    assert.ok(CONTROL_NAMES.includes('t7-frame-pin'), 't7-frame-pin registered');
     const fb64 = CONTROL_NAMES.filter((n) => n.startsWith('fb64-')).sort();
     assert.deepEqual(fb64, ['fb64-bop-box', 'fb64-noinline-flag-drop', 'fb64-poison-opts-drop', 'fb64-poison-row-drop',
         'fb64-sab-blind', 'fb64-sab-flip', 'fb64-sab-reread', 'fb64-soak-retain', 'fb64-u32-storage']);
+});
+
+// T7-FIX fidelity: statements of fb32Cycle's body vs run()'s <t7-frame-pin copy> block. Normalized: line comments
+// dropped (neither body has '//' inside a string), each line trimmed, inner whitespace collapsed, blank lines dropped.
+const T7 = new URL('./torture/t7-soak.mjs', import.meta.url);
+const stmts = (text) => text.split('\n').map((l) => l.replace(/\/\/.*$/, '').trim().replace(/\s+/g, ' ')).filter((l) => l !== '');
+function fb32CycleBody(src) {
+    const head = 'function fb32Cycle(ctx, FB, Mapper, names, seg, c, tracker, stash) {\n';
+    const at = src.indexOf(head);
+    assert.ok(at >= 0, 'fb32Cycle not found in t7-soak.mjs');
+    assert.equal(src.indexOf('function fb32Cycle(', at + 1), -1, 'fb32Cycle declared twice');
+    const end = src.indexOf('\n}\n', at);
+    assert.ok(end > at, 'fb32Cycle has no closing brace at column 0');
+    return src.slice(at + head.length, end + 1);
+}
+function framePinCopy(src) {
+    const open = '// <t7-frame-pin copy>\n', close = '// </t7-frame-pin copy>';
+    const at = src.indexOf(open);
+    assert.ok(at >= 0, 't7-frame-pin copy marker not found');
+    assert.equal(src.indexOf(open, at + 1), -1, 't7-frame-pin copy marker twice');
+    const end = src.indexOf(close, at);
+    assert.ok(end > at, 't7-frame-pin copy has no closing marker');
+    assert.equal(src.indexOf(close, end + 1), -1, 't7-frame-pin closing marker twice');
+    return src.slice(at + open.length, end);
+}
+
+test('T7-FIX the t7-frame-pin inline copy is statement-identical to fb32Cycle (the control tests the shipped churn)', () => {
+    const src = readFileSync(T7, 'utf8');
+    const body = stmts(fb32CycleBody(src));
+    const copy = stmts(framePinCopy(src));
+    // teeth: the body is the churn itself, not an empty or partial match
+    assert.ok(body.length >= 10, 'fb32Cycle body has ' + body.length + ' statements');
+    assert.equal(body[0], 'const mapper = new Mapper(names);');
+    assert.ok(body.includes('tracker.track(inst, moduleNoop, (seg * PER_SEG + c) * 64 + n, { audit: true });'), 'track row');
+    assert.ok(body.includes('if (stash) STASH.push(inst);'), 'stash row');
+    assert.deepEqual(copy, body); // mutant: edit one copy only (op, tag, SINK, stash) -> differs
+});
+
+test('T7-FIX run() calls fb32Cycle once, in the not-frame-pin branch, and the control flag gates the inline copy', () => {
+    const src = readFileSync(T7, 'utf8');
+    const at = src.indexOf('export async function run(ctx) {');
+    assert.ok(at >= 0, 'run not found');
+    const run = src.slice(at);
+    const calls = run.split('fb32Cycle(ctx, FB, Mapper, names, seg, c, tracker, stash);').length - 1;
+    assert.equal(calls, 1, 'fb32Cycle call sites in run()');
+    assert.match(run, /const framePin = ctx\.control\.t7FramePin === true;/);
+    assert.match(run, /if \(framePin\) \{\n[^]*?\/\/ <t7-frame-pin copy>[^]*?\/\/ <\/t7-frame-pin copy>\n\s*\} else \{\n\s*fb32Cycle\(ctx, FB, Mapper, names, seg, c, tracker, stash\);\n\s*\}/);
+    // the churn appears exactly twice in the module: fb32Cycle and the control copy
+    assert.equal(src.split('const inst = new FB(n * 2654435761);').length - 1, 2);
+});
+
+test('T7-FIX torture.mjs runs framePinLane exactly once, in the normal-run tier loop', () => {
+    const src = readFileSync(new URL('./torture.mjs', import.meta.url), 'utf8');
+    const at = src.indexOf('// ---- normal run'), end = src.indexOf('// ---- control fidelity');
+    assert.ok(at >= 0 && end > at, 'normal-run section');
+    assert.equal(src.split('framePinLane(ctx)').length - 1, 1, 'framePinLane call sites');
+    assert.ok(src.slice(at, end).includes("if (name === 'T7') for (const f of framePinLane(ctx)) r.fails.push(f);"), 'lane call in the normal-run loop');
 });

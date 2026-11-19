@@ -507,7 +507,17 @@ export const CONTROLS = {
     // segments and the FastBit1024 image row stay clean; the final
     // `T7: tracker.size() = 20000` line also fires). live=4000 pins cycle 0 to
     // the full 1000 x 4 tracked results.
-    'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\)/, apply(ctx) { ctx.control.fb64Retain = true; } },
+    'fb64-soak-retain': { tiers: ['T7'], cheap: false, expect: /^(?![\s\S]*T7: segment \d+ did not drain)(?![\s\S]*T7: FastBit1024 image cycle)[\s\S]*T7: FastBit64 retention cycle 0 did not drain to 0 \(live=4000; clone \/ serialize \/ deserialize \/ toArray results retained\); survivors: 4000 survivors \(fb32=0 fb1024=0 img=0 fb64=4000 other=0\); first 8: fb64 cyc=0 k=0 clone tag=33554432 \| fb64 cyc=0 k=0 serialize tag=33554433 \| fb64 cyc=0 k=0 deserialize tag=33554434 \| fb64 cyc=0 k=0 toArray tag=33554435/, apply(ctx) { ctx.control.fb64Retain = true; } },
+    // T7-FIX: run() executes the pre-fix FastBit32 churn inline (a statement copy
+    // of fb32Cycle, t7-soak.mjs), under --jitless, which pins it on node 20..27
+    // (controls-runner appends nodeFlags). The segment's last instance stays in
+    // run()'s suspended async frame across the drain -> segment 0 reads live=1
+    // and names it. Under --jitless the last segment's instance is still in the
+    // frame during the image and FastBit64 rows, so their absolute size() reads
+    // live=1 too: allowed, but every survivor line must count fb32 only (fb1024,
+    // img, fb64, other all 0), every row live must be 1, and the FastBit64
+    // coverage (tracked 4000) and needs-flag lines must not appear.
+    't7-frame-pin': { tiers: ['T7'], cheap: false, nodeFlags: ['--jitless'], expect: /^(?![\s\S]*survivors \(fb32=\d+ fb1024=(?!0 ))(?![\s\S]*survivors \(fb32=\d+ fb1024=\d+ img=(?!0 ))(?![\s\S]*survivors \(fb32=\d+ fb1024=\d+ img=\d+ fb64=(?!0 ))(?![\s\S]*survivors \(fb32=\d+ fb1024=\d+ img=\d+ fb64=\d+ other=(?!0\)))(?![\s\S]*did not drain to 0 \(live=(?!1[;)]))(?![\s\S]*T7: FastBit64 retention cycle \d+ tracked)(?![\s\S]*T7: t7-frame-pin control needs)[\s\S]*T7: segment 0 did not drain to 0 \(live=1\); survivors: 1 survivors \(fb32=1 fb1024=0 img=0 fb64=0 other=0\); first 1: fb32 seg=0 cyc=1023 n=63 tag=65535(?!\d)/, apply(ctx) { ctx.control.t7FramePin = true; } },
     // B-S5: the FB64 poison rows without 'highest' -> the census check names it.
     'fb64-poison-row-drop': { tiers: ['T6'], cheap: false, expect: /T6 FB64 poison census: [^\n]*missing rows \[highest\], rows not in the census \[\]/, apply(ctx) { ctx.control.fb64PoisonRowDrop = 'highest'; } },
     // B-S5, re-pinned by A16: ctx.FB64 = the u32 variant (`| 0` storage -> `>>> 0`,

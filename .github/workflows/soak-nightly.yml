@@ -1,6 +1,8 @@
 # soak-nightly.yml -- lite-fastbit32 lane S: the torture soak at nightly volume (NIGHTLY-1, SPEC-nightly S-1..S-9).
 # DETERMINISTIC and GATING: a red leg is RED (Q-N5: an unexplained red night since the last release blocks
 # /release until it is named, reproduced from its replay line, then fixed or recorded as a test defect).
+# Alpha policy (maintainer ruling 2026-11-19, LEDGER C12): "Early warning" -- a red on a prerelease
+# `latest` leg is investigated and recorded (LEDGER B19) but never blocks /release; the matrix is unchanged.
 # success = PASS; failure / timed_out = RED; cancelled / never acquired = NO DATA.
 # Per leg: 3 seeds (fresh crypto.randomInt, or the dispatch input `seeds`, the same 3 on every leg), each a full
 # `npm run torture` (TORTURE_FAST unset) with TORTURE_SOAK_CYCLES = the nightly volume (default 16384 = 4x push),

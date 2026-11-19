@@ -26,6 +26,17 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 ### Testing
 
 - T7 retention row for FastBit64 (live per cycle 0, gated 0 each; control `fb64-soak-retain`).
+- T7 soak frame pin (test harness defect, not a library leak): soak-nightly 44299365353 (macOS, node 27 alpha)
+  failed `T7: segment 2 did not drain to 0 (live=1)`. The per-cycle FastBit32 churn ran inline in the async
+  `run()`, so the segment's last instance could stay in its suspended frame across the drain, depending on
+  compile timing. Fixed: the churn runs in the plain function `fb32Cycle` (same ops, tags and stash). A failed
+  drain now names its survivors (per-kind counts and up to 8 decoded tags). New DETERMINISTIC lane in
+  `npm run torture`: T7 again in a child under `--jitless` (no JIT, so the pin does not depend on compile
+  timing) at 4096 cycles, every segment gated at live 0. New control `t7-frame-pin` (the old inline shape
+  under `--jitless`) must fail segment 0 with live=1, naming only FastBit32 survivors; a source pin keeps its
+  copy statement-identical to `fb32Cycle`. Revert check (2026-11-19, node v20.20.2, v22.23.5, v24.22.3,
+  v26.8.2 and v27.0.0-alpha.0.1.1, one run each): under `--jitless` the old shape reads live=1 in each of the
+  4 segments and the fixed shape reads 0 in each.
 - T6 FastBit64 lanes: 24 inlined lanes plus one u32 control, verified TurboFan, below 0.1 B/op (DETERMINISTIC).
   The u32 witness reads >= 15.9 B/op and its store reads < 0.1 (FB64-PC A16); a public-field read witness; one
   poisoning call site; the method census checked both ways (13 methods); 5 controls (fb64-poison-row-drop,
@@ -49,7 +60,7 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   noinline 69 / 46 / 0 (REPORTED), FastBit1024 0 per 1e6, box control 5. Revert checks: a bare `#lo; #hi;` build
   reads store 45 / mutator 45-46 per 1e6 (3 runs, 2026-11-10, qa); the one-box-per-read mutant and the FastBit1024
   mutants each read above the gate of 2 per 1e6 (revert checks at landing, FB64-PC A10 / A11; not re-run this cycle).
-- Torture controls: 44 at 1.6.1 -> 53 (9 FastBit64 controls).
+- Torture controls: 44 at 1.6.1 -> 54 (9 FastBit64 controls and `t7-frame-pin`).
 - Totals: `npm test`: 1247 tests, 1245 pass, 0 fail, 2 skip (2026-11-17, node v26.8.2). The qa suites: FastBit64QA
   (a 400,000-op differential against a BigInt model and the pre-FB64-PC class), FastBit64TortureQA and
   FastBit64DocsQA.

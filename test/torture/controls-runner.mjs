@@ -7,6 +7,8 @@
 //
 // A control may also carry `expect` (a RegExp): its stderr must match it, so a
 // control that must fail for ONE reason cannot pass by failing for another.
+// A control may carry `nodeFlags` (an array): appended after NODE_FLAGS for its
+// child only (t7-frame-pin: --jitless).
 //
 // node --allow-natives-syntax --expose-gc --min-semi-space-size=4 --max-semi-space-size=4 test/torture/controls-runner.mjs [name ...]
 // With control names as arguments only those run (an unknown name exits 2);
@@ -27,8 +29,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, '..', 'torture.mjs');
 const NODE_FLAGS = ['--allow-natives-syntax', '--expose-gc', '--min-semi-space-size=4', '--max-semi-space-size=4'];
 
-function runControl(name) {
-    return spawnSync(process.execPath, [...NODE_FLAGS, ENTRY], {
+function runControl(name, extra = []) {
+    return spawnSync(process.execPath, [...NODE_FLAGS, ...extra, ENTRY], {
         env: { ...process.env, TORTURE_CONTROL: name, TORTURE_FAST: '1' },
         encoding: 'utf8'
     });
@@ -55,7 +57,7 @@ for (const name of ARGS.length > 0 ? ARGS : CONTROL_NAMES) {
         t6Skipped++;
         continue;
     }
-    const res = runControl(name);
+    const res = runControl(name, control.nodeFlags || []);
     const stderr = res.stderr || '';
     const code = res.status;
     const missing = control.tiers.filter((t) => !stderr.includes('FAIL ' + t));
