@@ -48,7 +48,7 @@ them; a number with no date / host / run count there carries none here either, a
    place. No bare numeric field declarations; a source pin enforces it. *(B10, C7)*
 3. **A gate that cannot fail is not a gate.** Every gate needs a must-fail control that
    fails for its own reason (an `expect` pattern), and a coverage floor counted in events, not
-   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, B19, C7, C9)*
+   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, B19, B21, C7, C9)*
 4. **Status bits and "it passed" do not prove the thing was measured.** T6 verifies TurboFan
    through `%GetOptimizationStatus`, in both V8 bit layouts, and fails closed on an unknown
    layout; an unverified lane fails closed with its reason; where T6 cannot be verified at all (V8 < 14) the tier prints a named SKIP, never a silent pass. *(B2, B8, B9)*
@@ -552,6 +552,30 @@ cross-platform half.
 - **Gate.** Process (provenance of every verify / gate run: `pmset -g log` sleep / wake lines
   over the run window). No code gate: the row's 120 s timeout is the gate's HARNESS rule.
 
+### B21. The CAL-2 analysis tool's self-test could not fail (NIGHTLY-2 tooling)
+
+- **What happened.** Burst an (2026-11-21) built the split-half tool that reads lane P's CAL-2
+  verdict (`.handoff/research/nightly-cal/cal2.mjs`, gitignored research tooling, not in
+  `npm test`) with a plain-node self-test. Review r1 ran 36 mutants on the tool: 25 survived. After
+  the reviewer's fix (66 / 66 checks), review r2 found two more survivors: an Nc taken from arm A
+  only passed the fixture meant to require both arms (its arm-B rounds never moved the q90), and
+  `main()` aggregating the exit as "last OS wins" (an ubuntu VOID masked by a macOS MATCH) passed
+  because the fixture VOIDed only the last OS. Fixed in r3: the arm-B fixture rounds span
+  noise/floor 0.001..0.010, so the both-arm q90 (0.26) differs from arm A alone (0.27); and (maintainer
+  ruling "Injectable analyzer") `main(argv, analyze)` takes the analyzer, and a stub VOIDs the FIRST OS
+  while the second MATCHes. Review r3 confirmed the last-OS-wins, throw-as-MISMATCH and arm-A-only-Nc
+  mutants are caught.
+- **Root cause.** The fixtures were built to pass, not to tell the tool from a mutant: values where
+  the right and the wrong computation agree, and a failure placed only where order does not
+  matter. Research tooling sits outside `npm test`, so nothing else guarded the verdict it prints.
+- **Evidence.** HISTORY (an); r3 state cal2.mjs sha256/8 ce779458, cal2.test.mjs c783581b,
+  self-test 73 / 73 (both gitignored).
+- **Law.** 3, applied to research tooling: a script whose printed verdict decides a release-track
+  step needs the same must-fail controls as a shipped gate.
+- **Gate.** `cal2.test.mjs` (plain node; every burst that reads CAL-2 runs it first; not in
+  `npm test`). Process: a reviewer mutant pass on every change to the tool. Known gap (NEXT.md
+  FILLERS): an "S drops the arm-A filter" mutant still survives.
+
 ---
 
 ## C. Gate evolution
@@ -735,11 +759,17 @@ cross-platform half.
 
 ### D5. Lane P calibration table (NIGHTLY-2)
 
-- **What.** Protocol CAL-1..CAL-5 is written; the results table is empty. Earliest close for a
-  push on 2026-11-07: 2026-11-14 (with 3 dispatches) or 2026-11-17 (RESEARCH 19 worked example). After the restart at 754292c, HISTORY (ac) gives `CAL-5 earliest 2026-11-17`. The window restarted at
-  754292c after 912bf67 changed FastBit32.js (a lane P pinned file).
-- **Evidence.** `RESEARCH.md` section 19; HISTORY (ac) NIGHTLY line.
-- **Reopen with.** 10 DECISIVE nights per OS.
+- **What.** Protocol CAL-1..CAL-5 is written. NIGHTLY-2 filled the results table on 2026-11-21
+  (RESEARCH 19, REPORTED): ubuntu 10 DECISIVE nights (11-12 .. 11-21), control trip rate 1.0, CAL-2
+  MISMATCH on four clauses, so lane P stays REPORT-ONLY on ubuntu (maintainer ruling "Accept, wait
+  macOS"); macOS 8 / 10 DECISIVE, open. Earliest close for a
+  push on 2026-11-07: 2026-11-14 (with 3 dispatches) or 2026-11-17 (RESEARCH 19 worked example). After the restart at 754292c (912bf67 changed FastBit32.js, a lane P pinned file), HISTORY (ac) gave `CAL-5
+  earliest 2026-11-17`; the window restarted again at 70ed15a (AF-1, FastBit32.js 6bd9753e; HISTORY (ah)), so the
+  filled window starts at the 2026-11-12 night.
+- **Evidence.** `RESEARCH.md` section 19; HISTORY (ac) NIGHTLY line; HISTORY (ao); `.handoff/evidence/burst-ao/cal/`.
+- **Reopen with.** macOS: its 10th DECISIVE scheduled night (then CAL-2 / CAL-3 for macOS).
+  ubuntu: a revised CAL-2 protocol (for example a per-row S, or persistently unstable rows moved to
+  REPORTED) that MATCHes on >= 10 DECISIVE nights it was not fitted to.
 
 ### D6. FastBit64 timing (p6) and 1.8.0 word-ops candidate
 

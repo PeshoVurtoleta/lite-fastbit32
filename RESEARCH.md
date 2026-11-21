@@ -1728,8 +1728,8 @@ names first; `fromArray` takes an Array or a TypedArray only.
 ## 19. Lane P calibration (NIGHTLY program, 2026-11-06)
 
 Lane P is `.github/workflows/perf-nightly.yml` (REPORT-ONLY, STATISTICAL tier). Its numbers are REPORTED until this
-protocol closes per OS; nothing below is measured yet. Source: SPEC-nightly (Q-N2 ruling, CAL-1..CAL-5, addenda A2
-and A3 applied).
+protocol closes per OS; the only measurements below are the Results table and its notes (NIGHTLY-2, 2026-11-21).
+Source: SPEC-nightly (Q-N2 ruling, CAL-1..CAL-5, addenda A2 and A3 applied).
 
 - CAL-1 Window. At least 10 DECISIVE nights per OS over at least 7 UTC days. Manual dispatches count for at most
   floor(n/3) of the samples; excess dispatches are dropped, latest first. A change to any pinned harness sha
@@ -1752,10 +1752,39 @@ and A3 applied).
   A never-acquired macOS runner is no data, not a fail, and delays the close; if macOS cannot close, that is a
   NIGHTLY-2 gap.
 
-Results (empty until NIGHTLY-2 fills it from run logs of that cycle):
+Results (NIGHTLY-2, REPORTED, from the run logs of 2026-11-21). Window: the scheduled perf-nightly runs of
+2026-11-12 .. 2026-11-21 (first run 43209129528, last 44898420684; 0 dispatches), all on one pinned sha256 map
+(sha256/8: FastBit32.js 6bd9753e, test/witness.mjs 89bd56d6, test/witness/run-one.mjs 0df754ee,
+test/witness-release.mjs 6d0a0566, test/perf-nightly.mjs a1522fdb); GitHub-hosted runners, Node v26.8.2, K = 5
+rounds per arm per night. S and Nc read half 1 / half 2 / full window (halves = 5 nights each, in time order).
+Scope (tool rulings Q-C2 / Q-C3, .handoff/PLAN-cal2.md): nearest-rank quantiles; Nc = q90 of noise/floor over every
+non-harness round of both arms; S = q99 of arm-A real FLAT spreadN (REPORTED rows excluded) in rounds with
+noise/floor <= that half's Nc; F = min over those rounds of arm-B FLAT countMasked (density) and arm-A RED
+foilSubEps spreadN. The per-row figures below are night.json spreadN over all 50 arm-A rounds, HOST rounds included.
 
 | OS | nights decisive | S | Nc | control trip rate | closes | provenance |
 |---|---|---|---|---|---|---|
+| ubuntu | 10 / 10 over 10 UTC days | 29.55 / 46.77 / 46.77 | 0.071 / 0.043 / 0.068 | 10 / 10 = 1.0 | no: CAL-1 and CAL-3 hold, CAL-2 MISMATCH | 10 runs (first / last ids above; all in nights-20261121b.txt), 4 cpus, load1 before each night 0.3-1.9 |
+| macOS | 8 / 10 (11-18 and 11-20 INCONCLUSIVE) | not derived (CAL-1 open) | not derived | 10 / 10 = 1.0 so far | open: earliest 2026-11-23 | 10 runs (first / last ids above; all in nights-20261121b.txt), 3 cpus (5 on 11-16), load1 before each night 4.2-111.1 |
+
+ubuntu CAL-2 fails four clauses: |S1 - S2| = 17.22 > 0.15 x 46.77 = 7.02; |Nc1 - Nc2| = 0.028 > 0.011;
+S2 46.77 >= F1 11.96 (F1 = RED foilSubEps (position), run 43414837064, arm A round 2; S1 29.55 < F2 35.75 holds);
+and half 1's row-rounds, replayed under its own (S, Nc) and under half 2's, agree on 1039 / 1300 (0.80 < 0.90; half
+2's agree on 1298 / 1300). The Clopper-Pearson bounds are VOID: 45 counted arm-A rounds and 43 arm-B control rounds (< 50), a
+night with < 5 counted rounds, and the HOST + demoted share overdispersed (D = 5.0 > 2; nights with >= 3 HOST or demoted rounds:
+1 / 10). Why: on hosted ubuntu a few real rows have a heavy spread tail. In night.json (arm A, 50 rounds, ubuntu)
+most real FLAT rows have median spreadN under 3, but FastBit1024.acquire (slot word) has median 5.59 with 23 / 50
+rounds above 6 (max 695.21); rank (position) reaches 173.51, nextSubset (density) 98.06 and FastBit1024.nextClearBit
+(slot word) 72.09, while RED foilSubEps sits at median ~59. No one S separates real rows from the subtle teeth, so
+lane P cannot be calibrated on hosted ubuntu under this protocol.
+
+Ruling (maintainer, 2026-11-21, "Accept, wait macOS"): the ubuntu MISMATCH is NIGHTLY-2's ubuntu verdict and lane P
+stays REPORT-ONLY on ubuntu. macOS is read when its 10th DECISIVE scheduled night lands (no dispatches, SPEC-nightly A8); then
+the 1.7.0 release proceeds. A revised protocol (for example a per-row S, or persistently unstable rows moved to
+REPORTED) is a post-1.7.0 research item, validated on nights it was not fitted to.
+
+Tool and logs (gitignored): `.handoff/research/nightly-cal/cal2.mjs` (sha256/8 ce779458, self-test 73 / 73) and
+`.handoff/evidence/burst-ao/cal/` (cal2-ubuntu.log, cal2-macos.log, rows-ubuntu.txt, nights-20261121b.txt).
 
 ---
 
