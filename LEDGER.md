@@ -48,7 +48,7 @@ them; a number with no date / host / run count there carries none here either, a
    place. No bare numeric field declarations; a source pin enforces it. *(B10, C7)*
 3. **A gate that cannot fail is not a gate.** Every gate needs a must-fail control that
    fails for its own reason (an `expect` pattern), and a coverage floor counted in events, not
-   time, so it cannot pass by missing the thing it tests. *(B2, B4, B11, B12, B18, B19, B21, C7, C9)*
+   time, so it cannot pass by missing the thing it tests. *(A10, B2, B4, B11, B12, B18, B19, B21, C7, C9)*
 4. **Status bits and "it passed" do not prove the thing was measured.** T6 verifies TurboFan
    through `%GetOptimizationStatus`, in both V8 bit layouts, and fails closed on an unknown
    layout; an unverified lane fails closed with its reason; where T6 cannot be verified at all (V8 < 14) the tier prints a named SKIP, never a silent pass. *(B2, B8, B9)*
@@ -200,6 +200,32 @@ cross-platform half.
 - **Law.** 11.
 - **Gate.** Taken items became G1 / G2 / R-L3 (1.6.0): `test/FastBit1024Counts.test.mjs`,
   `test/FastBit1024Ranges.test.mjs`, torture T-tier rows.
+
+### A10. 1.8.0 word ops: what the research burst declined (2026-11-21)
+
+- **What happened.** The word-ops research burst (xor / invert on FastBit32 and FastBit64, a symmetric-difference
+  count on all three classes) probed four rungs and declined three shapes: (1) the one-pass FastBit1024 count
+  (walk the words that are non-empty in either set, popcount the xor); (2) `xor` / `invert` on FastBit1024; (3) any
+  `>>> 0` store of a result. It also found that neither the T0 laws nor an inlined B/op lane can see (3).
+- **Root cause.** (1) `size + other.size - 2 * intersectionSize(other)` walks only the words non-empty in both sets
+  and never read more words on any of 1,600 pairs (0 vs 15.32 mean on sparse disjoint halves, 0 vs 23 for a 700-slot
+  pool against one id outside its words; equal only when the word summaries coincide). (2) FastBit1024 has no
+  in-place set algebra (SC-5), and `invert` under capacity < 1024 needs a mask and a summary rebuild. (3) A `>>> 0`
+  result is a uint32 double: under `--no-turbo-inlining` it boxed 8.000 B/op (FastBit32 invert + serialize, one box
+  per 2 ops) and 16.000 (FastBit64 invert + lo / hi), 0.000 for the `~` (int32) body. The same mutant passed every T0
+  law (`equalsValue` ignores signedness) and read 0.000 on every inlined lane.
+- **Evidence.** This burst's commit (after 4f0ff94): `RESEARCH.md` section 23; `.handoff/PROPOSAL-word-ops-1.8.md`;
+  `.handoff/research/word-ops-1.8/` (PROGRESS.md R1-R4, logs/r1-*, r2-*, r3-*, r4-words.out). node v26.8.2 (V8
+  14.6.202.34-node.28) and d8 15.7.37, 2026-11-21, one run per lane for R1, R4 and the m-u32 lanes, two for the R2 /
+  R3 z lanes (base and `-b` logs) (deterministic counts, not timings; host load1 33-38, which a count does not depend
+  on).
+- **Law.** 1, 3, 11. A word-op law is compared bitwise, never with `.value ===`: x passed in its uint32 form breaks
+  5,057 of 20,196 FastBit32 pairs in the `=== x` form (every mutator stores an int32), and the constructor's `>>> 0`
+  (E3) breaks 10,090 in the `=== value-before` form. A representation defect needs a representation row and a
+  `--no-turbo-inlining` lane; a law cannot see it.
+- **Gate.** None yet (no source changed). The PROPOSAL's section 5 gate list (an int32 row per mutator, T6 with a
+  `--no-turbo-inlining` child and a `>>> 0` must-fail control) is the planner's input once Q-GATE is ruled. Reopen
+  (1) only with a FastBit1024 that drops its O(1) size; (2) with a consumer for in-place FastBit1024 algebra.
 
 ---
 
@@ -776,7 +802,8 @@ cross-platform half.
 - **What.** p6 (interleaved A/B of five storage / kernel / branch variants) was refused by the
   quiet lock (exit 76, load1 3.24 >= baseline 2.21 + 1); SC-4's 2026-10-11 table stays the only
   timing evidence for the flat shape. A 1.8.0 word-ops candidate sits in ROADMAP (767a45b);
-  its content is not in the sources read here.
+  its content is not in the sources read here. (2026-11-21: its research burst ran, A10, RESEARCH 23; no
+  timing was taken, the quiet lock was BUSY.)
 - **Evidence.** `RESEARCH.md` section 18.1 "Not measured: timing"; 767a45b.
 - **Reopen with.** A quiet-lock run.
 

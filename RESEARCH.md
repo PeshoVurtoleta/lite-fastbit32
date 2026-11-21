@@ -1920,3 +1920,63 @@ bitset.) Nothing here is timed; nothing shipped changes; none of it is a PROPOSA
   FastBit1024 (at caps 1, 31, 32, 33, 63, 64, 65, 1023, 1024) against one plain reference, comparing every
   inspector after every op. The existing parity tests (FastBit1024Parity160, FastBit64Recipe) compare fixed
   cases; this would compare op SEQUENCES.
+
+---
+
+## 23. 1.8.0 word ops: the research burst (2026-11-21)
+
+Question: the smallest correct, zero-allocation surface for `xor` / `invert` (FastBit32, FastBit64) and a
+symmetric-difference count (all three classes), and the cross-package count name Q-XSZ. Probes and logs:
+`.handoff/research/word-ops-1.8/` (gitignored; PROGRESS.md holds the INTAKE and one section per rung). The draft
+surface, the losing alternatives and the Q-ids: `.handoff/PROPOSAL-word-ops-1.8.md`. Candidates were generated
+from `git show HEAD:FastBit32.js` at 4f0ff94 (sha256/8 6bd9753e) by a count-checked script; no source file changed.
+Every number here is a deterministic count (oracle checks, B/op, scavenges, words read): one run per lane for
+R1, R4 and the mutant lanes, two for the R2 / R3 candidate lanes. Nothing was timed: no rung
+needed it, and the quiet lock was BUSY (exit 75, another package's npm test, load1 33-38) for the whole burst.
+
+### 23.1 Findings
+
+- **R1 oracle (node v26.8.2).** The candidate bodies agree with a lib-free arithmetic oracle on 466,259 checks
+  (FastBit32 20,196 word pairs with bit 31 in both number forms, FastBit64 20,081 pairs, FastBit1024 600 pairs over
+  capacities {1, 31, 32, 33, 63, 64, 65, 500, 1023, 1024} squared), 0 failures. Must-fail mutants fail for their own
+  reason: `|` for `^` fails 15 rows; a `>>> 0` store in `invert` fails exactly the two int32 rows.
+- **The T0 laws must be compared bitwise.** `invert(invert(x)).value === x` is false for 5,057 of the 20,196
+  FastBit32 pairs: every x passed in its uint32 form above 2^31 - 1, because every mutator stores an int32. 10,090
+  pairs, the 5,057 included, break `=== value-before`, because the constructor's `>>> 0` (FB-03, LEDGER E3: S6)
+  holds a uint32. `equalsValue` / `equals` hold on all of them.
+- **A law cannot see a `>>> 0` store, and an inlined lane cannot either.** Under the `>>> 0` mutant every T0 law
+  passes (`equalsValue` ignores signedness) and every inlined B/op lane reads 0.000. Only an int32 row, and a B/op
+  lane under `--no-turbo-inlining` that returns the word through a real call, catch it: 8.000 B/op (FastBit32
+  `invert` + `serialize`; the lane alternates a word below and one at or above 2^31, so one box per 2 ops) and 16.000
+  (FastBit64 `invert` + `lo` / `hi`), against 0.000 for the candidate.
+- **R2 Node B/op.** Verified-TurboFan lanes on bit-31 / bit-63 words: inlined, every lane 0.000 (within [-0.034,
+  0.000] over two runs of 12 and 16 lanes), 0 scavenges / 2e6. Under `--no-turbo-inlining`, xor / invert / the counts
+  read 0.000 except where the probe passed a uint32 double argument. That box is the caller's: the shipped `union` +
+  `intersect` read 10.667 and `hasAll` 5.332 on the same masks, and the int32 form of the same words reads 0.000.
+- **R3 d8 15.7.37, pointer-compressed.** Inlined, every new store and count reads 0 scavenges / 1e6 on out-of-Smi
+  words (box control 12). Under `--no-turbo-inlining` xor / invert read 0. The counts read 10 (FastBit32) and 11-12
+  (FastBit64) over two runs, within one scavenge of the shipped `countMasked` (10 / 11; box control 11-12): argument
+  and `popcnt32` boxing, REPORTED under
+  the existing A6 / A8 policy. The shipped field shapes already meet LEDGER law 2.
+- **R4 FastBit1024 count body.** `size + other.size - 2 * intersectionSize(other)` walks only words that are
+  non-empty in both sets. A one-pass xor walk visits every word non-empty in either. Mean words per call, derived vs
+  one-pass (200 pairs per family): 0 vs 15.32 on sparse disjoint halves, 0 vs 23 for a 700-slot pool against one id
+  outside the pool's words, 2.31 vs 15.36 at 1% random, 32 vs 32 when the word summaries coincide. The derived body
+  never read more words on any pair, and it matches the shipped `unionSize` / `differenceSize`.
+- **Cross-package (for Q-XSZ).** With an O(1) size, |A xor B| = |A| + |B| - 2|A and B| takes one intersection pass.
+  The lite-loglogn note "one pass instead of two is its only gain" holds only for a set that does not keep its size.
+- **Naming prior art.** ES2025 `Set.prototype.symmetricDifference` (returns a new Set; checked on node v26.8.2),
+  Java RoaringBitmap `xorCardinality`, CRoaring `roaring_bitmap_xor_cardinality`, lite-o1 BitSet `xor` (in place),
+  RoaringSet R2 plans `xor`, std::bitset `flip()` (all bits). FastBit32 / FastBit64 count with `countMasked`.
+
+### 23.2 Open questions (ruled in the PROPOSAL)
+
+Q-XSZ (the count's name, one ruling for lite-fastbit32, lite-loglogn RoaringSet R2 and lite-o1 BitSet), Q-SURF
+(which class gets which member), Q-OPNAME (`xor` / `invert` vs alternatives), Q-GATE (the gate list the planner
+inherits). Full option text: PROPOSAL section 6; rulings: PROPOSAL section 7.
+
+### 23.3 Not designed here
+
+`findClearRun(k)` / `maxRun` stay the 14.2 CANDIDATE (LEDGER D1): no consumer is named. `shl` / `shr` stay
+consumer-gated with LEDGER A1. PEXT / PDEP, `prevCombination`, round-robin acquire and stateless word functions
+stay out (ROADMAP 2026-11-12 triage).
