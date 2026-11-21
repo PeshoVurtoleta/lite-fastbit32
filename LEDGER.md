@@ -62,7 +62,8 @@ them; a number with no date / host / run count there carries none here either, a
    `verify`.** One `witness:fast` run false-failed 14 of 58 fast rounds. A flaky witness row is
    demoted to REPORTED, not widened. *(C1, C2, C3, C6)*
 9. **Timed runs go through the quiet lock; a PRELIMINARY host is recorded, not argued.** A
-   NOISY / BUSY host gives NO verdict: the step is PENDING, never re-run for a green. *(C5, C6)*
+   NOISY / BUSY host gives NO verdict: the step is PENDING, never re-run for a green. A run that
+   spans a host sleep is VOID the same way. *(B20, C5, C6)*
 10. **A harness exit must flush.** `process.exit()` drops queued pipe writes; the gate output
     that explains the failure is exactly what is lost. *(B7)*
 11. **Every refusal names a kill criterion before coding.** A member with no real consumer or
@@ -502,8 +503,8 @@ cross-platform half.
   `u5-v*-control.log`; probe-r4 / r5); `--jitless` pins it 4/4 segments on node 20 / 22 / 24 /
   26.8.2 / the alpha and the fixed shape drains to 0 on all five. Ruling 2026-11-19 "Switch to
   --jitless (Recommended)": the lane and the control run under `--jitless`.
-- **Evidence.** CI 44299365353, 44080134911; b34775d; fix commit: T7-FIX commit (maintainer
-  fills). `.handoff/evidence/t7-alpha/ci-44299365353-macos-alpha.log`,
+- **Evidence.** CI 44299365353, 44080134911; b34775d; fix commit: c4fe9cf (T7-FIX).
+  `.handoff/evidence/t7-alpha/ci-44299365353-macos-alpha.log`,
   `u1-node26-seed3069745017-20261119T050604.log`, `u3-flags-noconc-3069745017.log`,
   `u3-default-*.log`, `u4-task0-frozen-entry.log`, `u5-v*-control.log`, `u6-*.log`;
   `.handoff/research/t7-alpha/probe-frame-pin.mjs` (probe-r1..r5 logs).
@@ -521,6 +522,35 @@ cross-platform half.
   in `test/torture/controls.mjs` (old inline shape under `--jitless`, expect names
   `fb32 seg=0 cyc=1023 n=63`); fidelity and lane-presence rows
   in `test/FastBit64TortureQA.test.mjs`; the survivor suffix on every T7 drain failure.
+
+### B20. WitnessReleaseQA e2e false FAIL: the host slept inside a round (WRQA-SLEEP)
+
+- **What happened.** Burst al's closing `npm run verify` (2026-11-19, started 06:27:05Z, node
+  v26.8.2, quiet-lock QUIET at load1 2.73): `test/WitnessReleaseQA.test.mjs` "clean -> exit 0"
+  (gate:release end to end, synthetic run-one) FAILED: round 1 wall=28.9s, round 2 5.6s, round 3
+  `spawn error: ETIMEDOUT (timeout 120000 ms)` wall=183.7s. The other three scenarios passed.
+- **Root cause.** HOST SLEEP, not a test or gate defect. `pmset -g log`: the laptop entered
+  'Clamshell Sleep' on battery at 08:18:00 +0200 and cycled Maintenance Sleep / DarkWake; the
+  verify started (08:27:05 +0200) inside a 6 s DarkWake (08:27:02-08:27:08 +0200), then the host slept
+  08:27:08-08:27:34 (26 s, inside round 1: 28.9 = 26 + ~3) and 08:27:40-08:30:41 (181 s, inside
+  round 3: 183.7 = 181 + ~3) until the lid opened. The spawnSync 120 s timer counted the sleep.
+  Awake re-check (2026-11-21, 08:32-08:36Z, same M-series host, node v26.8.2, quiet-lock run,
+  host PRELIMINARY: load1 9.79-13.50, other busy node(s) 101-115% (k2, k3), an IDE at 591-764% CPU;
+  re-check on c4fe9cf, /opt/homebrew/bin/node v26.8.2): the file alone K = 3, 3/3 green, 60/60
+  rounds recorded, no HARNESS round (45 valid + 15 host, noiseonly by design), round wall
+  3.0-4.8 s (>= 25x under the timeout), file wall 62.8 / 72.6 / 66.0 s.
+- **Evidence.** Verify log `.handoff/evidence/t7-alpha/verify-20261119T062705.log`; re-check
+  `.handoff/evidence/burst-am/wrqa-alone-k{1,2,3}.log`; `pmset -g log` excerpt (command on line 1)
+  `.handoff/evidence/burst-am/pmset-20261119-0815-0833.log`; verify run on b34775d + the T7-FIX tree.
+- **Measurement trap.** The lock read QUIET (load1 2.73 < baseline 2.21 + 1) during a DarkWake: it
+  measures load, not imminent sleep. A wall-clock timeout counts the sleep.
+- **Ruling.** 2026-11-21 "Host sleep, no code change (Recommended)": the 11-19 verify is VOID;
+  no change to the test or any SHA_FILES member (CAL-1 continues); every verify / gate run
+  records `pmset -g log` sleep events over its window in provenance, and a run that spans a
+  sleep is VOID (no verdict, like NOISY).
+- **Law.** 9 (a run spanning a host sleep has no verdict).
+- **Gate.** Process (provenance of every verify / gate run: `pmset -g log` sleep / wake lines
+  over the run window). No code gate: the row's 120 s timeout is the gate's HARNESS rule.
 
 ---
 
