@@ -3,7 +3,7 @@
 All notable changes to `@zakkster/lite-fastbit32` are documented here. The
 format follows Keep a Changelog; this project adheres to Semantic Versioning.
 
-## [Unreleased]
+## [1.7.0] - 2026-11-23
 
 ### Added
 
@@ -22,6 +22,40 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
 - CI lane P, `.github/workflows/perf-nightly.yml`: a daily STATISTICAL perf night (the `gate:release` statistic,
   with a slowed-`countMasked` control) on ubuntu and macos. REPORT-ONLY: its calibration (RESEARCH.md, "Lane P
   calibration") read CAL-2 MISMATCH on both OSes, so it gates nothing.
+
+### Changed
+
+- Docs: `npm run test:perf` is relabelled the DETERMINISTIC scavenge-count gate (it counts scavenges, it does not
+  time anything). The statistical gates are `witness` and `gate:release`.
+- `FastBit32#countRange` keeps its mask a signed int32 (it dropped `>>> 0`), so the mask no longer boxes when
+  `countMasked` is not inlined. Results are unchanged. A subclass overriding `countMasked` now receives the signed
+  mask: `countRange(0, 31)` passes -1, not 4294967295. "No longer boxes" holds on Node (32-bit Smis); on a 31-bit-Smi
+  engine (Chrome / Electron) masks outside [-2^30, 2^30) still box (FB-12, not gated).
+- Source header: the TRUNCATION caveat said every value becomes unsigned, which was false. It now gives the exact
+  list: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
+  `deserialize`; `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`.
+- Types: FastBit1024 declares `private readonly _cap / _active / _full / _n / _data` and BitMapper `_map / _reverse`
+  (the runtime field names), so a TypeScript subclass that redeclares one fails to compile (TS2415). Side effect:
+  both classes are now nominal in TypeScript; a structural mock, an `implements` of the public shape, or an instance
+  from a second installed copy of the package no longer type-checks (TS2739 / TS2720 / TS2322). No runtime change.
+- Docs (audit 1.7, AF-3): (U-2) README, llms.txt and the d.ts carry the exact `value` list: the 32-bit pattern:
+  int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
+  `deserialize` (FB-03); `copy` stores `other.value` as-is; compare with `equalsValue` or `>>> 0`. (U-4) README's
+  inverted claim that the constructor's `>>> 0` locks V8 into its fastest path is removed; the FB-03 note names the
+  field widening (a uint32 word >= 2^31 is a heap number; about 32 -> 48 B per instance, nominal) and the `clone()`
+  trigger, fixed in S6. (U-1) mask and `other` arguments are not checked: the docs state today's outcomes
+  (fail-closed in S6, SC-3). (U-5) only FastBit1024 `saveInto` checks its receiver. (U-8) shipped docs link only
+  shipped files or absolute GitHub URLs. (U-10) perf figures are labelled nominal / REPORTED; two superlatives
+  dropped. (U-11) FastBit64 is `#private`: `JSON.stringify` gives `"{}"`, `structuredClone` a plain `{}`; the
+  persist / restore routes are listed. (U-13) FastBit64.forEach states the per-word read rule (d.ts, README,
+  llms.txt). (U-19) README is ASCII-only.
+
+### Fixed
+
+- `FastBit1024#saveInto` checks its receiver first: a non-FastBit1024 receiver (a plain object, a Proxy of a real set,
+  a FastBit64, a FastBit32, a FastBit1024 from another copy of the module) throws `TypeError` before `out` or
+  `offset` is read, and `out` is left untouched. Subclass instances save as before. (FastBit64#saveInto already
+  threw before any write.)
 
 ### Testing
 
@@ -61,7 +95,7 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   reads store 45 / mutator 45-46 per 1e6 (3 runs, 2026-11-10, qa); the one-box-per-read mutant and the FastBit1024
   mutants each read above the gate of 2 per 1e6 (revert checks at landing, FB64-PC A10 / A11; not re-run this cycle).
 - Torture controls: 44 at 1.6.1 -> 54 (9 FastBit64 controls and `t7-frame-pin`).
-- Totals: `npm test`: 1247 tests, 1245 pass, 0 fail, 2 skip (2026-11-17, node v26.8.2). The qa suites: FastBit64QA
+- Totals: `npm test`: 1250 tests, 1248 pass, 0 fail, 2 skip (2026-11-23, node v26.8.2). The qa suites: FastBit64QA
   (a 400,000-op differential against a BigInt model and the pre-FB64-PC class), FastBit64TortureQA and
   FastBit64DocsQA.
 - REPORTED (d8 15.7.37, K = 7, one run, 2026-11-08, Apple M4 Pro (12 cores), quiet host (load1 2.33), node v26.8.2
@@ -91,40 +125,6 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   DETERMINISTIC; "each T6 control"); the SoakLane ci.yml pin moved from `git show e8b4b8e` to the sha256 of the new
   ci.yml; Hygiene's zero-non-ASCII row covers README.md; FastBit64DocsQA gains a U-13 doc row with an in-process
   must-fail control.
-
-### Changed
-
-- Docs: `npm run test:perf` is relabelled the DETERMINISTIC scavenge-count gate (it counts scavenges, it does not
-  time anything). The statistical gates are `witness` and `gate:release`.
-- `FastBit32#countRange` keeps its mask a signed int32 (it dropped `>>> 0`), so the mask no longer boxes when
-  `countMasked` is not inlined. Results are unchanged. A subclass overriding `countMasked` now receives the signed
-  mask: `countRange(0, 31)` passes -1, not 4294967295. "No longer boxes" holds on Node (32-bit Smis); on a 31-bit-Smi
-  engine (Chrome / Electron) masks outside [-2^30, 2^30) still box (FB-12, not gated).
-- Source header: the TRUNCATION caveat said every value becomes unsigned, which was false. It now gives the exact
-  list: int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
-  `deserialize`; `copy` stores `other.value` as-is. Compare with `equalsValue` or `>>> 0`.
-- Types: FastBit1024 declares `private readonly _cap / _active / _full / _n / _data` and BitMapper `_map / _reverse`
-  (the runtime field names), so a TypeScript subclass that redeclares one fails to compile (TS2415). Side effect:
-  both classes are now nominal in TypeScript; a structural mock, an `implements` of the public shape, or an instance
-  from a second installed copy of the package no longer type-checks (TS2739 / TS2720 / TS2322). No runtime change.
-- Docs (audit 1.7, AF-3): (U-2) README, llms.txt and the d.ts carry the exact `value` list: the 32-bit pattern:
-  int32 after any bit mutator or `set`; uint32 straight from the constructor / `clone` / `fromArray` /
-  `deserialize` (FB-03); `copy` stores `other.value` as-is; compare with `equalsValue` or `>>> 0`. (U-4) README's
-  inverted claim that the constructor's `>>> 0` locks V8 into its fastest path is removed; the FB-03 note names the
-  field widening (a uint32 word >= 2^31 is a heap number; about 32 -> 48 B per instance, nominal) and the `clone()`
-  trigger, fixed in S6. (U-1) mask and `other` arguments are not checked: the docs state today's outcomes
-  (fail-closed in S6, SC-3). (U-5) only FastBit1024 `saveInto` checks its receiver. (U-8) shipped docs link only
-  shipped files or absolute GitHub URLs. (U-10) perf figures are labelled nominal / REPORTED; two superlatives
-  dropped. (U-11) FastBit64 is `#private`: `JSON.stringify` gives `"{}"`, `structuredClone` a plain `{}`; the
-  persist / restore routes are listed. (U-13) FastBit64.forEach states the per-word read rule (d.ts, README,
-  llms.txt). (U-19) README is ASCII-only.
-
-### Fixed
-
-- `FastBit1024#saveInto` checks its receiver first: a non-FastBit1024 receiver (a plain object, a Proxy of a real set,
-  a FastBit64, a FastBit32, a FastBit1024 from another copy of the module) throws `TypeError` before `out` or
-  `offset` is read, and `out` is left untouched. Subclass instances save as before. (FastBit64#saveInto already
-  threw before any write.)
 
 ## [1.6.1] - 2026-11-05
 

@@ -26,7 +26,7 @@ reading. The exception is FB-12, which is marked unmeasured.
 | **S6** | The input + representation law (SC-2, SC-3): canonical int32, cold-path fail-closed, checked twin | 2.0.0 | **breaking** | planned; starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-s6-input-law.md` (the SC-2 / SC-3 options as Q-ids), ruled by the maintainer before any planner pass |
 | **S7** | Demo: bit board, SWAR popcount, pool, ECS matcher, browser Smi probe | -- (demo/ not shipped) | demo | planned; runs LAST, after every scheduled release (1.7.0, any 1.8.0, 2.0.0, 2.0.1) -- maintainer 2026-11-07. Panel 5 = the maintainer's 1024-slot pool mockup (2026-10-11) |
 | **S8** | README rebuilt on the Sepforge spine + llms.txt + GUIDE recipes | 2.0.1 | docs | planned |
-| **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 1.7.0 (ahead of S6) | additive, new export | planned (amended 2026-11-05: ships ahead of S6, no longer last); starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-fastbit64.md` (draft .d.ts surface, kernels, naming as Q-ids; SC-4's flat lo/hi shape is SETTLED, not reopened), ruled before any planner pass; FB64-PC research (FastBit64 storage on pointer-compressed engines) ruled 2026-11-08 (`.handoff/SPEC-fastbit64.md` A9-A12), re-opened by the R6 timing (A13) |
+| **S9** | `FastBit64` (SC-4: flat lo/hi on shared word kernels) + the 64 x 64 recipe | 1.7.0 (ahead of S6) | additive, new export | **RELEASED 1.7.0 2026-11-23** (with AF-1..AF-3; amended 2026-11-05: ships ahead of S6, no longer last); starts with a RESEARCH BURST (maintainer 2026-11-04): probes + `.handoff/PROPOSAL-fastbit64.md` (draft .d.ts surface, kernels, naming as Q-ids; SC-4's flat lo/hi shape is SETTLED, not reopened), ruled before any planner pass; FB64-PC research (FastBit64 storage on pointer-compressed engines) ruled 2026-11-08 (`.handoff/SPEC-fastbit64.md` A9-A12), re-opened by the R6 timing (A13) |
 
 ---
 
@@ -432,8 +432,8 @@ S0 --> S1 --(release 1.2.1)--> S2 --> S3 + S4 --(1.3.0)--> S4b --(1.4.0)--> S5 -
   it is explained or bounded. Same as LiteUtils Q-B78-LATEST. LEDGER B19 (the T7 false FAIL on
   node v27 alpha, T7-FIX) and C12 (the policy). The node `latest` soak legs stay in the matrix.
 - **1.8.0 candidate: word ops (external proposal reviewed 2026-11-07, top session).**
-  Scope: FastBit32 + FastBit64 together, AFTER 1.7.0 ships. 1.7.0 is under HOLD-RELEASE; this does not widen
-  it. New public surface, so it starts with a RESEARCH BURST and a ruled PROPOSAL before any planner pass.
+  Scope: FastBit32 + FastBit64 together, AFTER 1.7.0 ships. 1.7.0 (hold lifted 2026-11-23) does not widen to
+  include it. New public surface, so it starts with a RESEARCH BURST and a ruled PROPOSAL before any planner pass.
   - Verdicts:
     - `xor(mask)` (FastBit64: `xor(other)`): YES. It completes the existing set algebra (`union` /
       `intersect` / `difference`). One word op, no edge cases.

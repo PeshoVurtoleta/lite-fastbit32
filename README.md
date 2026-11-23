@@ -37,9 +37,9 @@ If you are building high-performance WebGL applications or JavaScript games, che
 | **ECS-ready**         | **Yes**        | Yes        | Yes             |
 | **Object pool scan**  | **Yes**        | No         | No              |
 | **Serialization**     | Yes            | Yes        | Yes             |
-| **Bundle size** (min+gz) | **1064 B** FastBit32 alone; 4784 B whole module (see note) | ~8KB | ~6KB |
+| **Bundle size** (min+gz) | **1061 B** FastBit32 alone; 4794 B whole module (see note) | ~8KB | ~6KB |
 
-> Bundle sizes of the 1.7.0 build (REPORTED: one run, 2026-11-10): an entry file `export { <names> } from '<the module>'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 4784 B (3515 B in 1.6.1). `{ FastBit32 }` alone: 1064 B (1064 B in 1.6.1; it carries no FastBit1024 or FastBit64 code). `{ FastBit1024 }` alone: 2347 B (2350 B in 1.6.1). `{ FastBit64 }` alone: 2103 B (new in 1.7.0). Every export except FastBit1024 and FastBit64 (VERSION included): 1489 B (1490 B in 1.6.1, where only FastBit1024 is excluded).
+> Bundle sizes of the 1.7.0 build (REPORTED: one run, 2026-11-23): an entry file `export { <names> } from '<the module>'` piped through `esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c`. `export *` (whole module): 4794 B (3515 B in 1.6.1). `{ FastBit32 }` alone: 1061 B (1064 B in 1.6.1; it carries no FastBit1024 or FastBit64 code). `{ FastBit1024 }` alone: 2360 B (2350 B in 1.6.1). `{ FastBit64 }` alone: 2103 B (new in 1.7.0). Every export except FastBit1024 and FastBit64 (VERSION included): 1488 B (1490 B in 1.6.1, where only FastBit1024 is excluded).
 
 > FastBit32 is an engine primitive, not a general-purpose bitfield. For up to 1024 bits (pools, dense id sets) the package also ships [`FastBit1024`](#fastbit1024-32-x-32-pools-up-to-1024) (1.4.0); for 33 to 64 flags, [`FastBit64`](#fastbit64-64-flags-in-two-words) (1.7.0).
 
@@ -742,7 +742,7 @@ entity.hasAll(sig);   // the hot check: two int32 ANDs, no Map lookup, no alloca
 
 ## Testing
 
-`npm test` runs 1247 tests (node:test, 171 suites; 1245 pass, 2 skip: the V8 11-13 row and the torture-log row that runs only with FB64_TORTURE_LOG set; DETERMINISTIC; run 2026-11-17, Node v26.8.2). The package scripts:
+`npm test` runs 1250 tests (node:test, 171 suites; 1248 pass, 2 skip: the V8 11-13 row and the torture-log row that runs only with FB64_TORTURE_LOG set; DETERMINISTIC; run 2026-11-23, Node v26.8.2). The package scripts:
 
 | Script | What it does |
 |---|---|

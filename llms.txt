@@ -1,10 +1,10 @@
-# @zakkster/lite-fastbit32 v1.6.1
+# @zakkster/lite-fastbit32 v1.7.0
 
 > Zero-GC, monomorphic 32-bit flag manager for ECS masking, object pools, and 60fps hot-path engine code; FastBit32's bit and mask ops are branchless.
 
 ## Overview
 
-FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators, from 1.4.0 `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks) and from 1.7.0 `FastBit64` (64 flags in two int32 words, fail-closed). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle, 1.7.0 build (REPORTED: one run, 2026-11-10; an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c): 4784 B whole module (3515 B in 1.6.1), 1064 B FastBit32 alone (1064 B in 1.6.1), 2347 B FastBit1024 alone (2350 B in 1.6.1), 2103 B FastBit64 alone (new in 1.7.0), 1489 B every export except FastBit1024 and FastBit64, VERSION included (1490 B in 1.6.1, where only FastBit1024 is excluded).
+FastBit32 wraps a plain 32-bit integer with a fluent, chainable API for bitwise flag operations; its bit and mask ops are branchless. The package also exports `BitMapper` (names <-> bits), seven free iterators, from 1.4.0 `FastBit1024` (a 32 x 32 two-level bitmap that fails closed, so it branches on its checks) and from 1.7.0 `FastBit64` (64 flags in two int32 words, fail-closed). It is an engine primitive designed for performance-critical game loops, ECS architectures, and real-time systems. Zero dependencies. Zero allocations on every hot op. Bundle, 1.7.0 build (REPORTED: one run, 2026-11-23; an `export { ... }` entry through esbuild 0.28.2 --bundle --format=esm --minify | gzip -9 | wc -c): 4794 B whole module (3515 B in 1.6.1), 1061 B FastBit32 alone (1064 B in 1.6.1), 2360 B FastBit1024 alone (2350 B in 1.6.1), 2103 B FastBit64 alone (new in 1.7.0), 1488 B every export except FastBit1024 and FastBit64, VERSION included (1490 B in 1.6.1, where only FastBit1024 is excluded).
 
 **When to use FastBit32:** You need to manage up to 32 boolean flags with maximum performance -- ECS component masks, object pool occupancy, input state, collision layers, render flags, networking packet flags, state machines.
 
@@ -27,7 +27,7 @@ import {
     forEachMappedObject, forEachMaskPair, forEachMaskDiff, forEachMaskUnion
 } from '@zakkster/lite-fastbit32';
 
-// VERSION is the package version string ('1.6.1'), synced with package.json.
+// VERSION is the package version string ('1.7.0'), synced with package.json.
 ```
 
 ## Constructor

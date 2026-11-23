@@ -1,5 +1,5 @@
 // FastBit64 docs qa (GROUP C.D1 / C.D2, 1.7.0): every FastBit64 claim in README.md, llms.txt and
-// CHANGELOG.md [Unreleased] that can be executed or counted is bound to FastBit32.d.ts, the live class,
+// CHANGELOG.md [1.7.0] that can be executed or counted is bound to FastBit32.d.ts, the live class,
 // the torture lane table and the control registry. Oracles are the TRUE definitions (a Uint8Array model,
 // the d.ts text, Object.getOwnPropertyNames), never the docs' own code.
 // FB64_DOCS_ROOT=<dir> points the doc reads (README.md, llms.txt, CHANGELOG.md, ROADMAP.md) at a copy,
@@ -334,17 +334,17 @@ describe('D FastBit64 GC claims', () => {
             assert.deepEqual(diffSets(new Set(names), new Set(SHIPPED_LANES)), { missing: [], extra: [] });
         });
     }
-    test('CHANGELOG [Unreleased]: "N inlined lanes plus one u32 control" == the lane table', () => {
+    test('CHANGELOG [1.7.0]: "N inlined lanes plus one u32 control" == the lane table', () => {
         const c = read('CHANGELOG.md');
-        const un = c.slice(c.indexOf('## [Unreleased]'), c.indexOf('\n## [', c.indexOf('## [Unreleased]') + 5));
+        const un = c.slice(c.indexOf('## [1.7.0]'), c.indexOf('\n## [', c.indexOf('## [1.7.0]') + 5));
         const m = un.match(/T6 FastBit64 lanes: (\d+) inlined lanes plus one u32 control/);
         assert.ok(m, 'CHANGELOG: lane line');
         assert.equal(Number(m[1]), SHIPPED_LANES.length);
         assert.equal(FB64_LANES.filter((l) => l.control).length, 1);
     });
-    test('CHANGELOG [Unreleased]: control counts and the T3 control names == the control registry', () => {
+    test('CHANGELOG [1.7.0]: control counts and the T3 control names == the control registry', () => {
         const c = read('CHANGELOG.md');
-        const un = c.slice(c.indexOf('## [Unreleased]'), c.indexOf('\n## [', c.indexOf('## [Unreleased]') + 5));
+        const un = c.slice(c.indexOf('## [1.7.0]'), c.indexOf('\n## [', c.indexOf('## [1.7.0]') + 5));
         const m = un.match(/Torture controls: (\d+) at 1\.6\.1 -> (\d+) \((\d+) FastBit64 controls(?: and `t7-frame-pin`)?\)/);
         assert.ok(m, 'CHANGELOG: controls line');
         const fb64 = CONTROL_NAMES.filter((n) => n.startsWith('fb64-'));
@@ -361,9 +361,9 @@ describe('D FastBit64 GC claims', () => {
         // the T3 line names all 3 SAB controls (spec C.D3), not only "whatever the registry holds"
         assert.deepEqual([...listed].sort(), ['fb64-sab-blind', 'fb64-sab-flip', 'fb64-sab-reread']);
     });
-    test('CHANGELOG [Unreleased]: the T3 SAB dwell bars ">= A of B sampled reads ... >= C of D bursts" == the A18 / A22 constants', () => {
+    test('CHANGELOG [1.7.0]: the T3 SAB dwell bars ">= A of B sampled reads ... >= C of D bursts" == the A18 / A22 constants', () => {
         const c = read('CHANGELOG.md');
-        const un = c.slice(c.indexOf('## [Unreleased]'), c.indexOf('\n## [', c.indexOf('## [Unreleased]') + 5));
+        const un = c.slice(c.indexOf('## [1.7.0]'), c.indexOf('\n## [', c.indexOf('## [1.7.0]') + 5));
         const t3m = un.match(/T3 FastBit64 SAB[^\n]*(?:\n {2}[^\n]*)*/);
         assert.ok(t3m, 'CHANGELOG: T3 FastBit64 SAB line missing');
         const t3 = t3m[0].replace(/\s+/g, ' ');
@@ -402,7 +402,7 @@ describe('E parity pins', () => {
         // sha256 of the block at 57fd897 (pre-D0) == aab22d2 == HEAD 54a9f2d
         assert.equal(createHash('sha256').update(r.slice(a, b)).digest('hex'), SC4_SHA);
     });
-    test('llms.txt line 1 names the package.json version (v1.6.1 until /release)', () => {
+    test('llms.txt line 1 names the package.json version (synced by /release)', () => {
         const v = JSON.parse(readFileSync(PKG + 'package.json', 'utf8')).version;
         assert.equal(read('llms.txt').split('\n')[0], '# @zakkster/lite-fastbit32 v' + v);
     });

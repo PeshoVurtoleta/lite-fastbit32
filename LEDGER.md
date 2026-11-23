@@ -858,7 +858,7 @@ A "fixed in <sha>" / "in <sha>" suffix names the commit that closed the item (or
 | U-9 | B-9 | Low | FIX BEFORE 1.7.0 (docs) | `test:perf` called DETERMINISTIC, no workflow runs it |
 | U-10 | B-10 A-7 | Low | FIX BEFORE 1.7.0 (docs) | perf claims with no tier or provenance |
 | U-11 | B-11 | Info | FIX BEFORE 1.7.0 (docs) | `JSON.stringify` / `structuredClone` of FastBit64 give `{}` |
-| U-12 | B-12 | Info | CARRIED (KNOWN, the `/release` step) | tree versioned 1.6.1 with the 1.7.0 surface |
+| U-12 | B-12 | Info | CARRIED (KNOWN, the `/release` step); closed by `/release` 1.7.0 (2026-11-23) | tree versioned 1.6.1 with the 1.7.0 surface |
 | U-13 | B-13 A-9 | Test-gap | FIX BEFORE 1.7.0 (doc + pin; NOT FIX-13, see E2); pin in bae32d4, doc AF-3 | `FastBit64.forEach` mutation rule undocumented |
 | U-14 | B-14 A-13 | Test-gap | FIX BEFORE 1.7.0 (test rows); fixed in bae32d4 | FastBit64 mutants survive `npm test` |
 | U-15 | B-15 | Low | FIX BEFORE 1.7.0 (test-only pin); fixed in bae32d4 | Hygiene pin checks an initializer exists, not a Smi |
