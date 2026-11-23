@@ -1,5 +1,5 @@
-# perf-nightly.yml -- lite-fastbit32 lane P (NIGHTLY-1): one STATISTICAL perf night per OS, REPORT-ONLY until
-# NIGHTLY-2 calibrates it (SPEC-nightly.md section P, CAL-1..CAL-5). gate:release's statistic, unchanged: per
+# perf-nightly.yml -- lite-fastbit32 lane P (NIGHTLY-1): one STATISTICAL perf night per OS, REPORT-ONLY. NIGHTLY-2
+# (2026-11-23): CAL-2 MISMATCH on both OSes (RESEARCH 19, LEDGER D5). gate:release's statistic, unchanged: per
 # row, strict majority 3 of K = 5 witness:fast rounds, each round NOISE-relative (test/witness-release.mjs).
 # test/perf-nightly.mjs runs it on two arms interleaved ABBA on one runner: arm A = the live tree, arm B = a temp
 # copy whose countMasked is Kernighan (the must-fail control: FLAT countMasked (density) must trip). Verdict
@@ -88,8 +88,8 @@ jobs:
       # imports no package today, but the night must run on the same installed tree as the gate it mirrors
       - name: install
         run: npm install --no-audit --no-fund
-      # REPORT-ONLY (P-6) until NIGHTLY-2: a non-PASS night is a ::warning::, never a red job. Make this step
-      # gating only when NIGHTLY-2 closes the calibration for this OS.
+      # REPORT-ONLY (P-6): a non-PASS night is a ::warning::, never a red job. Make this step gating only when a
+      # calibration (CAL-1..CAL-3, LEDGER D5 "Reopen with") MATCHes for this OS.
       - name: measure (lane P night, REPORT-ONLY)
         continue-on-error: true
         run: |

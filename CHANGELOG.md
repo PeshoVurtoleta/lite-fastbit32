@@ -20,8 +20,8 @@ format follows Keep a Changelog; this project adheres to Semantic Versioning.
   `TORTURE_SOAK_CYCLES` sets the T7 soak volume (unset or empty = 4096; a decimal multiple of 1024 in
   [4096, 131072]; anything else exits 2).
 - CI lane P, `.github/workflows/perf-nightly.yml`: a daily STATISTICAL perf night (the `gate:release` statistic,
-  with a slowed-`countMasked` control) on ubuntu and macos. REPORT-ONLY until its calibration closes
-  (RESEARCH.md, "Lane P calibration"); gates nothing.
+  with a slowed-`countMasked` control) on ubuntu and macos. REPORT-ONLY: its calibration (RESEARCH.md, "Lane P
+  calibration") read CAL-2 MISMATCH on both OSes, so it gates nothing.
 
 ### Testing
 

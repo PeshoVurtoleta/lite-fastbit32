@@ -670,7 +670,7 @@ cross-platform half.
   miscount; `--cycles ""` push-volume fail-open.
 - **Evidence.** 6e5f46b, 5524792 (docs); `.handoff/evidence/nightly-1/claims-inventory.md`;
   `.handoff/SPEC-nightly.md` (S-1..S-9, P-1..P-9, CAL-1..CAL-5); `RESEARCH.md` section 19
-  (results table empty: NIGHTLY-2 has not filled it).
+  (results table empty at NIGHTLY-1; NIGHTLY-2 filled it on 2026-11-21 and 2026-11-23, D5).
 - **Law.** 8, 9.
 - **Gate.** `test/SoakLane.test.mjs`, `test/PerfNightly.test.mjs`, `test/perf/PerfGate.test.mjs`;
   `.github/workflows/nightly.yml` and the lane files.
@@ -764,6 +764,17 @@ cross-platform half.
 - **Why parked.** CANDIDATE, OVERLAPS SC-2.
 - **Evidence.** `RESEARCH.md` section 14.2. Later shipped part: `saveInto` / `loadFrom` (1.6.0,
   125e1d1).
+  Cost of NOT having it, a learning probe on 2026-11-23 (REPORTED, one run; darwin-arm64, node
+  v26.8.2, V8 14.6.202.34-node.28, pointer compression OFF; quiet-lock run, host QUIET, load1 2.14;
+  AC power, no sleep). Tools: lite-utils 1.1.0 `alloc-per-op` and a retained-bytes count with
+  K = 10,000 live sets, 5 reps, median. Self-checks VALID; the two tools agree to within the
+  8-byte holder slot. Measured: about 232 bytes per 100-bit set as its own `Uint32Array(4)`;
+  104 + 16 as a `subarray` view into one shared buffer; 16 (the payload) as a row of one shared
+  buffer addressed by offset; 968 as a lite-o1 `BitSet(100)`; 272 + 128 off-heap as a
+  `FastBit1024(100)`. Reading: for many small sets the win is offset addressing, not a view
+  object. That works today with a plain typed array plus FastBit32-style word ops, so it is no
+  reason to reopen D2. Evidence: `.handoff/research/shared-buffer/` (RESULTS.md, bench.mjs,
+  footprint.mjs, logs; gitignored).
 - **Reopen with.** A consumer and an `Atomics` race gate.
 
 ### D3. FB-15: single-load `FastBit1024.toggle`
@@ -788,14 +799,24 @@ cross-platform half.
 - **What.** Protocol CAL-1..CAL-5 is written. NIGHTLY-2 filled the results table on 2026-11-21
   (RESEARCH 19, REPORTED): ubuntu 10 DECISIVE nights (11-12 .. 11-21), control trip rate 1.0, CAL-2
   MISMATCH on four clauses, so lane P stays REPORT-ONLY on ubuntu (maintainer ruling "Accept, wait
-  macOS"); macOS 8 / 10 DECISIVE, open. Earliest close for a
-  push on 2026-11-07: 2026-11-14 (with 3 dispatches) or 2026-11-17 (RESEARCH 19 worked example). After the restart at 754292c (912bf67 changed FastBit32.js, a lane P pinned file), HISTORY (ac) gave `CAL-5
-  earliest 2026-11-17`; the window restarted again at 70ed15a (AF-1, FastBit32.js 6bd9753e; HISTORY (ah)), so the
-  filled window starts at the 2026-11-12 night.
-- **Evidence.** `RESEARCH.md` section 19; HISTORY (ac) NIGHTLY line; HISTORY (ao); `.handoff/evidence/burst-ao/cal/`.
-- **Reopen with.** macOS: its 10th DECISIVE scheduled night (then CAL-2 / CAL-3 for macOS).
-  ubuntu: a revised CAL-2 protocol (for example a per-row S, or persistently unstable rows moved to
-  REPORTED) that MATCHes on >= 10 DECISIVE nights it was not fitted to.
+  macOS"). macOS was read on 2026-11-23 (its 10th DECISIVE scheduled night, 45180186968; 12 nights
+  11-12 .. 11-23, 11-18 and 11-20 INCONCLUSIVE, 0 dispatches): CAL-1 holds, control trip rate 12 / 12
+  = 1.0, CAL-2 MISMATCH on all five clauses (S, Nc, F, both replays). Both OSes fail for the same
+  reason: a few real FLAT rows (FastBit1024.acquire (slot word) first by rounds above 6) have a
+  spread tail that overlaps the subtle RED foilSubEps teeth, so no one S separates them. NIGHTLY-2 is
+  complete: lane P is not calibratable on either hosted OS under this protocol and stays REPORT-ONLY on both
+  (maintainer ruling 2026-11-21 "Stay report-only", given ahead of the macOS read; a macOS MATCH would
+  have gated nothing). Earliest close for a push on 2026-11-07 was 2026-11-14 (with 3 dispatches) or
+  2026-11-17 (RESEARCH 19 worked example). After the restart at 754292c (912bf67 changed FastBit32.js,
+  a lane P pinned file), HISTORY (ac) gave `CAL-5 earliest 2026-11-17`; the window restarted again at
+  70ed15a (AF-1, FastBit32.js 6bd9753e; HISTORY (ah)), so the filled window starts at the 2026-11-12
+  night.
+- **Evidence.** `RESEARCH.md` section 19; HISTORY (ac) NIGHTLY line; HISTORY (ao), (ar);
+  `.handoff/evidence/burst-ao/cal/`, `.handoff/evidence/burst-ar/cal/`.
+- **Reopen with.** A revised CAL-2 protocol (for example a per-row S, or persistently unstable rows
+  moved to REPORTED) that MATCHes, per OS, on >= 10 DECISIVE nights it was not fitted to (a
+  post-1.7.0 research item). The ubuntu clause set that fails moved as its window grew (11 nights: S
+  passed; 12 nights: S failed, both replays passed), so a revision is judged on fresh nights only.
 
 ### D6. FastBit64 timing (p6) and 1.8.0 word-ops candidate
 

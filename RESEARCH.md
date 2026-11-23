@@ -1728,7 +1728,7 @@ names first; `fromArray` takes an Array or a TypedArray only.
 ## 19. Lane P calibration (NIGHTLY program, 2026-11-06)
 
 Lane P is `.github/workflows/perf-nightly.yml` (REPORT-ONLY, STATISTICAL tier). Its numbers are REPORTED until this
-protocol closes per OS; the only measurements below are the Results table and its notes (NIGHTLY-2, 2026-11-21).
+protocol closes per OS; the only measurements below are the Results table and its notes (NIGHTLY-2, 2026-11-21 .. 2026-11-23).
 Source: SPEC-nightly (Q-N2 ruling, CAL-1..CAL-5, addenda A2 and A3 applied).
 
 - CAL-1 Window. At least 10 DECISIVE nights per OS over at least 7 UTC days. Manual dispatches count for at most
@@ -1752,7 +1752,7 @@ Source: SPEC-nightly (Q-N2 ruling, CAL-1..CAL-5, addenda A2 and A3 applied).
   A never-acquired macOS runner is no data, not a fail, and delays the close; if macOS cannot close, that is a
   NIGHTLY-2 gap.
 
-Results (NIGHTLY-2, REPORTED, from the run logs of 2026-11-21). Window: the scheduled perf-nightly runs of
+Results (NIGHTLY-2, REPORTED; ubuntu row from the run logs of 2026-11-21, macOS row and the notes below it from those of 2026-11-22 / 2026-11-23, the macOS row naming its own window). ubuntu window: the scheduled perf-nightly runs of
 2026-11-12 .. 2026-11-21 (first run 43209129528, last 44898420684; 0 dispatches), all on one pinned sha256 map
 (sha256/8: FastBit32.js 6bd9753e, test/witness.mjs 89bd56d6, test/witness/run-one.mjs 0df754ee,
 test/witness-release.mjs 6d0a0566, test/perf-nightly.mjs a1522fdb); GitHub-hosted runners, Node v26.8.2, K = 5
@@ -1765,7 +1765,7 @@ foilSubEps spreadN. The per-row figures below are night.json spreadN over all 50
 | OS | nights decisive | S | Nc | control trip rate | closes | provenance |
 |---|---|---|---|---|---|---|
 | ubuntu | 10 / 10 over 10 UTC days | 29.55 / 46.77 / 46.77 | 0.071 / 0.043 / 0.068 | 10 / 10 = 1.0 | no: CAL-1 and CAL-3 hold, CAL-2 MISMATCH | 10 runs (first / last ids above; all in nights-20261121b.txt), 4 cpus, load1 before each night 0.3-1.9 |
-| macOS | 8 / 10 (11-18 and 11-20 INCONCLUSIVE) | not derived (CAL-1 open) | not derived | 10 / 10 = 1.0 so far | open: earliest 2026-11-23 | 10 runs (first / last ids above; all in nights-20261121b.txt), 3 cpus (5 on 11-16), load1 before each night 4.2-111.1 |
+| macOS (read 2026-11-23) | 10 / 12 over 10 UTC days (11-18 and 11-20 INCONCLUSIVE) | 12.74 / 9.13 / 10.89 | 0.109 / 0.210 / 0.167 | 12 / 12 = 1.0 | no: CAL-1 and CAL-3 hold, CAL-2 MISMATCH | 12 runs, scheduled 2026-11-12 .. 2026-11-23 (first 43209129528, last 45180186968; 0 dispatches; same sha256 map), 3 cpus (5 on 11-16), load1 before each night 4.2-111.1 |
 
 ubuntu CAL-2 fails four clauses: |S1 - S2| = 17.22 > 0.15 x 46.77 = 7.02; |Nc1 - Nc2| = 0.028 > 0.011;
 S2 46.77 >= F1 11.96 (F1 = RED foilSubEps (position), run 43414837064, arm A round 2; S1 29.55 < F2 35.75 holds);
@@ -1778,13 +1778,35 @@ rounds above 6 (max 695.21); rank (position) reaches 173.51, nextSubset (density
 (slot word) 72.09, while RED foilSubEps sits at median ~59. No one S separates real rows from the subtle teeth, so
 lane P cannot be calibrated on hosted ubuntu under this protocol.
 
+macOS CAL-2 (read 2026-11-23 from run logs of that day; the 11-23 night 45180186968 is the 10th DECISIVE one; halves
+= 5 DECISIVE nights each, in time order) fails all five clauses: |S1 - S2| = 3.61 > 0.15 x 12.74 = 1.91;
+|Nc1 - Nc2| = 0.101 > 0.032; S1 12.74 >= F2 6.43 (F2 = RED foilSubEps (density), run 44079038339, arm A round 1;
+S2 9.13 < F1 10.25 holds); and the replays agree on 1140 / 1300 (half 1) and 778 / 1300 (half 2), both < 0.90. The
+Clopper-Pearson bounds are VOID: 42-45 counted rounds (< 50), a night with < 5 counted rounds, and the HOST + demoted
+share overdispersed (D = 3.21 > 2). Why: the same overlap as on ubuntu, on a loaded 3-cpu VM. In night.json (arm A,
+the 10 DECISIVE nights, 50 rounds, macOS) FastBit1024.acquire (slot word) has median spreadN 6.97 with 30 / 50 rounds
+above 6 (max 24.55) and count (position) reaches 32.09, while RED foilSubEps sits at median ~15 and its low rounds
+reach 6.43; the noise floor also moved between halves (Nc 0.109 -> 0.210). No one S separates real rows from the
+subtle teeth, so lane P cannot be calibrated on hosted macOS under this protocol either.
+
+ubuntu as its window grew (REPORTED; A9's verdict unchanged, no new mechanism): at 11 nights (2026-11-22) the S
+clause passed (|S1 - S2| 0.38 <= 4.49) while Nc, F and replay H1 failed; at 12 nights (through 45180186968) both
+replays pass (1443 / 1560 and 1501 / 1560) and S fails again (S1 53.11, S2 13.55), with Nc and F still failing.
+Which clauses fail moves with the window: the S clause is window-sensitive.
+
 Ruling (maintainer, 2026-11-21, "Accept, wait macOS"): the ubuntu MISMATCH is NIGHTLY-2's ubuntu verdict and lane P
 stays REPORT-ONLY on ubuntu. macOS is read when its 10th DECISIVE scheduled night lands (no dispatches, SPEC-nightly A8); then
 the 1.7.0 release proceeds. A revised protocol (for example a per-row S, or persistently unstable rows moved to
 REPORTED) is a post-1.7.0 research item, validated on nights it was not fitted to.
 
-Tool and logs (gitignored): `.handoff/research/nightly-cal/cal2.mjs` (sha256/8 ce779458, self-test 73 / 73) and
-`.handoff/evidence/burst-ao/cal/` (cal2-ubuntu.log, cal2-macos.log, rows-ubuntu.txt, nights-20261121b.txt).
+Ruling (maintainer, 2026-11-21 21:30Z, "Stay report-only", given ahead of the macOS read): lane P stays REPORT-ONLY
+on both OSes for 1.7.0 and is revisited with that post-1.7.0 protocol research; a macOS MATCH would have been recorded
+and gated nothing. With the macOS MISMATCH, NIGHTLY-2 is complete: lane P is not calibratable on either hosted OS
+under this protocol, and the 1.7.0 release proceeds.
+
+Tool and logs (gitignored): `.handoff/research/nightly-cal/cal2.mjs` (sha256/8 ce779458, self-test 73 / 73),
+`.handoff/evidence/burst-ao/cal/` (cal2-ubuntu.log, cal2-macos.log, rows-ubuntu.txt, nights-20261121b.txt) and
+`.handoff/evidence/burst-ar/cal/` (cal2-macos.log, cal2-ubuntu.log, rows-macos.txt, caltab.txt).
 
 ---
 
